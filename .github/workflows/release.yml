@@ -1,10 +1,9 @@
 # Publishes a release from a pushed vX.Y.Z tag.
 #
-# The changelog rollover and version bump happen before the tag, on a
-# developer's machine, with `tools/release_changelog.py`. This workflow is the
-# gate that refuses to publish a tag those edits do not back, and the builder
-# that turns the tagged commit into the macOS artifact users download. See
-# docs/releases.md for the full checklist.
+# If Unreleased still holds the notes, this workflow rolls them into a dated
+# heading, bumps the application version when needed, commits that onto main,
+# and moves the tag onto the new commit before building. A locally prepared
+# changelog is left alone. See docs/releases.md.
 name: Release
 
 on:
@@ -63,8 +62,32 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
 
-      # Runs before the dependency install so a mistagged or unprepared release
-      # fails in seconds rather than after a full build.
+      # Runs before the dependency install so a mistagged or empty Unreleased
+      # section fails in seconds rather than after a full build. This run then
+      # publishes from the prepared tree; moving the tag keeps git history
+      # aligned with the artifact.
+      - name: Prepare the changelog for this tag if it is still Unreleased
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          release_date="$(date -u +%Y-%m-%d)"
+          uv run --no-project --python "${PYTHON_VERSION}" \
+            python tools/release_changelog.py "${version}" \
+            --date "${release_date}" --if-needed
+          if git diff --quiet -- CHANGELOG.md src/rbs/__init__.py; then
+            echo "Changelog already prepared for ${GITHUB_REF_NAME}."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md src/rbs/__init__.py
+          git commit -m "Prepare ${version} release"
+          remote="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push "${remote}" "HEAD:refs/heads/main"
+          git tag -fa "${GITHUB_REF_NAME}" -m "RBS ${version}"
+          git push --force "${remote}" "refs/tags/${GITHUB_REF_NAME}"
+
       - name: Verify the tag, application version, and changelog agree
         run: |
           uv run --no-project --python "${PYTHON_VERSION}" \
@@ -77,6 +100,9 @@ jobs:
       - name: Ruff
         run: uv run --frozen --extra dev ruff check .
 
+      # Hosted runners cannot spare the CPU a `solve` test's wall-clock budget
+      # assumes; see tests/solver/conftest.py. Same extra as ci.yml so native
+      # Help-menu tests have pywebview.
       - name: Pytest
         run: uv run --frozen --extra dev --extra desktop pytest -m "not solve"
 

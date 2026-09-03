@@ -654,6 +654,12 @@ def test_release_workflow_signs_and_notarizes_both_artifacts() -> None:
         encoding="utf-8"
     )
 
+    assert 'pytest -m "not solve"' in workflow
+    assert "--extra desktop" in workflow
+    assert "release_changelog.py" in workflow
+    assert "--if-needed" in workflow
+    assert workflow.index("release_changelog.py") < workflow.index("release_notes.py")
+
     # Every signing step is gated on the credentials existing, so a release
     # stays publishable until the secrets are configured.
     # The certificate, the API key, the signature, and both notarizations.

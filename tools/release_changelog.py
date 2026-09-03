@@ -229,6 +229,37 @@ def prepare_release(
     return updates
 
 
+def prepare_release_if_needed(
+    target_version: str,
+    release_date: str,
+    *,
+    changelog_path: Path = CHANGELOG_PATH,
+    version_path: Path = VERSION_PATH,
+) -> ReleaseUpdates | None:
+    """Prepare a release, or do nothing when that version is already dated.
+
+    Returns the written updates when files change, or ``None`` when the
+    changelog already has this version and the application version agrees.
+    """
+    changelog = changelog_path.read_text(encoding="utf-8")
+    version_source = version_path.read_text(encoding="utf-8")
+    released = _released_versions(changelog)
+    current_version, _ = _current_version(version_source)
+    if target_version in released:
+        if current_version != target_version:
+            raise ReleasePreparationError(
+                f"changelog already has {target_version} but the application "
+                f"version is {current_version}"
+            )
+        return None
+    return prepare_release(
+        target_version,
+        release_date,
+        changelog_path=changelog_path,
+        version_path=version_path,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Move RBS Unreleased notes into one dated release section."
@@ -240,6 +271,14 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="release date in YYYY-MM-DD form",
     )
+    parser.add_argument(
+        "--if-needed",
+        action="store_true",
+        help=(
+            "do nothing when this version already has a dated changelog heading "
+            "and the application version agrees"
+        ),
+    )
     return parser
 
 
@@ -247,7 +286,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     options = parser.parse_args(argv)
     try:
-        prepare_release(options.version, options.release_date)
+        if options.if_needed:
+            updates = prepare_release_if_needed(options.version, options.release_date)
+            if updates is None:
+                print(f"RBS {options.version} is already prepared.")
+                return 0
+        else:
+            prepare_release(options.version, options.release_date)
     except (OSError, ReleasePreparationError) as exc:
         parser.error(str(exc))
 

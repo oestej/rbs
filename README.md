@@ -131,14 +131,14 @@ tools/package_dmg.sh          # macOS disk image around the built application
 
 Tests marked `solve` run a real CP-SAT search and judge what an anytime solver
 returns inside a wall-clock budget, so they need a machine with CPU to spare.
-CI deselects them with `-m "not solve"` and installs the `desktop` extra so
-native-window tests have pywebview. Run the full suite locally and before
-a release. `-m solve` runs only the search tests.
+Hosted CI and the GitHub release job deselect them with `-m "not solve"` and
+install the `desktop` extra so native-window tests have pywebview. Run the
+full suite locally. `-m solve` runs only the search tests.
 
 User-facing changes accumulate in [CHANGELOG.md](CHANGELOG.md) under
 `Unreleased`; the release checklist lives in [docs/releases.md](docs/releases.md).
-Pushing a `vX.Y.Z` tag builds and publishes the macOS application from that
-tagged commit.
+Pushing a `vX.Y.Z` tag prepares that release's changelog from `Unreleased` if
+needed, then builds and publishes the macOS application.
 Application copy follows [docs/ui-glossary.md](docs/ui-glossary.md) and the
 visual roles in [docs/visual-system.md](docs/visual-system.md).
 

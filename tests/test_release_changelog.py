@@ -5,6 +5,7 @@ from release_changelog import (
     ReleasePreparationError,
     build_release_updates,
     prepare_release,
+    prepare_release_if_needed,
 )
 
 INITIAL_CHANGELOG = """# Changelog
@@ -147,6 +148,66 @@ def test_failed_file_preparation_does_not_modify_either_file(tmp_path: Path) -> 
 
     assert changelog_path.read_text(encoding="utf-8") == "# Changelog\n\n## [Unreleased]\n"
     assert version_path.read_text(encoding="utf-8") == INITIAL_VERSION_SOURCE
+
+
+def test_if_needed_is_a_noop_when_the_release_already_exists(tmp_path: Path) -> None:
+    changelog_path = tmp_path / "CHANGELOG.md"
+    version_path = tmp_path / "__init__.py"
+    changelog_path.write_text(INITIAL_CHANGELOG, encoding="utf-8")
+    version_path.write_text(INITIAL_VERSION_SOURCE, encoding="utf-8")
+    prepared = prepare_release(
+        "0.1.0",
+        "2026-09-02",
+        changelog_path=changelog_path,
+        version_path=version_path,
+    )
+
+    result = prepare_release_if_needed(
+        "0.1.0",
+        "2026-09-04",
+        changelog_path=changelog_path,
+        version_path=version_path,
+    )
+
+    assert result is None
+    assert changelog_path.read_text(encoding="utf-8") == prepared.changelog
+    assert version_path.read_text(encoding="utf-8") == prepared.version_source
+
+
+def test_if_needed_prepares_when_the_heading_is_missing(tmp_path: Path) -> None:
+    changelog_path = tmp_path / "CHANGELOG.md"
+    version_path = tmp_path / "__init__.py"
+    changelog_path.write_text(INITIAL_CHANGELOG, encoding="utf-8")
+    version_path.write_text(INITIAL_VERSION_SOURCE, encoding="utf-8")
+
+    result = prepare_release_if_needed(
+        "0.1.0",
+        "2026-09-02",
+        changelog_path=changelog_path,
+        version_path=version_path,
+    )
+
+    assert result is not None
+    assert "## [0.1.0] - 2026-09-02" in changelog_path.read_text(encoding="utf-8")
+    assert changelog_path.read_text(encoding="utf-8") == result.changelog
+
+
+def test_if_needed_rejects_a_changelog_heading_that_disagrees_with_the_version(
+    tmp_path: Path,
+) -> None:
+    first = _first_release()
+    changelog_path = tmp_path / "CHANGELOG.md"
+    version_path = tmp_path / "__init__.py"
+    changelog_path.write_text(first.changelog, encoding="utf-8")
+    version_path.write_text('__version__ = "0.2.0"\n', encoding="utf-8")
+
+    with pytest.raises(ReleasePreparationError, match="application version is 0.2.0"):
+        prepare_release_if_needed(
+            "0.1.0",
+            "2026-09-02",
+            changelog_path=changelog_path,
+            version_path=version_path,
+        )
 
 
 def test_file_preparation_writes_both_validated_updates(tmp_path: Path) -> None:

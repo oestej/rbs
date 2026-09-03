@@ -11,8 +11,8 @@ feasible and the quality assertions below it errored en masse.
 Every test that starts a search carries the ``solve`` marker, short ones
 included: a toy instance solved to proven optimality is cheap today, but it is
 still the solver's answer being asserted on and it belongs with the rest.
-CI deselects them with ``-m "not solve"``; they stay a local and pre-release
-gate, run on real hardware.
+Hosted CI and the GitHub release job deselect them with ``-m "not solve"``;
+they stay a local gate, run on real hardware.
 
 What is left behind is deterministic and stays in CI: model compilation, the
 golden proto fingerprint, the clinic-site allocator, planning helpers, and the

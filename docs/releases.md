@@ -18,7 +18,23 @@ only when the corresponding fix is available.
 Choose an increasing numeric `X.Y.Z` version. RBS does not currently attach
 Semantic Versioning compatibility promises to those numbers.
 
-From the release-ready `v0` branch, run:
+Keep user-facing notes in `Unreleased` while you work. When `main` is ready,
+tag it and push:
+
+```bash
+git tag -a vX.Y.Z -m "RBS X.Y.Z"
+git push origin main --follow-tags
+```
+
+The release workflow runs `tools/release_changelog.py --if-needed`, which
+updates the application version, moves the current `Unreleased` notes beneath
+a dated heading, recreates an empty `Unreleased` section, and maintains GitHub
+comparison links. If that write changed files, the workflow commits them onto
+`main` and moves the tag onto the new commit before building. If you already
+prepared the notes locally, it leaves the files alone.
+
+The helper still works locally if you want to preview or commit the rollover
+yourself:
 
 ```bash
 uv run python tools/release_changelog.py X.Y.Z --date YYYY-MM-DD
@@ -29,28 +45,14 @@ uv build
 tools/build_desktop.sh --skip-sync
 ```
 
-The release helper performs only two edits: it updates the single application
-version and moves the current `Unreleased` notes beneath a dated release heading.
-It also recreates an empty `Unreleased` section and maintains GitHub comparison
-links. It validates every input before writing and refuses empty, duplicate, or
-out-of-order releases.
+It validates every input before writing and refuses empty, duplicate, or
+out-of-order releases. Continuous integration repeats the lock, lint, and
+non-solver test gates, so running them locally is about finding problems
+before the tag rather than about proving the release. `solve` tests stay a
+local gate on real hardware. The `uv build` and `tools/build_desktop.sh`
+steps are the local smoke check that the artifacts still assemble.
 
-Continuous integration repeats the lock, lint, and test gates, so running them
-locally is about finding problems before the tag rather than about proving the
-release. The `uv build` and `tools/build_desktop.sh` steps are the local smoke
-check that the artifacts still assemble.
-
-Review and commit the version, changelog, and refreshed lockfile together. Merge
-the release-ready `v0` line into `main`, then create an annotated `vX.Y.Z` tag on
-the resulting `main` commit and push it:
-
-```bash
-git tag -a vX.Y.Z -m "RBS X.Y.Z"
-git push origin main --follow-tags
-```
-
-The first release is `0.1.0`. Until it is actually prepared, its notes remain in
-`Unreleased`; do not add a date or tag in advance.
+The first release is `0.1.0`. Keep its notes in `Unreleased` until you tag.
 
 ## What CI does
 
@@ -63,25 +65,28 @@ Pushing a `vX.Y.Z` tag starts `.github/workflows/release.yml` on a macOS runner,
 which:
 
 1. Refuses any tag whose commit is not contained in `main`.
-2. Runs `tools/release_notes.py`, which refuses to continue unless the tag, the
+2. Runs `tools/release_changelog.py --if-needed`. Empty Unreleased notes fail
+   here, in seconds, before any dependency is installed. A write is committed
+   onto `main` and the tag is moved onto that commit.
+3. Runs `tools/release_notes.py`, which refuses to continue unless the tag, the
    `__version__` in `src/rbs/__init__.py`, and one dated `## [X.Y.Z]` changelog
-   heading all agree. This gate runs before any dependency is installed, so an
-   unprepared tag fails in seconds.
-3. Repeats the lock, lint, and test gates on the tagged commit.
-4. Builds the application with `tools/build_desktop.sh`.
-5. Signs and notarizes the application, packages it with
+   heading all agree.
+4. Repeats the lock, lint, and test gates on the prepared commit, with
+   `-m "not solve"` so hosted runners do not run CP-SAT search tests.
+5. Builds the application with `tools/build_desktop.sh`.
+6. Signs and notarizes the application, packages it with
    `tools/package_dmg.sh`, then signs and notarizes the disk image, producing
    `RBS-Desktop-X.Y.Z-macos-arm64.dmg`. RBS Desktop is a macOS application for
    Apple Silicon, which is what a GitHub-hosted macOS runner is. No other
    artifact is built.
-6. Publishes a GitHub Release for the tag, using that release's changelog
+7. Publishes a GitHub Release for the tag, using that release's changelog
    section as the description and attaching the disk image. The image is also
    kept as a workflow artifact for two weeks, so a failed publish can be
    retried without rebuilding.
 
-The workflow never edits the changelog, creates a commit, or moves a tag: every
-release edit happens locally, before the tag exists. Redoing a release means
-deleting the tag and its GitHub Release, then pushing the tag again.
+Redoing a release means deleting the tag and its GitHub Release, then pushing
+the tag again. If the dated heading already exists, the workflow leaves it
+alone and rebuilds.
 
 ## Signing and notarization
 

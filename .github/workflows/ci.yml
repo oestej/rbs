@@ -67,7 +67,8 @@ jobs:
       # returns inside a wall-clock budget. Runners have roughly a quarter of
       # a development machine's cores, so the same budget buys a fraction of
       # the search and the assertions stop meaning anything. They are a local
-      # and pre-release gate instead; see tests/solver/conftest.py.
+      # gate instead; see tests/solver/conftest.py. The GitHub release job
+      # uses the same `-m "not solve"` filter.
       #
       # `desktop` is pywebview via nicegui[native]. The macOS Help-menu tests
       # import those menu types; without the extra they fail with

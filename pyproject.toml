@@ -56,8 +56,8 @@ markers = [
     # A real CP-SAT search, judged on the quality of what an anytime solver
     # returns inside a wall-clock budget. Hosted runners have far less CPU than
     # a development machine, so the same budget buys a fraction of the search
-    # and the assertions stop meaning anything. CI deselects these; run them
-    # locally and before a release. See tests/solver/conftest.py.
+    # and the assertions stop meaning anything. Hosted CI and the GitHub
+    # release job deselect these; run them locally. See tests/solver/conftest.py.
     "solve: runs a real CP-SAT search; needs a machine with CPU to spare",
 ]
 
