@@ -20,7 +20,7 @@ artifact="${PROJECT_ROOT}/dist/RBS Desktop.app"
 key_path="${APPLE_API_KEY_PATH:-}"
 key_id="${APPLE_API_KEY_ID:-}"
 issuer_id="${APPLE_API_ISSUER_ID:-}"
-wait_timeout="30m"
+wait_timeout="60m"
 
 usage() {
     printf '%s\n' \
@@ -35,7 +35,7 @@ usage() {
         '                  Default: $APPLE_API_KEY_PATH' \
         '  --key-id ID     Key identifier. Default: $APPLE_API_KEY_ID' \
         '  --issuer ID     Issuer identifier. Default: $APPLE_API_ISSUER_ID' \
-        '  --timeout SPEC  How long to wait for a verdict. Default: 30m' \
+        '  --timeout SPEC  How long to wait for a verdict. Default: 60m' \
         '  -h, --help      Show this help text.'
 }
 

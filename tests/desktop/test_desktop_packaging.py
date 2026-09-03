@@ -600,6 +600,7 @@ def test_notarizer_waits_for_a_verdict_and_staples_the_ticket() -> None:
     assert notarizer.stat().st_mode & stat.S_IXUSR
     assert "xcrun notarytool submit" in source
     assert "--wait" in source
+    assert 'wait_timeout="60m"' in source
     # `zip` drops the symlinks and signature that PyInstaller's bundle relies on.
     assert "ditto -c -k --keepParent" in source
     # notarytool can report a rejection without failing, so the verdict is read

@@ -34,7 +34,7 @@ jobs:
     # rule restrict them to v* tags.
     environment: release
     # Covers the build plus two notarization round trips, each of which waits on
-    # Apple and is capped at 30 minutes by tools/notarize_desktop.sh.
+    # Apple and is capped at 60 minutes by tools/notarize_desktop.sh.
     timeout-minutes: 150
     steps:
       - name: Check out the tagged commit
