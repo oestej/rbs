@@ -128,7 +128,7 @@ no further change.
 | `APPLE_CERTIFICATE_P12` | Developer ID Application certificate and private key, exported as `.p12` and base64 encoded: `base64 -i certificate.p12 \| pbcopy` |
 | `APPLE_CERTIFICATE_PASSWORD` | Password set when exporting that `.p12` |
 | `APPLE_DEVELOPER_ID` | Full identity name, for example `Developer ID Application: Example Inc. (ABCDE12345)` |
-| `APPLE_API_KEY_P8` | App Store Connect API key with the Developer role, base64 encoded the same way |
+| `APPLE_API_KEY_P8` | App Store Connect **team** key (`.p8`) with the Developer role, base64 encoded the same way. An individual key cannot notarize |
 | `APPLE_API_KEY_ID` | That key's identifier |
 | `APPLE_API_ISSUER_ID` | Issuer identifier from App Store Connect |
 
@@ -136,8 +136,9 @@ The certificate expires; a release that starts failing at the signing step with
 no other change is the first place to look.
 
 Export the `.p12` with only the Developer ID Application certificate and its
-private key, and give the App Store Connect key the Developer role, which is all
-notarization needs.
+private key. Generate the App Store Connect key under **Team Keys** with the
+Developer role: that is the least access notarization accepts, and a key created
+under **Individual Keys** cannot notarize at all.
 
 Both workflows pin every action to a commit rather than a tag, because a tag can
 be moved and these actions run in the same job as the certificate. Bumping one
