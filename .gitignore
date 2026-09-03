@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.dmg
+.venv/
+venv/
+.env
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.DS_Store
+out/
+schedule.json
+*.sqlite
+*.sqlite3
+rbs.sqlite
+# data/ holds versioned scheduling sources only: the demo catalog and the
+# committed sample dump. Ignore local solves, databases, and ad-hoc dumps
+# so they are never committed.
+data/*
+!data/catalog.json
+!data/sample_input.json

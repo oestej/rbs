@@ -1,0 +1,331 @@
+.rbs-grid-wrap {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid var(--rbs-border);
+}
+
+.rbs-grid {
+  border-collapse: collapse;
+  font-size: var(--rbs-type-schedule-size);
+}
+
+.rbs-grid th,
+.rbs-grid td {
+  min-width: 28px;
+  padding: 2px 3px;
+  border: 1px solid var(--rbs-border);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.rbs-grid.grouped th,
+.rbs-grid.grouped td {
+  padding: var(--rbs-space-1) 6px;
+}
+
+.rbs-block-schedule-grid {
+  table-layout: fixed;
+}
+
+.rbs-block-schedule-grid col.rbs-block-pgy-column {
+  width: 34px;
+}
+
+.rbs-block-schedule-grid col.rbs-block-resident-column {
+  width: 180px;
+}
+
+.rbs-block-schedule-grid col.rbs-block-week-column {
+  width: 56px;
+}
+
+.rbs-block-schedule-grid .rbs-block-week-row th {
+  box-sizing: border-box;
+  width: 56px;
+  min-width: 56px;
+  max-width: 56px;
+  padding: 5px 2px;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.rbs-block-group-row .rbs-block-group {
+  height: 28px;
+  padding: var(--rbs-space-1) 6px;
+  border: 0;
+  background:
+    linear-gradient(90deg, var(--rbs-white) 0 4px, transparent 4px),
+    var(--rbs-surface-muted);
+  color: var(--rbs-ink);
+  font-size: var(--rbs-type-schedule-size);
+  font-weight: var(--rbs-weight-semibold);
+  letter-spacing: 0.035em;
+}
+
+.rbs-block-week-row th.rbs-block-start {
+  background:
+    linear-gradient(90deg, var(--rbs-white) 0 4px, transparent 4px),
+    var(--rbs-info-soft);
+}
+
+.rbs-block-week-row th {
+  top: 28px;
+}
+
+.rbs-block-week-number,
+.rbs-block-week-date {
+  display: block;
+}
+
+.rbs-block-week-date {
+  margin-top: 1px;
+  color: var(--rbs-text-muted);
+  font-size: var(--rbs-type-micro-size);
+  font-weight: var(--rbs-weight-semibold);
+}
+
+.rbs-grid thead th {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  min-width: 44px;
+  background: var(--rbs-info-soft);
+}
+
+.rbs-grid thead .rbs-pgy-column {
+  z-index: 4;
+  left: 0;
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
+}
+
+.rbs-grid thead .rbs-resident-column {
+  z-index: 4;
+  left: 34px;
+  width: 180px;
+  min-width: 180px;
+  padding: var(--rbs-space-2) 10px;
+  box-shadow: var(--rbs-shadow-sticky);
+  text-align: left;
+}
+
+.rbs-grid .rbs-resident-name {
+  position: sticky;
+  z-index: 3;
+  left: 34px;
+  box-sizing: border-box;
+  width: 180px;
+  min-width: 180px;
+  background: var(--rbs-surface);
+  background-clip: border-box;
+  box-shadow: var(--rbs-shadow-sticky);
+  text-align: left;
+}
+
+.rbs-grid .rbs-resident-row > .rbs-resident-name {
+  padding: var(--rbs-space-2) 10px;
+}
+
+.rbs-grid .rbs-resident-row > th,
+.rbs-grid .rbs-resident-row > td {
+  border-top: 3px solid var(--rbs-white);
+  border-bottom: 0;
+}
+
+.rbs-grid .rbs-resident-row > td {
+  border-right: 0;
+  border-left: 0;
+}
+
+.rbs-grid .rbs-resident-row > td + td {
+  border-left: 1px solid var(--rbs-white);
+}
+
+.rbs-grid .rbs-resident-row > td.rbs-four-week-boundary {
+  border-left-width: 4px;
+}
+
+.rbs-grid .rbs-pgy-section .rbs-resident-row:last-child > th,
+.rbs-grid .rbs-pgy-section .rbs-resident-row:last-child > td {
+  border-bottom: 3px solid var(--rbs-white);
+}
+
+.rbs-resident-link {
+  display: block;
+  color: var(--rbs-ink);
+  font-size: var(--rbs-type-body-size);
+  font-weight: var(--rbs-weight-semibold);
+  line-height: 1.3;
+  text-decoration: none;
+}
+
+.rbs-resident-link:hover,
+.rbs-resident-link:focus-visible {
+  color: var(--rbs-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.rbs-grid .rbs-resident-name:has(.rbs-resident-link:hover),
+.rbs-grid .rbs-resident-name:has(.rbs-resident-link:focus-visible) {
+  background: var(--rbs-primary-soft);
+}
+
+.rbs-grid .rbs-pgy-label {
+  position: sticky;
+  z-index: 3;
+  left: 0;
+  box-sizing: border-box;
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
+  background: var(--rbs-surface);
+  box-shadow: var(--rbs-shadow-sticky);
+  color: var(--rbs-text-muted);
+  text-align: center;
+  vertical-align: middle;
+}
+
+.rbs-pgy-label span {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  font-size: var(--rbs-type-caption-size);
+  font-weight: var(--rbs-weight-bold);
+  letter-spacing: 0.08em;
+  transform: translate(-50%, -50%) rotate(-90deg);
+  transform-origin: center;
+  white-space: nowrap;
+}
+
+.rbs-grid .rbs-pgy-spacer td {
+  height: 12px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: var(--rbs-surface);
+}
+
+.rbs-grid td.vac {
+  border-color: var(--rbs-vacation-grey);
+  background: repeating-linear-gradient(
+    0deg,
+    var(--rbs-surface-subtle) 0,
+    var(--rbs-surface-subtle) 4px,
+    var(--rbs-vacation-tint) 4px,
+    var(--rbs-vacation-tint) 8px
+  );
+  color: var(--rbs-text);
+}
+
+.rbs-grid td.special {
+  border-color: var(--rbs-conference-grey);
+  background: repeating-linear-gradient(
+    90deg,
+    var(--rbs-surface-muted) 0,
+    var(--rbs-surface-muted) 4px,
+    var(--rbs-conference-tint) 4px,
+    var(--rbs-conference-tint) 8px
+  );
+  color: var(--rbs-text);
+}
+
+.rbs-grid td[class*="rbs-rotation-color-"] {
+  background: var(--rbs-rotation-color, var(--rbs-text-muted));
+  color: var(--rbs-rotation-foreground, var(--rbs-white));
+}
+
+.rbs-grid.grouped td.rbs-block-cell {
+  padding: 0;
+}
+
+.rbs-grid td.rbs-state-cell {
+  padding: 0;
+}
+
+.rbs-block-run,
+.rbs-block-state {
+  display: flex;
+  width: 100%;
+  height: 42px;
+  min-height: 42px;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+}
+
+.rbs-block-name {
+  overflow: hidden;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: var(--rbs-space-2) var(--rbs-space-1);
+  font-weight: var(--rbs-weight-semibold);
+  text-overflow: ellipsis;
+}
+
+.rbs-block-name-code {
+  display: none;
+  font-size: var(--rbs-type-micro-size);
+  letter-spacing: 0.02em;
+}
+
+.rbs-block-name.is-code .rbs-block-name-full {
+  display: none;
+}
+
+.rbs-block-name.is-code .rbs-block-name-code {
+  display: inline;
+}
+
+.rbs-block-state {
+  gap: 5px;
+  padding: var(--rbs-space-2) 6px;
+}
+
+.rbs-vacation-marker {
+  overflow: hidden;
+  font-size: var(--rbs-type-micro-size);
+  font-weight: var(--rbs-weight-bold);
+  letter-spacing: 0.04em;
+  line-height: 1;
+  text-overflow: clip;
+}
+
+.rbs-special-marker {
+  overflow: hidden;
+  padding-inline: 1px;
+  font-size: var(--rbs-type-micro-size);
+  font-weight: var(--rbs-weight-bold);
+  letter-spacing: 0.02em;
+  line-height: 1;
+  text-overflow: clip;
+}
+
+.rbs-rotation-color-0 { --rbs-rotation-color: var(--rbs-palette-0); }
+.rbs-rotation-color-1 { --rbs-rotation-color: var(--rbs-palette-1); }
+.rbs-rotation-color-2 { --rbs-rotation-color: var(--rbs-palette-2); }
+.rbs-rotation-color-3 { --rbs-rotation-color: var(--rbs-palette-3); }
+.rbs-rotation-color-4 { --rbs-rotation-color: var(--rbs-palette-4); }
+.rbs-rotation-color-5 { --rbs-rotation-color: var(--rbs-palette-5); }
+.rbs-rotation-color-6 { --rbs-rotation-color: var(--rbs-palette-6); }
+.rbs-rotation-color-7 { --rbs-rotation-color: var(--rbs-palette-7); }
+.rbs-rotation-color-8 { --rbs-rotation-color: var(--rbs-palette-8); }
+.rbs-rotation-color-9 { --rbs-rotation-color: var(--rbs-palette-9); }
+.rbs-rotation-color-10 { --rbs-rotation-color: var(--rbs-palette-10); }
+.rbs-rotation-color-11 { --rbs-rotation-color: var(--rbs-palette-11); }
+.rbs-rotation-color-12 { --rbs-rotation-color: var(--rbs-palette-12); }
+.rbs-rotation-color-13 { --rbs-rotation-color: var(--rbs-palette-13); }
+.rbs-rotation-color-14 { --rbs-rotation-color: var(--rbs-palette-14); }
+.rbs-rotation-color-15 { --rbs-rotation-color: var(--rbs-palette-15); }
+.rbs-rotation-color-16 { --rbs-rotation-color: var(--rbs-palette-16); }
+.rbs-rotation-color-17 { --rbs-rotation-color: var(--rbs-palette-17); }
+.rbs-rotation-color-18 { --rbs-rotation-color: var(--rbs-palette-18); }
+.rbs-rotation-color-19 { --rbs-rotation-color: var(--rbs-palette-19); }
+.rbs-rotation-color-20 { --rbs-rotation-color: var(--rbs-palette-20); }
+.rbs-rotation-color-21 { --rbs-rotation-color: var(--rbs-palette-21); }
+.rbs-rotation-color-22 { --rbs-rotation-color: var(--rbs-palette-22); }
+.rbs-rotation-color-23 { --rbs-rotation-color: var(--rbs-palette-23); }

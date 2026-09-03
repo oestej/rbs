@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rbs"
+dynamic = ["version"]
+description = "Residency block scheduler: ingest a JSON instance, emit a JSON schedule."
+readme = "README.md"
+license = "OSL-3.0"
+requires-python = ">=3.11"
+authors = [{ name = "Jason Mitchell" }]
+dependencies = [
+    "pydantic>=2.7",
+    "ortools>=9.10",
+    "nicegui>=2.14",
+    "reportlab>=4.2",
+    "structlog>=26.1",
+]
+
+[project.optional-dependencies]
+dev = ["pypdf>=5.0", "pytest>=8.0", "ruff>=0.6", "pyjwt[crypto]>=2.9"]
+desktop = ["nicegui[native]>=3.16"]
+build = ["pyinstaller>=6.10"]
+# Hosted build only. Kept out of the base dependencies so the desktop build can
+# be packaged without the identity stack; tests/test_packaging.py enforces that
+# nothing outside rbs.cloud reaches for these.
+cloud = ["pyjwt[crypto]>=2.9", "httpx>=0.27"]
+
+[project.scripts]
+rbs = "rbs.cli:main"
+rbs-desktop = "rbs.desktop.main:main"
+rbs-cloud = "rbs.cloud.main:main"
+rbs-solver = "rbs.solver.process:main"
+
+[project.urls]
+Homepage = "https://github.com/oestej/rbs"
+Repository = "https://github.com/oestej/rbs"
+Changelog = "https://github.com/oestej/rbs/blob/main/CHANGELOG.md"
+
+[tool.hatch.version]
+path = "src/rbs/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rbs"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"data/catalog.json" = "rbs/data/catalog.json"
+"CHANGELOG.md" = "rbs/CHANGELOG.md"
+"LICENSE" = "rbs/LICENSE"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tools"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

@@ -1,0 +1,37 @@
+"""Compatibility names for fixed schedule-state visual tokens."""
+
+from rbs.ui.visual_tokens import (
+    ACADEMIC,
+    ACADEMIC_TINT,
+    ADMIN,
+    ADMIN_TINT,
+    CONFERENCE,
+    CONFERENCE_TINT,
+    SPECIAL_EVENT,
+    SPECIAL_EVENT_TINT,
+    VACATION,
+    VACATION_TINT,
+)
+
+ADMIN_COLOR = ADMIN
+
+ACADEMIC_COLOR = ACADEMIC
+
+VACATION_COLOR = VACATION
+
+CONFERENCE_COLOR = CONFERENCE
+
+SPECIAL_EVENT_COLOR = SPECIAL_EVENT
+
+__all__ = [
+    "ACADEMIC_COLOR",
+    "ACADEMIC_TINT",
+    "ADMIN_COLOR",
+    "ADMIN_TINT",
+    "CONFERENCE_COLOR",
+    "CONFERENCE_TINT",
+    "SPECIAL_EVENT_COLOR",
+    "SPECIAL_EVENT_TINT",
+    "VACATION_COLOR",
+    "VACATION_TINT",
+]

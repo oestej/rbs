@@ -1,0 +1,644 @@
+{
+  "academic_year": "2026-2027",
+  "calendar": {
+    "weeks": 52,
+    "first_week_start": "2026-06-29",
+    "block_start_alignment": 1
+  },
+  "residents": [
+    {
+      "id": "resident-001",
+      "name": "Avery Chen",
+      "pgy": 1,
+      "vacation_weeks": [
+        12,
+        13,
+        28,
+        41
+      ],
+      "days_off": [],
+      "clinic_half_days": [],
+      "elective_preferences": [
+        {
+          "rotation_id": "night_float",
+          "duration_weeks": 2
+        }
+      ]
+    },
+    {
+      "id": "resident-002",
+      "name": "Jordan Patel",
+      "pgy": 1,
+      "vacation_weeks": [
+        8,
+        24,
+        40,
+        51
+      ],
+      "days_off": [
+        "2026-09-02"
+      ],
+      "clinic_half_days": [],
+      "elective_preferences": [
+        {
+          "rotation_id": "geriatrics",
+          "duration_weeks": 2
+        }
+      ]
+    },
+    {
+      "id": "resident-003",
+      "name": "Sam Rivera",
+      "pgy": 1,
+      "vacation_weeks": [
+        4,
+        20,
+        36,
+        47
+      ],
+      "days_off": [],
+      "clinic_half_days": [],
+      "elective_preferences": [
+        {
+          "rotation_id": "palliative_care",
+          "duration_weeks": 2
+        }
+      ]
+    },
+    {
+      "id": "resident-004",
+      "name": "Riley Nguyen",
+      "pgy": 1,
+      "vacation_weeks": [
+        7,
+        16,
+        32,
+        48
+      ],
+      "days_off": [],
+      "clinic_half_days": [],
+      "elective_preferences": [
+        {
+          "rotation_id": "night_float",
+          "duration_weeks": 2
+        }
+      ]
+    },
+    {
+      "id": "resident-005",
+      "name": "Quinn Brooks",
+      "pgy": 1,
+      "vacation_weeks": [
+        6,
+        22,
+        33,
+        44
+      ],
+      "days_off": [
+        "2026-11-12"
+      ],
+      "clinic_half_days": [],
+      "elective_preferences": [
+        {
+          "rotation_id": "geriatrics",
+          "duration_weeks": 2
+        }
+      ]
+    },
+    {
+      "id": "resident-006",
+      "name": "Morgan Ellis",
+      "pgy": 1,
+      "vacation_weeks": [
+        9,
+        14,
+        30,
+        46
+      ],
+      "days_off": [],
+      "clinic_half_days": [],
+      "elective_preferences": [
+        {
+          "rotation_id": "palliative_care",
+          "duration_weeks": 2
+        }
+      ]
+    },
+    {
+      "id": "resident-007",
+      "name": "Casey Okonkwo",
+      "pgy": 1,
+      "vacation_weeks": [
+        10,
+        19,
+        26,
+        42
+      ],
+      "days_off": [],
+      "clinic_half_days": [],
+      "elective_preferences": [
+        {
+          "rotation_id": "night_float",
+          "duration_weeks": 2
+        }
+      ]
+    },
+    {
+      "id": "resident-008",
+      "name": "Harper Diaz",
+      "pgy": 1,
+      "vacation_weeks": [
+        3,
+        18,
+        34,
+        50
+      ],
+      "days_off": [],
+      "clinic_half_days": [],
+      "elective_preferences": [
+        {
+          "rotation_id": "geriatrics",
+          "duration_weeks": 2
+        }
+      ]
+    },
+    {
+      "id": "resident-009",
+      "name": "Taylor Kim",
+      "pgy": 2,
+      "vacation_weeks": [
+        5,
+        21,
+        37,
+        48
+      ],
+      "days_off": [],
+      "clinic_half_days": [],
+      "elective_preferences": [
+        {
+          "rotation_id": "fmed",
+          "duration_weeks": 2
+        },
+        {
+          "rotation_id": "geriatrics",
+          "duration_weeks": 2
+        },
+        {
+          "rotation_id": "palliative_care",
+          "duration_weeks": 2
+        }
+      ]
+    },
+    {
+      "id": "resident-010",
+      "name": "Jamie Alvarez",
+      "pgy": 2,
+      "vacation_weeks": [
+        9,
+        25,
+        41,
+        52
+      ],
+      "days_off": [
+        "2027-01-19"
+      ],
+      "clinic_half_days": [],
+      "elective_preferences": [
+        {
+          "rotation_id": "fmed",
+          "duration_weeks": 2
+        },
+        {
+          "rotation_id": "fmed",
+          "duration_weeks": 2
+        },
+        {
+          "rotation_id": "night_float",
+          "duration_weeks": 2
+        }
+      ]
+    },
+    {
+      "id": "resident-011",
+      "name": "Drew Hassan",
+      "pgy": 2,
+      "vacation_weeks": [
+        11,
+        16,
+        27,
+        43
+      ],
+      "days_off": [],
+      "clinic_half_days": [],
+      "elective_preferences": [
+        {
+          "rotation_id": "fmed",
+          "duration_weeks": 2
+        },
+        {
+          "rotation_id": "geriatrics",
+          "duration_weeks": 2
+        },
+        {
+          "rotation_id": "palliative_care",
+          "duration_weeks": 2
+        }
+      ]
+    },
+    {
+      "id": "resident-012",
+      "name": "Cameron Walsh",
+      "pgy": 2,
+      "vacation_weeks": [
+        7,
+        23,
+        39,
+        50
+      ],
+      "days_off": [],
+      "clinic_half_days": [],
+      "elective_preferences": [
+        {
+          "rotation_id": "fmed",
+          "duration_weeks": 2
+        },
+        {
+          "rotation_id": "fmed",
+          "duration_weeks": 2
+        },
+        {
+          "rotation_id": "night_float",
+          "duration_weeks": 2
+        }
+      ]
+    },
+    {
+      "id": "resident-013",
+      "name": "Reese Nakamura",
+      "pgy": 2,
+      "vacation_weeks": [
+        4,
+        15,
+        31,
+        47
+      ],
+      "days_off": [],
+      "clinic_half_days": [],
+      "elective_preferences": [
+        {
+          "rotation_id": "fmed",
+          "duration_weeks": 2
+        },
+        {
+          "rotation_id": "geriatrics",
+          "duration_weeks": 2
+        },
+        {
+          "rotation_id": "palliative_care",
+          "duration_weeks": 2
+        }
+      ]
+    },
+    {
+      "id": "resident-014",
+      "name": "Skyler Bennett",
+      "pgy": 2,
+      "vacation_weeks": [
+        3,
+        19,
+        35,
+        44
+      ],
+      "days_off": [],
+      "clinic_half_days": [],
+      "elective_preferences": [
+        {
+          "rotation_id": "fmed",
+          "duration_weeks": 2
+        },
+        {
+          "rotation_id": "fmed",
+          "duration_weeks": 2
+        },
+        {
+          "rotation_id": "night_float",
+          "duration_weeks": 2
+        }
+      ]
+    },
+    {
+      "id": "resident-015",
+      "name": "Alex Rahman",
+      "pgy": 2,
+      "vacation_weeks": [
+        8,
+        17,
+        33,
+        49
+      ],
+      "days_off": [],
+      "clinic_half_days": [],
+      "elective_preferences": [
+        {
+          "rotation_id": "fmed",
+          "duration_weeks": 2
+        },
+        {
+          "rotation_id": "geriatrics",
+          "duration_weeks": 2
+        },
+        {
+          "rotation_id": "palliative_care",
+          "duration_weeks": 2
+        }
+      ]
+    },
+    {
+      "id": "resident-016",
+      "name": "Peyton Ortiz",
+      "pgy": 2,
+      "vacation_weeks": [
+        2,
+        14,
+        29,
+        45
+      ],
+      "days_off": [],
+      "clinic_half_days": [],
+      "elective_preferences": [
+        {
+          "rotation_id": "fmed",
+          "duration_weeks": 2
+        },
+        {
+          "rotation_id": "fmed",
+          "duration_weeks": 2
+        },
+        {
+          "rotation_id": "night_float",
+          "duration_weeks": 2
+        }
+      ]
+    },
+    {
+      "id": "resident-017",
+      "name": "Robin Ford",
+      "pgy": 3,
+      "vacation_weeks": [
+        6,
+        18,
+        34,
+        46
+      ],
+      "days_off": [
+        "2026-10-09"
+      ],
+      "clinic_half_days": [],
+      "elective_preferences": []
+    },
+    {
+      "id": "resident-018",
+      "name": "Devon Park",
+      "pgy": 3,
+      "vacation_weeks": [
+        10,
+        22,
+        38,
+        50
+      ],
+      "days_off": [],
+      "clinic_half_days": [],
+      "elective_preferences": []
+    },
+    {
+      "id": "resident-019",
+      "name": "Emerson Cole",
+      "pgy": 3,
+      "vacation_weeks": [
+        4,
+        16,
+        30,
+        44
+      ],
+      "days_off": [],
+      "clinic_half_days": [],
+      "elective_preferences": []
+    },
+    {
+      "id": "resident-020",
+      "name": "Finley Adams",
+      "pgy": 3,
+      "vacation_weeks": [
+        8,
+        24,
+        36,
+        49
+      ],
+      "days_off": [],
+      "clinic_half_days": [],
+      "elective_preferences": []
+    },
+    {
+      "id": "resident-021",
+      "name": "Hayden Ross",
+      "pgy": 3,
+      "vacation_weeks": [
+        5,
+        19,
+        33,
+        48
+      ],
+      "days_off": [],
+      "clinic_half_days": [],
+      "elective_preferences": []
+    },
+    {
+      "id": "resident-022",
+      "name": "Charlie Singh",
+      "pgy": 3,
+      "vacation_weeks": [
+        7,
+        21,
+        37,
+        51
+      ],
+      "days_off": [],
+      "clinic_half_days": [],
+      "elective_preferences": []
+    },
+    {
+      "id": "resident-023",
+      "name": "Rowan Baker",
+      "pgy": 3,
+      "vacation_weeks": [
+        9,
+        23,
+        39,
+        52
+      ],
+      "days_off": [],
+      "clinic_half_days": [],
+      "elective_preferences": []
+    },
+    {
+      "id": "resident-024",
+      "name": "Sydney Cho",
+      "pgy": 3,
+      "vacation_weeks": [
+        11,
+        25,
+        35,
+        45
+      ],
+      "days_off": [],
+      "clinic_half_days": [],
+      "elective_preferences": []
+    }
+  ],
+  "academic_half_day_overrides": [
+    {
+      "week": 20,
+      "weekday": "monday",
+      "session": "morning"
+    }
+  ],
+  "locks": [
+    {
+      "resident_id": "resident-001",
+      "rotation_id": "clinic",
+      "elective": false,
+      "weeks": [
+        12,
+        13
+      ],
+      "source": "manual",
+      "exact_block": false,
+      "grouping_exempt": false
+    },
+    {
+      "resident_id": "resident-009",
+      "rotation_id": "fmed",
+      "elective": false,
+      "weeks": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "source": "manual",
+      "exact_block": false,
+      "grouping_exempt": false
+    }
+  ],
+  "manual_clinic_blocks": [],
+  "resident_rotation_overrides": [],
+  "special_rotations": [
+    {
+      "id": "demo-educators-summit",
+      "name": "Educators Summit",
+      "kind": "conference",
+      "start_date": "2026-10-27",
+      "end_date": "2026-10-29",
+      "session": null,
+      "resident_ids": [
+        "resident-017",
+        "resident-018"
+      ]
+    }
+  ],
+  "color_scheme": {
+    "name": "RBS Navy & Gold",
+    "primary": {
+      "name": "Navy",
+      "color": "#174A7E"
+    },
+    "secondary": {
+      "name": "Goldenrod",
+      "color": "#C58A17"
+    },
+    "neutral": {
+      "name": "Slate",
+      "color": "#52606D"
+    },
+    "accents": [
+      {
+        "name": "Ocean",
+        "color": "#2B6F8A"
+      },
+      {
+        "name": "Denim",
+        "color": "#355C7D"
+      },
+      {
+        "name": "Indigo",
+        "color": "#4B4E9A"
+      },
+      {
+        "name": "Purple",
+        "color": "#6B4C8A"
+      },
+      {
+        "name": "Plum",
+        "color": "#7A3E65"
+      },
+      {
+        "name": "Terracotta",
+        "color": "#9B4535"
+      },
+      {
+        "name": "Burnt Orange",
+        "color": "#A65323"
+      },
+      {
+        "name": "Ochre",
+        "color": "#8A6418"
+      },
+      {
+        "name": "Olive",
+        "color": "#5F6B2F"
+      },
+      {
+        "name": "Teal",
+        "color": "#1E6F72"
+      },
+      {
+        "name": "Steel",
+        "color": "#536878"
+      },
+      {
+        "name": "Brown",
+        "color": "#76543E"
+      },
+      {
+        "name": "Berry",
+        "color": "#963C5A"
+      },
+      {
+        "name": "Clinic Blue",
+        "color": "#3971B8"
+      }
+    ]
+  },
+  "solver": {
+    "engine": "cp_sat",
+    "weights": {
+      "attending_sessions": 300,
+      "preferred_clinic_slots": 100,
+      "clinic_block_week_evenness": 20000,
+      "clinic_kind_pgy_spread": 1000,
+      "within_week_evenness": 40,
+      "primary_site_week_evenness": 60,
+      "session_pgy_mix": 0
+    },
+    "time_limit_seconds": 60.0,
+    "num_workers": 8,
+    "relative_gap": 0.05,
+    "random_seed": null,
+    "solve_attempts": 3,
+    "allow_blocks_to_span_four_week_boundaries": false,
+    "auto_balance_clinic_blocks": true,
+    "min_clinic_blocks_per_week": null,
+    "max_clinic_blocks_per_week": null
+  },
+  "lock_through_today": false
+}

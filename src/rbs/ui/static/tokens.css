@@ -1,0 +1,402 @@
+/* RBS visual design tokens.
+ *
+ * Feature stylesheets may consume these values, but should not introduce new
+ * interface colors, type sizes, radii, shadows, or motion timings. Workspace
+ * and schedule data colors remain dynamic by design.
+ */
+
+:root {
+  /* Typography */
+  --rbs-font-ui: "Roboto", -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --rbs-font-mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas,
+    "Liberation Mono", monospace;
+
+  --rbs-weight-regular: 400;
+  --rbs-weight-medium: 500;
+  --rbs-weight-semibold: 600;
+  --rbs-weight-bold: 700;
+
+  --rbs-type-brand-size: 1.5rem;
+  --rbs-type-brand-leading: 2rem;
+  --rbs-type-page-size: 1.5rem;
+  --rbs-type-page-leading: 2rem;
+  --rbs-type-dialog-size: 1.25rem;
+  --rbs-type-dialog-leading: 1.75rem;
+  --rbs-type-section-size: 1rem;
+  --rbs-type-section-leading: 1.5rem;
+  --rbs-type-body-size: 0.875rem;
+  --rbs-type-body-leading: 1.25rem;
+  --rbs-type-secondary-size: 0.8125rem;
+  --rbs-type-secondary-leading: 1.125rem;
+  --rbs-type-caption-size: 0.75rem;
+  --rbs-type-caption-leading: 1rem;
+  --rbs-type-schedule-size: 0.6875rem;
+  --rbs-type-schedule-leading: 0.875rem;
+  --rbs-type-micro-size: 0.625rem;
+  --rbs-type-micro-leading: 0.75rem;
+
+  --rbs-icon-sm: 1rem;
+  --rbs-icon-md: 1.25rem;
+  --rbs-icon-lg: 1.5rem;
+  --rbs-icon-xl: 2rem;
+
+  /* Spacing */
+  --rbs-space-0: 0;
+  --rbs-space-1: 0.25rem;
+  --rbs-space-2: 0.5rem;
+  --rbs-space-3: 0.75rem;
+  --rbs-space-4: 1rem;
+  --rbs-space-5: 1.25rem;
+  --rbs-space-6: 1.5rem;
+  --rbs-space-8: 2rem;
+  --rbs-space-10: 2.5rem;
+  --rbs-space-12: 3rem;
+
+  /* Shape */
+  --rbs-radius-sm: 0.25rem;
+  --rbs-radius-md: 0.5rem;
+  --rbs-radius-lg: 0.75rem;
+  --rbs-radius-dialog: 1.25rem;
+  --rbs-radius-full: 999px;
+
+  /* Fixed, accessible interface colors */
+  --rbs-white: #fff;
+  --rbs-black: #000;
+  --rbs-ink: #262626;
+  --rbs-text: var(--rbs-ink);
+  --rbs-text-muted: #52606d;
+  --rbs-text-subtle: #6b7580;
+  --rbs-text-disabled: #a6a6a3;
+  --rbs-canvas: var(--rbs-white);
+  --rbs-surface: var(--rbs-white);
+  --rbs-surface-subtle: #fbfbfa;
+  --rbs-surface-muted: #f5f5f4;
+  --rbs-border: #e5e7eb;
+  --rbs-border-strong: #d7d7d4;
+  --rbs-border-subtle: color-mix(in srgb, var(--rbs-text-muted) 14%, transparent);
+  --rbs-neutral-wash: color-mix(in srgb, var(--rbs-text-muted) 4%, transparent);
+
+  /* Feedback */
+  --rbs-success: #28735c;
+  --rbs-success-soft: #f0f6f4;
+  --rbs-danger: #b42318;
+  --rbs-danger-soft: #fff6f6;
+  --rbs-danger-border: color-mix(in srgb, var(--rbs-danger) 22%, transparent);
+  --rbs-warning: #9a6700;
+  --rbs-warning-strong: #8a5200;
+  --rbs-warning-accent: #b26a00;
+  --rbs-warning-fill: #f2c037;
+  --rbs-warning-border: #d9a91f;
+  --rbs-warning-soft: #fff8e8;
+  --rbs-info: #2b6f8a;
+  --rbs-info-soft: #f5fafc;
+  --rbs-success-border: color-mix(in srgb, var(--rbs-success) 22%, transparent);
+  --rbs-info-border: color-mix(in srgb, var(--rbs-info) 22%, transparent);
+
+  /* Bundled schedule palette fallbacks. Runtime workspace colors override
+   * these through element-scoped custom properties. */
+  --rbs-palette-0: #174a7e;
+  --rbs-palette-1: #c58a17;
+  --rbs-palette-2: #52606d;
+  --rbs-palette-3: #2b6f8a;
+  --rbs-palette-4: #355c7d;
+  --rbs-palette-5: #4b4e9a;
+  --rbs-palette-6: #6b4c8a;
+  --rbs-palette-7: #7a3e65;
+  --rbs-palette-8: #9b4535;
+  --rbs-palette-9: #a65323;
+  --rbs-palette-10: #8a6418;
+  --rbs-palette-11: #5f6b2f;
+  --rbs-palette-12: #1e6f72;
+  --rbs-palette-13: #536878;
+  --rbs-palette-14: #76543e;
+  --rbs-palette-15: #963c5a;
+  --rbs-palette-16: hsl(240deg 52% 42%);
+  --rbs-palette-17: hsl(255deg 52% 42%);
+  --rbs-palette-18: hsl(270deg 52% 42%);
+  --rbs-palette-19: hsl(285deg 52% 42%);
+  --rbs-palette-20: hsl(300deg 52% 42%);
+  --rbs-palette-21: hsl(315deg 52% 42%);
+  --rbs-palette-22: hsl(330deg 52% 42%);
+  --rbs-palette-23: hsl(345deg 52% 42%);
+
+  /* Fixed schedule states; intentionally outside workspace color settings. */
+  --rbs-admin-grey: #5b6570;
+  --rbs-admin-tint: #e8edf2;
+  --rbs-academic-grey: #6b7580;
+  --rbs-academic-tint: #e4e9ee;
+  --rbs-vacation-grey: #6b7580;
+  --rbs-vacation-tint: #eef2f5;
+  --rbs-conference-grey: #4b5967;
+  --rbs-conference-tint: #e0e6eb;
+  --rbs-special-event-grey: #607080;
+  --rbs-special-event-tint: #e9eef2;
+  --rbs-closure-tint: #d6d3d1;
+  --rbs-partial-closure-tint: #f1f0ef;
+
+  /* Elevation and focus */
+  --rbs-shadow-low: 0 1px 2px rgb(32 43 54 / 8%);
+  --rbs-shadow-raised: 0 8px 24px rgb(32 43 54 / 14%);
+  --rbs-shadow-modal: 0 24px 72px rgb(32 43 54 / 22%);
+  --rbs-shadow-sticky: 3px 0 5px rgb(15 23 42 / 12%);
+  --rbs-shadow-low-color: rgb(32 43 54 / 8%);
+  --rbs-shadow-raised-color: rgb(32 43 54 / 18%);
+  --rbs-shadow-strong-color: rgb(32 43 54 / 24%);
+  --rbs-shadow-text-color: rgb(32 43 54 / 32%);
+  --rbs-shadow-avatar: inset 0 1px 0 var(--rbs-surface-highlight),
+    0 2px 5px var(--rbs-shadow-raised-color);
+  --rbs-shadow-avatar-large: inset 0 1px 0 var(--rbs-surface-highlight),
+    0 3px 8px var(--rbs-shadow-raised-color);
+  --rbs-shadow-swatch-selected: 0 0 0 2px var(--rbs-ink),
+    0 2px 5px var(--rbs-shadow-strong-color);
+  --rbs-shadow-sticky-bottom: 0 -5px 16px var(--rbs-shadow-low-color);
+
+  /* State outlines are effects rather than elevation. Naming them here keeps
+   * their width and hierarchy consistent across scheduling surfaces. */
+  --rbs-effect-selection-rail: inset 4px 0 0 var(--rbs-primary);
+  --rbs-effect-border-outline: 0 0 0 1px var(--rbs-border-strong);
+  --rbs-effect-primary-outline: inset 0 0 0 1px var(--rbs-primary-border-soft);
+  --rbs-effect-warning-outline: inset 0 0 0 2px var(--rbs-warning-accent);
+  --rbs-effect-warning-outline-subtle: inset 0 0 0 1px var(--rbs-warning-border);
+  --rbs-effect-warning-outline-strong: inset 0 0 0 3px var(--rbs-warning-accent);
+  --rbs-effect-secondary-outline: inset 0 0 0 3px var(--rbs-secondary);
+  --rbs-effect-warning-underline: inset 0 -3px 0 var(--rbs-warning-accent);
+  --rbs-effect-surface-halo: 0 0 0 3px var(--rbs-surface-halo);
+
+  /* Motion */
+  --rbs-motion-none: 0s;
+  --rbs-motion-fast: 120ms;
+  --rbs-motion-normal: 180ms;
+  --rbs-spinner-duration: 720ms;
+  --rbs-spinner-reduced-duration: 1.5s;
+}
+
+body {
+  /* Workspace theme roles supplied through Quasar at runtime. */
+  --rbs-primary: var(--q-primary, #174a7e);
+  --rbs-secondary: var(--q-secondary, #c58a17);
+  --rbs-accent: var(--q-accent, #52606d);
+  --rbs-on-primary: var(--q-rbs-on-primary, var(--rbs-white));
+  --rbs-on-secondary: var(--q-rbs-on-secondary, var(--rbs-ink));
+  --rbs-primary-text: var(--q-rbs-primary-text, var(--rbs-primary));
+  --rbs-secondary-text: var(--q-rbs-secondary-text, var(--rbs-ink));
+  --rbs-primary-soft: color-mix(in srgb, var(--rbs-primary) 8%, var(--rbs-white));
+  --rbs-primary-muted: color-mix(in srgb, var(--rbs-primary) 18%, var(--rbs-white));
+  --rbs-primary-wash: color-mix(in srgb, var(--rbs-primary) 8%, transparent);
+  --rbs-primary-border-soft: color-mix(in srgb, var(--rbs-primary) 18%, transparent);
+  --rbs-primary-border: color-mix(in srgb, var(--rbs-primary) 24%, transparent);
+  --rbs-primary-selected-border: color-mix(
+    in srgb,
+    var(--rbs-primary) 30%,
+    transparent
+  );
+  --rbs-primary-selected-surface: color-mix(
+    in srgb,
+    var(--rbs-primary) 7%,
+    var(--rbs-white)
+  );
+  --rbs-secondary-soft: color-mix(in srgb, var(--rbs-secondary) 8%, var(--rbs-white));
+  --rbs-secondary-strong: color-mix(
+    in srgb,
+    var(--rbs-secondary) 70%,
+    var(--rbs-ink)
+  );
+  --rbs-on-primary-wash: color-mix(in srgb, var(--rbs-on-primary) 7%, transparent);
+  --rbs-on-primary-divider: color-mix(in srgb, var(--rbs-on-primary) 12%, transparent);
+  --rbs-on-primary-border: color-mix(in srgb, var(--rbs-on-primary) 18%, transparent);
+  --rbs-on-primary-border-strong: color-mix(
+    in srgb,
+    var(--rbs-on-primary) 60%,
+    transparent
+  );
+  --rbs-surface-glass: color-mix(in srgb, var(--rbs-white) 94%, transparent);
+  --rbs-surface-glass-strong: color-mix(in srgb, var(--rbs-white) 96%, transparent);
+  --rbs-surface-glass-muted: color-mix(in srgb, var(--rbs-white) 72%, transparent);
+  --rbs-surface-highlight: color-mix(in srgb, var(--rbs-white) 20%, transparent);
+  --rbs-surface-halo: color-mix(in srgb, var(--rbs-white) 85%, transparent);
+  --rbs-rotation-code-border: color-mix(
+    in srgb,
+    var(--rbs-rotation-code-color, var(--rbs-primary)) 72%,
+    var(--rbs-ink)
+  );
+  --rbs-rotation-code-ring: color-mix(
+    in srgb,
+    var(--rbs-rotation-code-color, var(--rbs-primary)) 24%,
+    transparent
+  );
+  --rbs-clinic-color-soft: color-mix(
+    in srgb,
+    var(--rbs-clinic-color, var(--rbs-primary)) 5%,
+    var(--rbs-white)
+  );
+  --rbs-shadow-rotation-band: inset 0 1px 0 var(--rbs-surface-highlight),
+    var(--rbs-shadow-low);
+  --rbs-shadow-avatar-selected: inset 0 1px 0 var(--rbs-surface-highlight),
+    0 0 0 2px var(--rbs-white), 0 0 0 4px var(--rbs-rotation-code-ring);
+
+  margin: 0;
+  background: var(--rbs-canvas);
+  color: var(--rbs-text);
+  font-family: var(--rbs-font-ui);
+  font-size: var(--rbs-type-body-size);
+  font-weight: var(--rbs-weight-regular);
+  line-height: var(--rbs-type-body-leading);
+}
+
+/* Semantic typography: feature modules choose intent, not framework scale. */
+.rbs-type-brand,
+.rbs-type-page-title,
+.rbs-type-dialog-title,
+.rbs-type-section-title,
+.rbs-type-control-label,
+.rbs-type-body,
+.rbs-type-body-large,
+.rbs-type-secondary,
+.rbs-type-caption,
+.rbs-type-schedule,
+.rbs-type-micro {
+  font-family: var(--rbs-font-ui);
+}
+
+.rbs-type-brand {
+  font-size: var(--rbs-type-brand-size);
+  font-weight: var(--rbs-weight-bold);
+  line-height: var(--rbs-type-brand-leading);
+}
+
+.rbs-type-page-title {
+  font-size: var(--rbs-type-page-size);
+  font-weight: var(--rbs-weight-medium);
+  line-height: var(--rbs-type-page-leading);
+}
+
+.rbs-type-dialog-title {
+  font-size: var(--rbs-type-dialog-size);
+  font-weight: var(--rbs-weight-semibold);
+  line-height: var(--rbs-type-dialog-leading);
+}
+
+.rbs-type-section-title {
+  font-size: var(--rbs-type-section-size);
+  font-weight: var(--rbs-weight-semibold);
+  line-height: var(--rbs-type-section-leading);
+}
+
+.rbs-type-control-label {
+  font-size: var(--rbs-type-body-size);
+  font-weight: var(--rbs-weight-semibold);
+  line-height: var(--rbs-type-body-leading);
+}
+
+.rbs-type-body {
+  font-size: var(--rbs-type-body-size);
+  font-weight: var(--rbs-weight-regular);
+  line-height: var(--rbs-type-body-leading);
+}
+
+.rbs-type-body-large {
+  font-size: var(--rbs-type-section-size);
+  font-weight: var(--rbs-weight-regular);
+  line-height: var(--rbs-type-section-leading);
+}
+
+.rbs-type-secondary {
+  font-size: var(--rbs-type-secondary-size);
+  font-weight: var(--rbs-weight-regular);
+  line-height: var(--rbs-type-secondary-leading);
+}
+
+.rbs-type-caption {
+  font-size: var(--rbs-type-caption-size);
+  font-weight: var(--rbs-weight-regular);
+  line-height: var(--rbs-type-caption-leading);
+}
+
+.rbs-type-schedule {
+  font-size: var(--rbs-type-schedule-size);
+  font-weight: var(--rbs-weight-semibold);
+  line-height: var(--rbs-type-schedule-leading);
+}
+
+.rbs-type-micro {
+  font-size: var(--rbs-type-micro-size);
+  font-weight: var(--rbs-weight-bold);
+  line-height: var(--rbs-type-micro-leading);
+}
+
+.rbs-font-medium {
+  font-weight: var(--rbs-weight-medium);
+}
+
+.rbs-font-semibold {
+  font-weight: var(--rbs-weight-semibold);
+}
+
+.rbs-font-bold {
+  font-weight: var(--rbs-weight-bold);
+}
+
+.rbs-text-muted {
+  color: var(--rbs-text-muted) !important;
+}
+
+.rbs-text-subtle {
+  color: var(--rbs-text-subtle) !important;
+}
+
+.rbs-text-disabled {
+  color: var(--rbs-text-disabled) !important;
+}
+
+.rbs-muted-badge {
+  color: var(--rbs-text-muted) !important;
+}
+
+.rbs-text-primary {
+  color: var(--rbs-primary-text) !important;
+}
+
+.rbs-text-secondary {
+  color: var(--rbs-secondary-text) !important;
+}
+
+.rbs-text-danger {
+  color: var(--rbs-danger) !important;
+}
+
+.rbs-text-warning {
+  color: var(--rbs-warning) !important;
+}
+
+.rbs-icon-sm { font-size: var(--rbs-icon-sm); }
+.rbs-icon-md { font-size: var(--rbs-icon-md); }
+.rbs-icon-lg { font-size: var(--rbs-icon-lg); }
+.rbs-icon-xl { font-size: var(--rbs-icon-xl); }
+
+/* Quasar assumes white text on theme colors. Workspace colors are arbitrary,
+ * so RBS supplies the contrast-aware foreground roles at runtime. */
+.bg-primary,
+.q-btn.bg-primary {
+  color: var(--rbs-on-primary) !important;
+}
+
+.bg-secondary,
+.q-btn.bg-secondary {
+  color: var(--rbs-on-secondary) !important;
+}
+
+.text-primary {
+  color: var(--rbs-primary-text) !important;
+}
+
+.text-secondary {
+  color: var(--rbs-secondary-text) !important;
+}
+
+.rbs-app-header .text-white {
+  color: var(--rbs-on-primary) !important;
+}
+
+.rbs-primary-avatar {
+  color: var(--rbs-on-primary) !important;
+}

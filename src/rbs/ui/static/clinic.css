@@ -1,0 +1,372 @@
+.rbs-clinic-wrap {
+  overflow: auto;
+  max-height: 70vh;
+  border: 1px solid var(--rbs-border);
+}
+
+.rbs-clinic-calendar-wrap {
+  background: var(--rbs-surface-muted);
+}
+
+.rbs-clinic-calendar {
+  min-width: 1280px;
+  background: var(--rbs-surface-muted);
+}
+
+.rbs-clinic-week {
+  display: grid;
+  grid-template-columns: repeat(var(--rbs-clinic-days, 5), minmax(240px, 1fr));
+  gap: 1px;
+  padding-bottom: var(--rbs-space-2);
+  background: var(--rbs-border-strong);
+}
+
+.rbs-clinic-week:last-child {
+  padding-bottom: 0;
+}
+
+.rbs-clinic-day {
+  min-width: 0;
+  background: var(--rbs-surface);
+}
+
+.rbs-clinic-day-header {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-bottom: 2px solid var(--rbs-primary);
+  background: var(--rbs-surface-subtle);
+}
+
+.rbs-clinic-day-heading {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rbs-clinic-day-name {
+  color: var(--rbs-text-muted);
+  font-size: var(--rbs-type-schedule-size);
+  font-weight: var(--rbs-weight-bold);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.rbs-clinic-day-header time {
+  color: var(--rbs-primary);
+  font-size: var(--rbs-type-section-size);
+  font-weight: var(--rbs-weight-semibold);
+}
+
+.rbs-clinic-closure-badge {
+  display: inline-block;
+  max-width: 150px;
+  overflow: hidden;
+  padding: 1px 5px;
+  border: 1px solid var(--rbs-text-subtle);
+  border-radius: var(--rbs-radius-full);
+  color: var(--rbs-text);
+  font-size: var(--rbs-type-micro-size);
+  font-weight: var(--rbs-weight-bold);
+  letter-spacing: 0;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.rbs-clinic-closure-badge.partial {
+  border-style: dashed;
+  background: var(--rbs-surface-glass-muted);
+}
+
+.rbs-clinic-day.closure-partial .rbs-clinic-day-header {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--rbs-surface-subtle) 0,
+    var(--rbs-surface-subtle) 7px,
+    var(--rbs-partial-closure-tint) 7px,
+    var(--rbs-partial-closure-tint) 11px
+  );
+}
+
+.rbs-clinic-day.closure-full,
+.rbs-clinic-day.closure-full .rbs-clinic-session,
+.rbs-clinic-day.closure-full .rbs-clinic-session-heading {
+  background: var(--rbs-partial-closure-tint);
+}
+
+.rbs-clinic-day.closure-full .rbs-clinic-day-header {
+  border-bottom-color: var(--rbs-text-subtle);
+  background: var(--rbs-closure-tint);
+}
+
+.rbs-clinic-day.closure-full .rbs-clinic-day-header time {
+  color: var(--rbs-text-muted);
+}
+
+.rbs-clinic-day.closure-full .rbs-clinic-session.closure .rbs-clinic-session-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: repeating-linear-gradient(
+    135deg,
+    var(--rbs-closure-tint) 0,
+    var(--rbs-closure-tint) 8px,
+    var(--rbs-partial-closure-tint) 8px,
+    var(--rbs-partial-closure-tint) 16px
+  );
+  color: var(--rbs-text-muted);
+  font-size: var(--rbs-type-caption-size);
+  font-weight: var(--rbs-weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.rbs-clinic-day-sessions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+}
+
+.rbs-clinic-session {
+  min-width: 0;
+  min-height: 108px;
+  background: var(--rbs-surface);
+}
+
+.rbs-clinic-session + .rbs-clinic-session {
+  border-left: 1px solid var(--rbs-border);
+}
+
+.rbs-clinic-session-heading {
+  display: grid;
+  min-height: 34px;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  padding: var(--rbs-space-1) 7px;
+  border-bottom: 1px solid var(--rbs-border);
+  background: var(--rbs-surface-subtle);
+  color: var(--rbs-text-muted);
+  font-size: var(--rbs-type-micro-size);
+  font-weight: var(--rbs-weight-semibold);
+  letter-spacing: 0.05em;
+}
+
+.rbs-clinic-session-label {
+  align-self: center;
+}
+
+.rbs-clinic-session-attending {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px 5px;
+  flex-wrap: wrap;
+  text-align: right;
+}
+
+.rbs-clinic-session-att {
+  color: var(--rbs-clinic-att-color);
+  font-size: var(--rbs-type-caption-size);
+  font-weight: var(--rbs-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.rbs-clinic-session-att + .rbs-clinic-session-att::before {
+  margin-right: 5px;
+  color: var(--rbs-ink);
+  content: "•";
+  font-size: var(--rbs-type-caption-size);
+  line-height: 0;
+}
+
+.rbs-clinic-session-body {
+  min-height: 84px;
+  padding: 5px;
+}
+
+.rbs-clinic-session.academic .rbs-clinic-session-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--rbs-academic-tint);
+  color: var(--rbs-ink);
+  font-size: var(--rbs-type-schedule-size);
+  font-weight: var(--rbs-weight-bold);
+  text-align: center;
+}
+
+.rbs-clinic-special-event {
+  display: flex;
+  margin: 2px 0 var(--rbs-space-1);
+  padding: 5px 7px;
+  border: 2px solid var(--rbs-special-event-grey);
+  border-radius: var(--rbs-radius-sm);
+  flex-direction: column;
+  gap: 2px;
+  background-color: var(--rbs-special-event-tint);
+  background-image: radial-gradient(
+    circle,
+    var(--rbs-border-strong) 1px,
+    transparent 1.25px
+  );
+  background-size: 6px 6px;
+  color: var(--rbs-text);
+  font-size: var(--rbs-type-schedule-size);
+  line-height: 1.25;
+  text-align: left;
+  text-transform: none;
+}
+
+.rbs-clinic-special-event strong {
+  font-size: var(--rbs-type-caption-size);
+}
+
+.rbs-clinic-special-event span {
+  font-weight: var(--rbs-weight-medium);
+}
+
+.rbs-clinic-session.academic .rbs-clinic-special-event {
+  width: 100%;
+}
+
+.rbs-clinic-person {
+  display: block;
+  overflow: hidden;
+  margin: 1px 0;
+  padding: 3px 6px;
+  border: 3px solid transparent;
+  border-radius: var(--rbs-radius-sm);
+  background: var(--rbs-surface);
+  color: var(--rbs-ink);
+  font-size: var(--rbs-type-secondary-size);
+  line-height: 1.35;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rbs-clinic-person.admin {
+  border-color: var(--rbs-admin-grey);
+  background: repeating-linear-gradient(
+    135deg,
+    var(--rbs-white) 0,
+    var(--rbs-white) 5px,
+    var(--rbs-admin-tint) 5px,
+    var(--rbs-admin-tint) 10px
+  );
+}
+
+.rbs-clinic-person.site {
+  border-color: var(--rbs-clinic-site-color);
+  background: var(--rbs-clinic-site-tint);
+}
+
+.rbs-clinic-last-name {
+  font-weight: var(--rbs-weight-bold);
+}
+
+.rbs-clinic-att {
+  margin-top: var(--rbs-space-1);
+  color: var(--rbs-ink);
+  font-weight: var(--rbs-weight-semibold);
+  white-space: nowrap;
+}
+
+.rbs-clinic-legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0 0 var(--rbs-space-2);
+  font-size: var(--rbs-type-caption-size);
+}
+
+.rbs-clinic-key-label {
+  margin-right: 2px;
+  color: var(--rbs-text-muted);
+  font-weight: var(--rbs-weight-bold);
+}
+
+.rbs-clinic-swatch {
+  display: inline-block;
+  padding: 1px var(--rbs-space-2);
+  border: 3px solid transparent;
+  border-radius: var(--rbs-radius-sm);
+  background: var(--rbs-surface);
+  color: var(--rbs-ink);
+  font-weight: var(--rbs-weight-semibold);
+}
+
+.rbs-clinic-swatch.site {
+  border-color: var(--rbs-clinic-site-color);
+  background: var(--rbs-clinic-site-tint);
+}
+
+.rbs-clinic-swatch.admin {
+  border-color: var(--rbs-admin-grey);
+  background: repeating-linear-gradient(
+    135deg,
+    var(--rbs-white) 0,
+    var(--rbs-white) 5px,
+    var(--rbs-admin-tint) 5px,
+    var(--rbs-admin-tint) 10px
+  );
+}
+
+.rbs-clinic-swatch.special-event {
+  border-color: var(--rbs-special-event-grey);
+  background-color: var(--rbs-special-event-tint);
+  background-image: radial-gradient(
+    circle,
+    var(--rbs-border-strong) 1px,
+    transparent 1.25px
+  );
+  background-size: 6px 6px;
+  color: var(--rbs-text);
+}
+
+.rbs-clinic-toolbar {
+  min-height: 42px;
+  padding: 2px 0 6px;
+  border-bottom: 1px solid var(--rbs-border-subtle);
+}
+
+.rbs-clinic-toolbar-key {
+  flex: 1 1 540px;
+  width: auto !important;
+}
+
+.rbs-clinic-toolbar-key .rbs-clinic-legend {
+  margin: 0;
+}
+
+.rbs-clinic-toolbar-controls {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  margin-left: auto;
+}
+
+@media (max-width: 1023px) {
+  .rbs-clinic-toolbar-controls {
+    width: 100%;
+    flex-wrap: wrap;
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .rbs-clinic-training-level {
+    display: none;
+  }
+}
