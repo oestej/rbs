@@ -1,13 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller recipe for the self-contained RBS Desktop application.
 
-Build this spec independently on each target operating system. The output is an
-``RBS Desktop.app`` on macOS and an ``RBS Desktop`` onedir application
-elsewhere. Onedir avoids the extraction delay and signing complications of a
-onefile native app.
+RBS Desktop is a macOS application; the output is an ``RBS Desktop.app`` bundle.
+Onedir avoids the extraction delay and signing complications of a onefile native
+app.
 """
 
-import sys
 import runpy
 from pathlib import Path
 
@@ -145,32 +143,31 @@ application = COLLECT(
     name="RBS Desktop",
 )
 
-if sys.platform == "darwin":
-    app = BUNDLE(
-        application,
-        name="RBS Desktop.app",
-        icon=str(project_root / "packaging" / "assets" / "rbs.icns"),
-        bundle_identifier="com.rbs.desktop",
-        info_plist={
-            "CFBundleName": "RBS Desktop",
-            "CFBundleDisplayName": "RBS Desktop",
-            # COLLECT also contains the console-based solver helper, so
-            # PyInstaller otherwise infers that the whole app is background
-            # only from the last executable it sees.
-            "LSBackgroundOnly": False,
-            "NSHighResolutionCapable": True,
-            "CFBundleShortVersionString": app_version,
-            "CFBundleVersion": app_version,
-            "UTExportedTypeDeclarations": [
-                {
-                    "UTTypeIdentifier": "com.rbs.rbsc",
-                    "UTTypeDescription": "RBS Workspace",
-                    "UTTypeConformsTo": ["public.json", "public.data"],
-                    "UTTypeTagSpecification": {
-                        "public.filename-extension": ["rbsc"],
-                        "public.mime-type": "application/vnd.rbs.workspace+json",
-                    },
-                }
-            ],
-        },
-    )
+app = BUNDLE(
+    application,
+    name="RBS Desktop.app",
+    icon=str(project_root / "packaging" / "assets" / "rbs.icns"),
+    bundle_identifier="com.rbs.desktop",
+    info_plist={
+        "CFBundleName": "RBS Desktop",
+        "CFBundleDisplayName": "RBS Desktop",
+        # COLLECT also contains the console-based solver helper, so
+        # PyInstaller otherwise infers that the whole app is background
+        # only from the last executable it sees.
+        "LSBackgroundOnly": False,
+        "NSHighResolutionCapable": True,
+        "CFBundleShortVersionString": app_version,
+        "CFBundleVersion": app_version,
+        "UTExportedTypeDeclarations": [
+            {
+                "UTTypeIdentifier": "com.rbs.rbsc",
+                "UTTypeDescription": "RBS Workspace",
+                "UTTypeConformsTo": ["public.json", "public.data"],
+                "UTTypeTagSpecification": {
+                    "public.filename-extension": ["rbsc"],
+                    "public.mime-type": "application/vnd.rbs.workspace+json",
+                },
+            }
+        ],
+    },
+)

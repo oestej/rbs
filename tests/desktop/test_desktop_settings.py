@@ -16,20 +16,10 @@ from rbs.models.color_scheme import ColorScheme
 from rbs.models.instance import SchedulerInput
 
 
-def test_default_settings_path_is_platform_specific(tmp_path) -> None:
-    assert default_settings_path(platform="darwin", home=tmp_path) == (
+def test_default_settings_path_uses_the_application_support_tree(tmp_path) -> None:
+    assert default_settings_path(home=tmp_path) == (
         tmp_path / "Library" / "Application Support" / "RBS Desktop" / "settings.json"
     )
-    assert default_settings_path(
-        platform="win32",
-        environ={"LOCALAPPDATA": str(tmp_path / "Local")},
-        home=tmp_path,
-    ) == tmp_path / "Local" / "RBS Desktop" / "settings.json"
-    assert default_settings_path(
-        platform="linux",
-        environ={"XDG_CONFIG_HOME": str(tmp_path / "config")},
-        home=tmp_path,
-    ) == tmp_path / "config" / "rbs-desktop" / "settings.json"
 
 
 def test_detected_solver_workers_uses_the_machine_cpu_count(monkeypatch) -> None:
@@ -61,9 +51,8 @@ def test_first_run_creates_a_private_validated_settings_file(tmp_path) -> None:
 
     assert settings.error is None
     assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 1
-    if os.name != "nt":
-        assert path.parent.stat().st_mode & 0o777 == 0o700
-        assert path.stat().st_mode & 0o777 == 0o600
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+    assert path.stat().st_mode & 0o777 == 0o600
 
 
 def test_settings_capture_and_apply_all_application_preferences(tmp_path) -> None:

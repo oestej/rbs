@@ -12,12 +12,12 @@ into the shared application or document model.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import re
 import sqlite3
-import sys
 import tempfile
 import threading
 import unicodedata
@@ -710,8 +710,7 @@ def _exclusive_document_lock(destination: Path, lock_directory: Path | None):
     lock_path = _document_lock_path(destination, lock_directory)
     if lock_directory is not None:
         lock_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if os.name != "nt":
-            os.chmod(lock_directory, 0o700)
+        os.chmod(lock_directory, 0o700)
 
     descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     locked = False
@@ -719,51 +718,25 @@ def _exclusive_document_lock(destination: Path, lock_directory: Path | None):
         if os.fstat(descriptor).st_size == 0:
             os.write(descriptor, b"\0")
         os.lseek(descriptor, 0, os.SEEK_SET)
-        if os.name == "nt":
-            import msvcrt
-
-            msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
         locked = True
         yield
     finally:
         if locked:
             os.lseek(descriptor, 0, os.SEEK_SET)
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
         os.close(descriptor)
 
 
-def _document_lock_path(
-    destination: Path,
-    lock_directory: Path | None,
-    *,
-    platform: str | None = None,
-) -> Path:
+def _document_lock_path(destination: Path, lock_directory: Path | None) -> Path:
     """Return one lock identity for all spellings of the same local path."""
     if lock_directory is None:
         return destination.with_name(f".{destination.name}.rbs-lock")
 
-    platform = sys.platform if platform is None else platform
-    identity = str(destination.resolve())
-    if platform == "darwin":
-        # Default APFS is case- and Unicode-normalization-insensitive while
-        # Path.resolve preserves the caller's spelling. Sharing a lock for two
-        # genuinely distinct files on a case-sensitive Mac volume is a safe,
-        # conservative over-serialization.
-        identity = unicodedata.normalize("NFC", identity).casefold()
-    elif platform == "win32":
-        import ntpath
-
-        identity = unicodedata.normalize("NFC", ntpath.normcase(identity)).casefold()
+    # Default APFS is case- and Unicode-normalization-insensitive while
+    # Path.resolve preserves the caller's spelling. Sharing a lock for two
+    # genuinely distinct files on a case-sensitive Mac volume is a safe,
+    # conservative over-serialization.
+    identity = unicodedata.normalize("NFC", str(destination.resolve())).casefold()
     digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
     return lock_directory / f"{digest}.lock"

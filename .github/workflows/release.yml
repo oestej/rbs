@@ -1,0 +1,135 @@
+# Publishes a release from a pushed vX.Y.Z tag.
+#
+# The changelog rollover and version bump happen before the tag, on a
+# developer's machine, with `tools/release_changelog.py`. This workflow is the
+# gate that refuses to publish a tag those edits do not back, and the builder
+# that turns the tagged commit into the macOS artifact users download. See
+# docs/releases.md for the full checklist.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+# Required to create the GitHub Release and upload the disk image to it.
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Matches the interpreter the desktop build is verified against.
+  PYTHON_VERSION: "3.14"
+
+jobs:
+  macos:
+    name: Build and publish RBS Desktop for macOS
+    # RBS Desktop ships for Apple Silicon only, which is what a GitHub-hosted
+    # macOS runner is. No Intel artifact is built.
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@v7
+        with:
+          # merge-base below needs history, not just the tagged commit.
+          fetch-depth: 0
+
+      - name: Require the tag to name a commit on main
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" refs/remotes/origin/main; then
+            echo "::error::${GITHUB_REF_NAME} does not point at a commit contained in main."
+            exit 1
+          fi
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v10
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+
+      # Runs before the dependency install so a mistagged or unprepared release
+      # fails in seconds rather than after a full build.
+      - name: Verify the tag, application version, and changelog agree
+        run: |
+          uv run --no-project --python "${PYTHON_VERSION}" \
+            python tools/release_notes.py "${GITHUB_REF_NAME}" \
+            --output "${RUNNER_TEMP}/release-notes.md"
+
+      - name: Verify the lockfile matches pyproject.toml
+        run: uv lock --check
+
+      - name: Ruff
+        run: uv run --frozen --extra dev ruff check .
+
+      - name: Pytest
+        run: uv run --frozen --extra dev pytest
+
+      # build_desktop.sh runs its own exact `uv sync --extra desktop --extra
+      # build`, which removes the development packages installed above. The
+      # bundle audit it runs afterwards therefore sees only declared desktop
+      # dependencies, exactly as it does on a developer's machine.
+      - name: Build RBS Desktop
+        run: tools/build_desktop.sh
+
+      # RBS Desktop is not signed with an Apple Developer ID yet. PyInstaller
+      # applies an ad-hoc signature so the bundle runs where it was built, but
+      # macOS quarantines it after download. To ship a signed, notarized app,
+      # add the secrets and restore the step below, then drop the installation
+      # note from the release description further down.
+      #
+      # - name: Sign and notarize RBS Desktop
+      #   env:
+      #     CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+      #     CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      #     DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+      #     TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      #     API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      #     API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+      #     API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+      #   run: |
+      #     # Import the Developer ID certificate into a throwaway keychain.
+      #     # Sign the nested solver executable before the outer bundle.
+      #     # Sign with --options runtime; notarization rejects apps without it.
+      #     # Submit the zipped bundle with `xcrun notarytool submit --wait`.
+      #     # Staple the ticket onto RBS Desktop.app so it validates offline.
+
+      - name: Package the disk image
+        run: tools/package_dmg.sh
+
+      # Keeps the artifact reachable even if publishing fails, so a release can
+      # be retried without rebuilding.
+      - name: Upload the disk image as a workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: rbs-desktop-macos-${{ github.ref_name }}
+          path: dist/*.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Compose the release description
+        run: |
+          cp "${RUNNER_TEMP}/release-notes.md" "${RUNNER_TEMP}/release-body.md"
+          printf '%s\n' \
+            '' \
+            '### Installing on macOS' \
+            '' \
+            'Open the disk image and drag **RBS Desktop** to **Applications**.' \
+            'The application is not signed with an Apple Developer ID yet, so' \
+            'macOS quarantines it after download: right-click the installed app' \
+            'and choose **Open** once to confirm it should run.' \
+            >> "${RUNNER_TEMP}/release-body.md"
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "RBS ${GITHUB_REF_NAME#v}" \
+            --notes-file "${RUNNER_TEMP}/release-body.md" \
+            --verify-tag \
+            dist/*.dmg

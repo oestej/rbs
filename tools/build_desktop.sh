@@ -41,6 +41,11 @@ while (($# > 0)); do
     shift
 done
 
+if [[ "$(uname -s)" != "Darwin" ]]; then
+    printf '%s\n' 'RBS Desktop is a macOS application; it can only be built on macOS.' >&2
+    exit 1
+fi
+
 if ! command -v uv >/dev/null 2>&1; then
     printf '%s\n' 'RBS Desktop builds require uv: https://docs.astral.sh/uv/' >&2
     exit 1
@@ -62,29 +67,13 @@ fi
 uv run --no-sync pyinstaller "${pyinstaller_options[@]}" rbs-desktop.spec
 uv run --no-sync python tools/audit_desktop_bundle.py
 
-case "$(uname -s)" in
-    Darwin)
-        artifact="${PROJECT_ROOT}/dist/RBS Desktop.app"
-        desktop_executable="${artifact}/Contents/MacOS/RBS Desktop"
-        solver_executable="${artifact}/Contents/MacOS/rbs-solver"
-        ;;
-    *)
-        artifact="${PROJECT_ROOT}/dist/RBS Desktop"
-        desktop_executable="${artifact}/RBS Desktop"
-        solver_executable="${artifact}/rbs-solver"
-        ;;
-esac
+artifact="${PROJECT_ROOT}/dist/RBS Desktop.app"
+desktop_executable="${artifact}/Contents/MacOS/RBS Desktop"
+solver_executable="${artifact}/Contents/MacOS/rbs-solver"
 
 if [[ ! -e "${artifact}" ]]; then
     printf 'Build finished, but the expected artifact was not found: %s\n' "${artifact}" >&2
     exit 1
-fi
-
-if [[ ! -x "${desktop_executable}" && -x "${desktop_executable}.exe" ]]; then
-    desktop_executable="${desktop_executable}.exe"
-fi
-if [[ ! -x "${solver_executable}" && -x "${solver_executable}.exe" ]]; then
-    solver_executable="${solver_executable}.exe"
 fi
 
 if [[ ! -x "${desktop_executable}" || ! -x "${solver_executable}" ]]; then

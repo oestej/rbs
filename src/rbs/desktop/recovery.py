@@ -13,10 +13,8 @@ import errno
 import os
 import re
 import secrets
-import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 _CHECKPOINT_NAME = re.compile(
     r"^checkpoint-(?P<pid>[1-9][0-9]*)-[a-f0-9]{32}\.sqlite$"
@@ -26,26 +24,10 @@ _LEGACY_DRAFT_NAME = re.compile(
 )
 
 
-def default_recovery_directory(
-    *,
-    platform: str | None = None,
-    environ: Mapping[str, str] | None = None,
-    home: Path | None = None,
-) -> Path:
-    """Return a per-user application-state directory for recoverable drafts."""
-    platform = sys.platform if platform is None else platform
-    environ = os.environ if environ is None else environ
+def default_recovery_directory(*, home: Path | None = None) -> Path:
+    """Return the per-user application-state directory for recoverable drafts."""
     home = Path.home() if home is None else home
-
-    if platform == "darwin":
-        return home / "Library" / "Application Support" / "RBS Desktop" / "Recovery"
-    if platform == "win32":
-        local_app_data = environ.get("LOCALAPPDATA")
-        base = Path(local_app_data) if local_app_data else home / "AppData" / "Local"
-        return base / "RBS Desktop" / "Recovery"
-    state_home = environ.get("XDG_STATE_HOME")
-    base = Path(state_home) if state_home else home / ".local" / "state"
-    return base / "rbs-desktop" / "recovery"
+    return home / "Library" / "Application Support" / "RBS Desktop" / "Recovery"
 
 
 def allocate_recovery_path(
@@ -93,18 +75,12 @@ def recoverable_drafts(
 
 def _prepare_private_directory(root: Path) -> None:
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if os.name != "nt":
-        os.chmod(root, 0o700)
+    os.chmod(root, 0o700)
 
 
-def _is_process_running(pid: int, *, platform: str | None = None) -> bool:
-    # ``os.kill(pid, 0)`` is the conventional non-destructive POSIX probe, but
-    # Windows implements every signal other than CTRL_C/CTRL_BREAK with
-    # TerminateProcess -- including signal 0. Never use it on Windows.
-    platform = sys.platform if platform is None else platform
-    if platform == "win32":
-        return _is_windows_process_running(pid)
-
+def _is_process_running(pid: int) -> bool:
+    # ``os.kill(pid, 0)`` is the conventional non-destructive probe: it performs
+    # every permission check without delivering a signal.
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -116,47 +92,3 @@ def _is_process_running(pid: int, *, platform: str | None = None) -> bool:
             return False
         return True
     return True
-
-
-def _is_windows_process_running(
-    pid: int,
-    *,
-    kernel32: Any | None = None,
-    last_error: Callable[[], int] | None = None,
-) -> bool:
-    """Probe a Windows PID without sending a signal or changing its state."""
-    import ctypes
-    from ctypes import wintypes
-
-    if kernel32 is None:
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel32.OpenProcess.restype = wintypes.HANDLE
-        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, wintypes.LPDWORD]
-        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
-        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-        kernel32.CloseHandle.restype = wintypes.BOOL
-        last_error = ctypes.get_last_error
-    elif last_error is None:
-        def no_last_error() -> int:
-            return 0
-
-        last_error = no_last_error
-
-    process_query_limited_information = 0x1000
-    error_invalid_parameter = 87
-    still_active = 259
-    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
-    if not handle:
-        # ERROR_INVALID_PARAMETER is how OpenProcess reports a PID that no
-        # longer exists. Access-denied and unknown failures are conservatively
-        # treated as live so another window's draft is never stolen.
-        return last_error() != error_invalid_parameter
-
-    exit_code = wintypes.DWORD()
-    try:
-        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
-            return True
-        return exit_code.value == still_active
-    finally:
-        kernel32.CloseHandle(handle)

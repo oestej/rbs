@@ -215,8 +215,7 @@ def default_solver_command() -> tuple[str, ...]:
         # A windowed executable has no usable stdin/stdout, so the JSON solver
         # protocol cannot re-enter it directly. The desktop bundle places a
         # console-capable helper beside the main executable instead.
-        suffix = ".exe" if sys.platform == "win32" else ""
-        helper = Path(sys.executable).with_name(f"{FROZEN_SOLVER_NAME}{suffix}")
+        helper = Path(sys.executable).with_name(FROZEN_SOLVER_NAME)
         return (str(helper),)
     return (sys.executable, "-m", "rbs.solver")
 
