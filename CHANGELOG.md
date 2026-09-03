@@ -16,3 +16,5 @@
   with per-user data isolation, retention controls, and bounded solve capacity.
 - **Release notes:** Read the product changelog from the About dialog in local,
   desktop, and hosted interfaces.
+- **Releases:** Download a macOS disk image built from the tagged commit, with
+  that release's changelog section as its published description.

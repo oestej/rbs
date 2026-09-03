@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import os
 import platform
@@ -12,7 +13,7 @@ import sys
 import tempfile
 import threading
 import zipfile
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -98,7 +99,7 @@ class DiagnosticsFileDialogs(Protocol):
 
 
 class NativeDiagnosticsMenu(Protocol):
-    """Platform adapter seam; a future Windows menu implements this contract."""
+    """Platform adapter seam for a toolkit's native menu configuration."""
 
     def install(self, native_config: Any) -> None:
         """Install diagnostics commands into a toolkit's native configuration."""
@@ -210,40 +211,14 @@ class DesktopDiagnosticsService:
         app.state.rbs_desktop_diagnostics_installed = True
 
 
-def default_diagnostics_path(
-    *,
-    platform_name: str | None = None,
-    environ: Mapping[str, str] | None = None,
-    home: Path | None = None,
-) -> Path:
-    platform_name = sys.platform if platform_name is None else platform_name
-    environ = os.environ if environ is None else environ
+def default_diagnostics_path(*, home: Path | None = None) -> Path:
     home = Path.home() if home is None else home
-    if platform_name == "darwin":
-        base = home / "Library" / "Application Support" / "RBS Desktop"
-    elif platform_name == "win32":
-        base = Path(environ.get("LOCALAPPDATA", home / "AppData" / "Local")) / "RBS Desktop"
-    else:
-        base = Path(environ.get("XDG_CONFIG_HOME", home / ".config")) / "rbs-desktop"
-    return base / "diagnostics.json"
+    return home / "Library" / "Application Support" / "RBS Desktop" / "diagnostics.json"
 
 
-def default_log_directory(
-    *,
-    platform_name: str | None = None,
-    environ: Mapping[str, str] | None = None,
-    home: Path | None = None,
-) -> Path:
-    platform_name = sys.platform if platform_name is None else platform_name
-    environ = os.environ if environ is None else environ
+def default_log_directory(*, home: Path | None = None) -> Path:
     home = Path.home() if home is None else home
-    if platform_name == "darwin":
-        return home / "Library" / "Logs" / "RBS Desktop"
-    if platform_name == "win32":
-        base = Path(environ.get("LOCALAPPDATA", home / "AppData" / "Local"))
-        return base / "RBS Desktop" / "Logs"
-    state = Path(environ.get("XDG_STATE_HOME", home / ".local" / "state"))
-    return state / "rbs-desktop" / "logs"
+    return home / "Library" / "Logs" / "RBS Desktop"
 
 
 def prune_logs(
@@ -314,7 +289,7 @@ def export_log_bundle(
         "app_version": __version__,
         "python_version": platform.python_version(),
         "platform": sys.platform,
-        "os_version": platform.mac_ver()[0] if sys.platform == "darwin" else platform.release(),
+        "os_version": platform.mac_ver()[0],
         "architecture": platform.machine(),
         "frozen": bool(getattr(sys, "frozen", False)),
         "run_id": run_id,
@@ -330,8 +305,7 @@ def export_log_bundle(
     os.close(descriptor)
     temporary = Path(temporary_name)
     try:
-        if os.name != "nt":
-            os.chmod(temporary, stat.S_IRUSR | stat.S_IWUSR)
+        os.chmod(temporary, stat.S_IRUSR | stat.S_IWUSR)
         with zipfile.ZipFile(
             temporary,
             mode="w",
@@ -496,28 +470,20 @@ def _size(path: Path) -> int:
 @contextmanager
 def _directory_lock(root: Path) -> Iterator[None]:
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if os.name != "nt":
-        os.chmod(root, 0o700)
+    os.chmod(root, 0o700)
     lock_path = root / ".diagnostics.lock"
     descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        if os.name != "nt":
-            import fcntl
-
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
         yield
     finally:
-        if os.name != "nt":
-            import fcntl
-
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
         os.close(descriptor)
 
 
 def _atomic_write(destination: Path, payload: str) -> None:
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if os.name != "nt":
-        os.chmod(destination.parent, 0o700)
+    os.chmod(destination.parent, 0o700)
     descriptor, temporary_name = tempfile.mkstemp(
         dir=destination.parent,
         prefix=f".{destination.name}.",
@@ -529,8 +495,7 @@ def _atomic_write(destination: Path, payload: str) -> None:
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
-        if os.name != "nt":
-            os.chmod(temporary, stat.S_IRUSR | stat.S_IWUSR)
+        os.chmod(temporary, stat.S_IRUSR | stat.S_IWUSR)
         os.replace(temporary, destination)
         _fsync_directory(destination.parent)
     except BaseException:
@@ -539,7 +504,7 @@ def _atomic_write(destination: Path, payload: str) -> None:
 
 
 def _fsync_directory(directory: Path) -> None:
-    if os.name == "nt" or not hasattr(os, "O_DIRECTORY"):
+    if not hasattr(os, "O_DIRECTORY"):
         return
     try:
         descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)

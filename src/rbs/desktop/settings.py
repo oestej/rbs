@@ -6,10 +6,8 @@ import hashlib
 import json
 import os
 import stat
-import sys
 import tempfile
 import threading
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
@@ -141,26 +139,10 @@ def _fallback_color(identifier: str, scheme: ColorScheme) -> str:
     return palette[digest[0] % len(palette)]
 
 
-def default_settings_path(
-    *,
-    platform: str | None = None,
-    environ: Mapping[str, str] | None = None,
-    home: Path | None = None,
-) -> Path:
-    """Return the conventional per-user settings path for this platform."""
-    platform = sys.platform if platform is None else platform
-    environ = os.environ if environ is None else environ
+def default_settings_path(*, home: Path | None = None) -> Path:
+    """Return the conventional per-user settings path."""
     home = Path.home() if home is None else home
-
-    if platform == "darwin":
-        return home / "Library" / "Application Support" / "RBS Desktop" / "settings.json"
-    if platform == "win32":
-        local_app_data = environ.get("LOCALAPPDATA")
-        base = Path(local_app_data) if local_app_data else home / "AppData" / "Local"
-        return base / "RBS Desktop" / "settings.json"
-    config_home = environ.get("XDG_CONFIG_HOME")
-    base = Path(config_home) if config_home else home / ".config"
-    return base / "rbs-desktop" / "settings.json"
+    return home / "Library" / "Application Support" / "RBS Desktop" / "settings.json"
 
 
 class DesktopSettingsFile:
@@ -307,7 +289,7 @@ def _atomic_write_text(destination: Path, payload: str) -> None:
     parent = destination.parent
     created_parent = not parent.exists()
     parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if created_parent and os.name != "nt":
+    if created_parent:
         os.chmod(parent, 0o700)
 
     existing_mode = None

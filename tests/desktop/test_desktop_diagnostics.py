@@ -36,10 +36,10 @@ def _unpickle_native_configuration(payload: bytes) -> None:
 
 
 def test_macos_diagnostic_paths_are_separate_from_application_settings(tmp_path: Path) -> None:
-    assert default_diagnostics_path(platform_name="darwin", home=tmp_path) == (
+    assert default_diagnostics_path(home=tmp_path) == (
         tmp_path / "Library" / "Application Support" / "RBS Desktop" / "diagnostics.json"
     )
-    assert default_log_directory(platform_name="darwin", home=tmp_path) == (
+    assert default_log_directory(home=tmp_path) == (
         tmp_path / "Library" / "Logs" / "RBS Desktop"
     )
 
@@ -63,9 +63,8 @@ def test_verbose_preference_is_private_atomic_and_recovers_from_invalid_json(
         "schema_version": 1,
         "verbose_logging": True,
     }
-    if os.name != "nt":
-        assert stat.S_IMODE(path.stat().st_mode) == 0o600
-        assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
 
 
 def test_retention_removes_old_inactive_logs_but_not_a_live_run(tmp_path: Path) -> None:

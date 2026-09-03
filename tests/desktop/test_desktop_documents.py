@@ -249,11 +249,9 @@ def test_macos_lock_identity_normalizes_path_case_and_unicode(tmp_path) -> None:
     first = tmp_path / "RÉSUMÉ.RBSC"
     second = tmp_path / unicodedata.normalize("NFD", "résumé.rbsc")
 
-    assert _document_lock_path(
-        first,
-        lock_directory,
-        platform="darwin",
-    ) == _document_lock_path(second, lock_directory, platform="darwin")
+    assert _document_lock_path(first, lock_directory) == _document_lock_path(
+        second, lock_directory
+    )
 
 
 def test_cancelled_save_as_does_not_bind_or_mark_the_document_clean(tmp_path) -> None:

@@ -203,6 +203,7 @@ def test_four_week_boundary_spans_are_opt_in() -> None:
     assert 4 in permissive
 
 
+@pytest.mark.solve
 def test_infeasible_vacation_coverage_reports_actions() -> None:
     from rbs.models.special import SpecialRotation, SpecialRotationKind
 
@@ -241,6 +242,7 @@ def test_infeasible_vacation_coverage_reports_actions() -> None:
     assert any("dates or assigned residents" in item for item in diagnostic.suggestions)
 
 
+@pytest.mark.solve
 def test_preferred_clinic_slot_is_a_soft_objective_choice() -> None:
     from ortools.sat.python import cp_model
 
@@ -829,6 +831,7 @@ def _fmed_clinic_concurrency_status(
     return cp_model.CpSolver().Solve(model)
 
 
+@pytest.mark.solve
 def test_cp_sat_fmed_clinic_concurrency_is_configurable_by_total_and_pgy() -> None:
     from ortools.sat.python import cp_model
 
@@ -911,6 +914,7 @@ def test_cp_sat_consecutive_rotation_caps(draft) -> None:
             assert longest <= rotation.max_consecutive_weeks, (resident.id, rotation.id, longest)
 
 
+@pytest.mark.solve
 def test_cp_sat_enforces_rotation_and_pgy_maximum_total_weeks() -> None:
     from ortools.sat.python import cp_model
 
@@ -1199,6 +1203,7 @@ def test_busy_clinic_sessions_mix_pgy_years(draft) -> None:
     assert mixed >= single
 
 
+@pytest.mark.solve
 def test_clinic_block_bounds_hold_every_week() -> None:
     from collections import Counter
 
@@ -1266,6 +1271,7 @@ def test_disabling_automatic_balance_removes_the_band() -> None:
     assert resolve_clinic_block_band(tuned, tuned.solver) == (None, None, False)
 
 
+@pytest.mark.solve
 def test_unsatisfiable_automatic_band_is_dropped_rather_than_failing(monkeypatch) -> None:
     import rbs.solver.planning as planning
 
@@ -1329,6 +1335,7 @@ def test_clinic_block_week_band_matches_the_curriculum() -> None:
     assert high - low <= 1
 
 
+@pytest.mark.solve
 def test_suggested_band_keeps_every_week_staffed() -> None:
     from collections import Counter
 
@@ -1382,6 +1389,7 @@ def test_portfolio_plan_splits_the_worker_budget() -> None:
         assert attempts == 1 or each >= MIN_WORKERS_PER_ATTEMPT
 
 
+@pytest.mark.solve
 def test_attempt_rank_prefers_usable_then_lower_objective() -> None:
     from rbs.models.enums import SolverEngineName
     from rbs.solver.core.base import empty_schedule
@@ -1406,6 +1414,7 @@ def test_attempt_rank_prefers_usable_then_lower_objective() -> None:
     assert _attempt_rank(schedule) < _attempt_rank(blank)
 
 
+@pytest.mark.solve
 def test_portfolio_records_how_the_budget_was_spent() -> None:
     instance = sample_instance()
     tuned = instance.revised(

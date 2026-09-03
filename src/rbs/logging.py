@@ -529,8 +529,7 @@ def _desktop_handler(
     component: str,
 ) -> tuple[logging.Handler, Path]:
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if os.name != "nt":
-        os.chmod(directory, 0o700)
+    os.chmod(directory, 0o700)
     safe_component = _SAFE_COMPONENT.sub("-", component.lower()).strip("-") or "application"
     path = directory / f"rbs-{run_id}-{safe_component}-{os.getpid()}.jsonl"
     handler = _PrivateRotatingFileHandler(
@@ -541,25 +540,22 @@ def _desktop_handler(
     )
     marker = directory / f".active-{run_id}-{os.getpid()}"
     marker.touch(mode=0o600, exist_ok=True)
-    if os.name != "nt":
-        os.chmod(marker, 0o600)
+    os.chmod(marker, 0o600)
     return handler, marker
 
 
 class _PrivateRotatingFileHandler(logging.handlers.RotatingFileHandler):
     def _open(self):
         stream = super()._open()
-        if os.name != "nt":
-            os.chmod(self.baseFilename, stat.S_IRUSR | stat.S_IWUSR)
+        os.chmod(self.baseFilename, stat.S_IRUSR | stat.S_IWUSR)
         return stream
 
     def doRollover(self) -> None:
         super().doRollover()
-        if os.name != "nt":
-            for candidate in Path(self.baseFilename).parent.glob(
-                f"{Path(self.baseFilename).name}.*"
-            ):
-                os.chmod(candidate, stat.S_IRUSR | stat.S_IWUSR)
+        for candidate in Path(self.baseFilename).parent.glob(
+            f"{Path(self.baseFilename).name}.*"
+        ):
+            os.chmod(candidate, stat.S_IRUSR | stat.S_IWUSR)
 
 
 def _valid_run_id(value: str | None) -> str:

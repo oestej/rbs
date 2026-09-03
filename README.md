@@ -2,8 +2,8 @@
 
 Residency block scheduler. Residents, rotations, and rules go in; a validated
 52-week block schedule comes out, placed by OR-Tools CP-SAT. It ships as the
-**RBS Desktop** application; `rbs ui` is the local browser workspace used for
-development. A hosted cloud version is in progress and not live yet.
+**RBS Desktop** application for macOS on Apple Silicon; `rbs ui` is the local
+browser workspace used for development. A hosted cloud version is in progress and not live yet.
 
 ## Quick start
 
@@ -55,17 +55,17 @@ the runner fills those from `--catalog` or the bundled `data/catalog.json`.
 | File flow | Native Open/Save dialogs, one document per window | Upload / download | Upload / authenticated download |
 | Whole-database replace | Yes | Yes | No — opening a file already covers migration |
 
-Build the desktop artifact per operating system with `tools/build_desktop.sh`
-(On macOS: `dist/RBS Desktop.app`, self-contained, no system Python needed).
+Build the desktop artifact with `tools/build_desktop.sh` (`dist/RBS Desktop.app`,
+self-contained, no system Python needed) and wrap it for distribution with
+`tools/package_dmg.sh`.
 `rbs ui --desktop` previews desktop chrome locally (native file actions stay
 inert); `--cloud` previews hosted chrome while remaining single-user with no
 retention.
 
 Desktop keeps application preferences (palette, solver tuning, auto-locking) in
-a validated `settings.json` — `~/Library/Application Support/RBS Desktop` on
-macOS, `%LOCALAPPDATA%\RBS Desktop` on Windows, `$XDG_CONFIG_HOME/rbs-desktop`
-on Linux. Unsaved work survives a crash via a private checkpoint that is
-recovered once and removed on orderly exit. Diagnostics live in
+a validated `settings.json` under `~/Library/Application Support/RBS Desktop`.
+Unsaved work survives a crash via a private checkpoint that is recovered once
+and removed on orderly exit. Diagnostics live in
 `~/Library/Logs/RBS Desktop` with a **Help → Export Logs…** ZIP for support
 requests.
 
@@ -126,10 +126,19 @@ shared code, and static packaging tests keep it that way.
 python3 -m pytest tests/ -q -p no:cacheprovider
 ruff check src/rbs/ tests/
 tools/build_desktop.sh        # frozen desktop artifact per-OS (see below)
+tools/package_dmg.sh          # macOS disk image around the built application
 ```
+
+Tests marked `solve` run a real CP-SAT search and judge what an anytime solver
+returns inside a wall-clock budget, so they need a machine with CPU to spare.
+CI deselects them with `-m "not solve"` and installs the `desktop` extra so
+native-window tests have pywebview. Run the full suite locally and before
+a release. `-m solve` runs only the search tests.
 
 User-facing changes accumulate in [CHANGELOG.md](CHANGELOG.md) under
 `Unreleased`; the release checklist lives in [docs/releases.md](docs/releases.md).
+Pushing a `vX.Y.Z` tag builds and publishes the macOS application from that
+tagged commit.
 Application copy follows [docs/ui-glossary.md](docs/ui-glossary.md) and the
 visual roles in [docs/visual-system.md](docs/visual-system.md).
 

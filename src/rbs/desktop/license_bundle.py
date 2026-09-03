@@ -31,7 +31,7 @@ NOTICE_NAME = re.compile(
     r"^(?:licen[cs]e|copying|copyright|notice|authors)(?:$|[._-])",
     re.IGNORECASE,
 )
-NON_TEXT_SUFFIXES = {".dll", ".dylib", ".exe", ".pyd", ".py", ".pyc", ".so"}
+NON_TEXT_SUFFIXES = {".dylib", ".py", ".pyc", ".so"}
 DIVIDER = "=" * 88
 FILE_DIVIDER = "-" * 88
 
