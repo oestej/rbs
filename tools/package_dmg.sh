@@ -3,6 +3,10 @@
 # Wrap a built RBS Desktop application in the disk image that ships to users.
 # The image holds the application beside an Applications symlink, which is the
 # drag-to-install layout macOS users expect.
+#
+# macOS gates a downloaded disk image in its own right, so the image is signed
+# here when an identity is available. Notarizing it is a separate step, because
+# it can only run once the image exists: see tools/notarize_desktop.sh.
 
 set -euo pipefail
 
@@ -12,6 +16,8 @@ readonly VERSION_SOURCE="${PROJECT_ROOT}/src/rbs/__init__.py"
 
 application="${PROJECT_ROOT}/dist/RBS Desktop.app"
 output=""
+identity="${APPLE_DEVELOPER_ID:-}"
+keychain="${SIGNING_KEYCHAIN:-}"
 
 usage() {
     printf '%s\n' \
@@ -20,11 +26,16 @@ usage() {
         'Usage: tools/package_dmg.sh [options]' \
         '' \
         'Options:' \
-        '  --app PATH     Application bundle to package.' \
-        '                 Default: dist/RBS Desktop.app' \
-        '  --output PATH  Disk image to write.' \
-        '                 Default: dist/RBS-Desktop-VERSION-macos-ARCH.dmg' \
-        '  -h, --help     Show this help text.'
+        '  --app PATH      Application bundle to package.' \
+        '                  Default: dist/RBS Desktop.app' \
+        '  --output PATH   Disk image to write.' \
+        '                  Default: dist/RBS-Desktop-VERSION-macos-ARCH.dmg' \
+        '  --identity NAME Developer ID Application identity to sign the image' \
+        '                  with. Default: $APPLE_DEVELOPER_ID. The image is left' \
+        '                  unsigned when no identity is available.' \
+        '  --keychain PATH Keychain holding the certificate.' \
+        '                  Default: $SIGNING_KEYCHAIN, else the search list.' \
+        '  -h, --help      Show this help text.'
 }
 
 while (($# > 0)); do
@@ -37,6 +48,16 @@ while (($# > 0)); do
         --output)
             [[ $# -ge 2 ]] || { printf '%s requires a path\n' "$1" >&2; exit 2; }
             output="$2"
+            shift
+            ;;
+        --identity)
+            [[ $# -ge 2 ]] || { printf '%s requires a name\n' "$1" >&2; exit 2; }
+            identity="$2"
+            shift
+            ;;
+        --keychain)
+            [[ $# -ge 2 ]] || { printf '%s requires a path\n' "$1" >&2; exit 2; }
+            keychain="$2"
             shift
             ;;
         -h|--help)
@@ -77,7 +98,8 @@ staging="$(mktemp -d)"
 trap 'rm -rf "${staging}"' EXIT
 
 # ditto preserves the bundle's symlinks, permissions, and extended attributes,
-# including the ad-hoc code signature PyInstaller applies on Apple Silicon.
+# along with the code signature and any stapled notarization ticket the
+# application already carries.
 ditto "${application}" "${staging}/$(basename "${application}")"
 ln -s /Applications "${staging}/Applications"
 
@@ -92,5 +114,18 @@ hdiutil create \
     "${output}" >/dev/null
 
 hdiutil verify "${output}" >/dev/null
+
+# A disk image is not code, so it takes a plain signature: no hardened runtime
+# and no entitlements. The timestamp is still required for notarization.
+if [[ -n "${identity}" ]]; then
+    codesign_arguments=(--sign "${identity}" --force --timestamp)
+    if [[ -n "${keychain}" ]]; then
+        codesign_arguments+=(--keychain "${keychain}")
+    fi
+    codesign "${codesign_arguments[@]}" "${output}"
+    codesign --verify --strict --verbose=2 "${output}"
+else
+    printf '%s\n' 'No Developer ID identity available; the disk image is unsigned.' >&2
+fi
 
 printf '\nPackaged RBS Desktop: %s\n' "${output}"

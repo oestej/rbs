@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import plistlib
 import stat
 import subprocess
 import sys
@@ -552,6 +553,98 @@ def test_desktop_builder_is_executable_and_uses_the_packaging_spec() -> None:
     assert "rbs-desktop.spec" in source
     assert '"${desktop_executable}" --version' in source
     assert '"${solver_executable}" --version' in source
+
+
+def test_signing_entitlements_only_relax_the_hardened_runtime() -> None:
+    root = Path(__file__).resolve().parents[2]
+    entitlements = root / "packaging" / "entitlements.plist"
+
+    declared = plistlib.loads(entitlements.read_bytes())
+
+    # A frozen Python application cannot adopt the hardened runtime without
+    # these. Anything beyond them would be requesting access RBS does not need.
+    assert declared == {
+        "com.apple.security.cs.allow-jit": True,
+        "com.apple.security.cs.allow-unsigned-executable-memory": True,
+        "com.apple.security.cs.disable-library-validation": True,
+    }
+
+
+def test_desktop_signer_signs_inside_out_with_the_hardened_runtime() -> None:
+    root = Path(__file__).resolve().parents[2]
+    signer = root / "tools" / "sign_desktop.sh"
+    source = signer.read_text(encoding="utf-8")
+
+    assert signer.stat().st_mode & stat.S_IXUSR
+    # The notary service rejects a build missing either of these.
+    assert "--options runtime" in source
+    assert "--timestamp" in source
+    assert "packaging/entitlements.plist" in source
+    # A bundle signature seals its contents, so the nested binaries and the
+    # second executable in Contents/MacOS have to be signed before the bundle.
+    nested = source.index('find "${application}/Contents"')
+    solver = source.index('"${application}/Contents/MacOS/rbs-solver"')
+    bundle = source.index('sign --entitlements "${entitlements}" "${application}"')
+    assert nested < solver < bundle
+    assert "codesign --verify --deep --strict" in source
+    # A few hundred consecutive requests to Apple's timestamp service should not
+    # cost a release when one of them is refused.
+    assert "for attempt in 1 2 3; do" in source
+
+
+def test_notarizer_waits_for_a_verdict_and_staples_the_ticket() -> None:
+    root = Path(__file__).resolve().parents[2]
+    notarizer = root / "tools" / "notarize_desktop.sh"
+    source = notarizer.read_text(encoding="utf-8")
+
+    assert notarizer.stat().st_mode & stat.S_IXUSR
+    assert "xcrun notarytool submit" in source
+    assert "--wait" in source
+    # `zip` drops the symlinks and signature that PyInstaller's bundle relies on.
+    assert "ditto -c -k --keepParent" in source
+    # notarytool can report a rejection without failing, so the verdict is read
+    # back rather than inferred from the exit status.
+    assert 'plutil -extract status raw' in source
+    assert '"${status}" != "Accepted"' in source
+    assert "xcrun notarytool log" in source
+    assert "xcrun stapler staple" in source
+    assert "xcrun stapler validate" in source
+
+
+def test_disk_image_is_signed_only_when_an_identity_is_available() -> None:
+    root = Path(__file__).resolve().parents[2]
+    packager = root / "tools" / "package_dmg.sh"
+    source = packager.read_text(encoding="utf-8")
+
+    assert 'identity="${APPLE_DEVELOPER_ID:-}"' in source
+    assert 'if [[ -n "${identity}" ]]; then' in source
+    assert "the disk image is unsigned" in source
+    # A disk image is not code: the hardened runtime does not apply to it.
+    assert "--options runtime" not in source
+
+
+def test_release_workflow_signs_and_notarizes_both_artifacts() -> None:
+    root = Path(__file__).resolve().parents[2]
+    workflow = (root / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+
+    # Every signing step is gated on the credentials existing, so a release
+    # stays publishable until the secrets are configured.
+    # The certificate, the API key, the signature, and both notarizations.
+    assert workflow.count("steps.signing.outputs.enabled == 'true'") == 5
+    assert "tools/sign_desktop.sh" in workflow
+    assert workflow.count("tools/notarize_desktop.sh --path") == 2
+    # The image is packaged from the notarized application, then notarized
+    # itself, before anything uploads or publishes it.
+    signed = workflow.index("tools/sign_desktop.sh")
+    application = workflow.index('tools/notarize_desktop.sh --path "dist/RBS Desktop.app"')
+    packaged = workflow.index("tools/package_dmg.sh")
+    upload = workflow.index("upload-artifact")
+    publish = workflow.index("gh release create")
+    assert signed < application < packaged < upload < publish
+    assert "security create-keychain" in workflow
+    assert "security set-key-partition-list" in workflow
 
 
 def test_desktop_build_outputs_are_ignored() -> None:

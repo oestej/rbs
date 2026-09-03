@@ -68,11 +68,13 @@ which:
    heading all agree. This gate runs before any dependency is installed, so an
    unprepared tag fails in seconds.
 3. Repeats the lock, lint, and test gates on the tagged commit.
-4. Builds the application with `tools/build_desktop.sh` and wraps it with
-   `tools/package_dmg.sh`, producing `RBS-Desktop-X.Y.Z-macos-arm64.dmg`.
-   RBS Desktop is a macOS application for Apple Silicon, which is what a
-   GitHub-hosted macOS runner is. No other artifact is built.
-5. Publishes a GitHub Release for the tag, using that release's changelog
+4. Builds the application with `tools/build_desktop.sh`.
+5. Signs and notarizes the application, packages it with
+   `tools/package_dmg.sh`, then signs and notarizes the disk image, producing
+   `RBS-Desktop-X.Y.Z-macos-arm64.dmg`. RBS Desktop is a macOS application for
+   Apple Silicon, which is what a GitHub-hosted macOS runner is. No other
+   artifact is built.
+6. Publishes a GitHub Release for the tag, using that release's changelog
    section as the description and attaching the disk image. The image is also
    kept as a workflow artifact for two weeks, so a failed publish can be
    retried without rebuilding.
@@ -81,13 +83,48 @@ The workflow never edits the changelog, creates a commit, or moves a tag: every
 release edit happens locally, before the tag exists. Redoing a release means
 deleting the tag and its GitHub Release, then pushing the tag again.
 
-## Not automated yet
+## Signing and notarization
 
-RBS Desktop is not signed with an Apple Developer ID. PyInstaller applies an
-ad-hoc signature, so the bundle runs where it was built, but macOS quarantines it
-after download and a user has to right-click the application and choose **Open**
-once. The published release description says so. `release.yml` carries a
-commented outline of the signing and notarization step; enabling it needs a
-Developer ID certificate and an App Store Connect API key in repository secrets,
-after which that installation note should come out of the release description.
+macOS quarantines a downloaded application that no Developer ID vouches for, and
+refuses to open a disk image on the same grounds. A release therefore signs and
+notarizes both, in that order, because an image can only be signed once it
+exists and notarization can only follow a signature:
+
+1. `tools/sign_desktop.sh` signs the application. codesign seals a bundle by
+   hashing its contents, so it works inside out: the collected libraries first,
+   then `rbs-solver` — a second executable in `Contents/MacOS`, which a bundle
+   signature does not cover — then the bundle. Every signature adopts the
+   hardened runtime, with `packaging/entitlements.plist` relaxing the three
+   restrictions a frozen Python application cannot live under.
+2. `tools/notarize_desktop.sh` uploads the application to Apple, waits for a
+   verdict, and staples the ticket into the bundle. Stapling is what lets a
+   first launch succeed on a machine that is offline.
+3. `tools/package_dmg.sh` signs the disk image it builds around the stapled
+   application, and `tools/notarize_desktop.sh` notarizes and staples that too.
+
+Each script runs on its own, so a signing problem can be reproduced locally
+without pushing a tag, and each takes its credentials from the environment or
+from explicit options. `tools/sign_desktop.sh` and `tools/notarize_desktop.sh`
+stop when a credential is missing, rather than quietly doing nothing;
+`tools/package_dmg.sh` instead reports that it left the image unsigned and
+carries on, so an unsigned build is still packageable.
+
+### Repository secrets
+
+Signing is skipped, not failed, when these are absent — a release still
+publishes, with the workflow logging a warning and the release description
+keeping its right-click-to-open note. Setting all of them turns signing on with
+no further change.
+
+| Secret | Holds |
+| --- | --- |
+| `APPLE_CERTIFICATE_P12` | Developer ID Application certificate and private key, exported as `.p12` and base64 encoded: `base64 -i certificate.p12 \| pbcopy` |
+| `APPLE_CERTIFICATE_PASSWORD` | Password set when exporting that `.p12` |
+| `APPLE_DEVELOPER_ID` | Full identity name, for example `Developer ID Application: Example Inc. (ABCDE12345)` |
+| `APPLE_API_KEY_P8` | App Store Connect API key with the Developer role, base64 encoded the same way |
+| `APPLE_API_KEY_ID` | That key's identifier |
+| `APPLE_API_ISSUER_ID` | Issuer identifier from App Store Connect |
+
+The certificate expires; a release that starts failing at the signing step with
+no other change is the first place to look.
 

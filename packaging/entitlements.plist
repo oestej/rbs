@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the hardened runtime, which notarization requires RBS
+  Desktop to adopt. Each key below relaxes one hardened-runtime restriction
+  that the frozen Python application would otherwise trip over; nothing here
+  grants access to user data, the network, or another application.
+-->
+<plist version="1.0">
+<dict>
+    <!-- The document window is a WKWebView, and WebKit compiles JavaScript. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- CPython and the C extensions it loads write to executable pages. -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!--
+      PyInstaller loads its collected extension modules by path at run time
+      rather than linking them. tools/sign_desktop.sh signs every one of them
+      with the same Developer ID, so this is a precaution rather than a
+      dependency; try a build without it before assuming it is needed.
+    -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>
