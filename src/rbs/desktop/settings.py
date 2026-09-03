@@ -11,15 +11,15 @@ import tempfile
 import threading
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from rbs.models.color_scheme import ColorScheme, normalize_hex_color
 from rbs.models.common import StrictModel
 from rbs.models.instance import SchedulerInput, SolverConfig
 
-DESKTOP_SETTINGS_SCHEMA_VERSION = 1
+DESKTOP_SETTINGS_SCHEMA_VERSION = 2
 MAX_SETTINGS_BYTES = 1024 * 1024
 _AUTOMATIC_LOCK_SOURCE = "through_today"
 
@@ -70,10 +70,19 @@ def _bundled_color_settings() -> DesktopColorSettings:
 class DesktopSettings(StrictModel):
     """Versioned settings persisted outside every workspace document."""
 
-    schema_version: Literal[1] = DESKTOP_SETTINGS_SCHEMA_VERSION
+    schema_version: Literal[2] = DESKTOP_SETTINGS_SCHEMA_VERSION
     colors: DesktopColorSettings = Field(default_factory=_bundled_color_settings)
     solver: SolverConfig = Field(default_factory=SolverConfig)
     lock_through_today: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_v1(cls, value: Any) -> Any:
+        if isinstance(value, dict) and value.get("schema_version") == 1:
+            migrated = dict(value)
+            migrated["schema_version"] = DESKTOP_SETTINGS_SCHEMA_VERSION
+            return migrated
+        return value
 
     def applied_to(self, instance: SchedulerInput) -> SchedulerInput:
         """Overlay these preferences onto direct data loaded from a document."""

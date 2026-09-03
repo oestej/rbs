@@ -25,9 +25,9 @@ ROTATION_CODE_MAX_LENGTH = 6
 
 # Compatibility exports for callers that need the bundled defaults. Runtime
 # selectors use the palette on the current workspace's ColorScheme.
-ROTATION_COLOR_PALETTE = {
-    item.color: item.name for item in DEFAULT_COLOR_SCHEME.selectable_colors[:-1]
-}
+ROTATION_COLOR_PALETTE = tuple(
+    item.color for item in DEFAULT_COLOR_SCHEME.selectable_colors
+)
 DEFAULT_ROTATION_COLOR = DEFAULT_COLOR_SCHEME.neutral.color
 
 
@@ -36,7 +36,7 @@ def default_rotation_color(rotation_id: str) -> str:
     if not rotation_id:
         return DEFAULT_ROTATION_COLOR
     digest = hashlib.sha256(rotation_id.encode()).digest()
-    return tuple(ROTATION_COLOR_PALETTE)[digest[0] % len(ROTATION_COLOR_PALETTE)]
+    return ROTATION_COLOR_PALETTE[digest[0] % len(ROTATION_COLOR_PALETTE)]
 
 
 class CapacityRule(StrictModel):

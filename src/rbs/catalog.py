@@ -21,6 +21,7 @@ from rbs.models.clinic import (
     ClinicSiteConfig,
     ClinicSlot,
 )
+from rbs.models.color_scheme import DEFAULT_COLOR_SCHEME
 from rbs.models.curriculum import PGYCurriculum
 from rbs.models.elective import ElectiveConfiguration
 from rbs.models.enums import RotationKind, Session, Weekday
@@ -214,7 +215,7 @@ def blank_instance(*, academic_year: str = SAMPLE_ACADEMIC_YEAR) -> SchedulerInp
                 ClinicSiteConfig(
                     id="clinic",
                     name="Clinic",
-                    color="#3971B8",
+                    color=DEFAULT_COLOR_SCHEME.accents[0].color,
                 )
             ],
             primary_site_id="clinic",

@@ -434,7 +434,7 @@ def test_access_and_cedar_shown_on_board() -> None:
     assert " ATT " not in markup
     assert 'class="rbs-clinic-session-attending"' in markup
     assert markup.count('class="rbs-clinic-person site"') == 2
-    assert "--rbs-clinic-site-color:#963C5A" in markup
+    assert "--rbs-clinic-site-color:#6D6BC2" in markup
     assert "--rbs-clinic-site-color:#174A7E" in markup
     assert markup.count("rbs-clinic-swatch site") == 2
 
@@ -501,7 +501,7 @@ def test_clinic_legend_includes_every_supported_site_and_admin() -> None:
     assert "Maple" in legend
     assert "Cedar" in legend
     assert "Harbor" not in legend
-    assert "--rbs-clinic-site-tint:#F4ECEE" in legend
+    assert "--rbs-clinic-site-tint:#F0F0F9" in legend
     assert "--rbs-clinic-site-tint:#E8EDF2" in legend
     assert 'class="rbs-clinic-swatch admin"' in legend
 

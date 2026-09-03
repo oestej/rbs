@@ -885,10 +885,10 @@ def test_colors_settings_defines_the_institutional_palette_not_assignments(tmp_p
     }
 
     palette_size = len(instance.color_scheme.selectable_colors)
-    assert len(token_names) == palette_size
+    assert not token_names
     assert len(token_colors) == palette_size
     assert len(swatches) == palette_size
-    assert "Save color scheme" in buttons
+    assert {"Generate matching accents", "Save color scheme"} <= buttons
     assert not any(element.__class__.__name__ == "Select" for element in created)
     assert not any(
         element._props.get("label") == f"{rotation.code} color"
@@ -927,20 +927,12 @@ def test_colors_settings_saves_scheme_and_remaps_assignments(tmp_path) -> None:
         if element.__class__.__name__ == "Input"
         and "rbs-color-scheme-name-input" in element._classes
     )
-    primary_name = next(
-        element
-        for element in created
-        if element.__class__.__name__ == "Input"
-        and "rbs-color-token-name-input" in element._classes
-        and element.value == "Navy"
-    )
     primary_color = next(
         element
         for element in created
         if element.__class__.__name__ == "ColorInput" and element.value == "#174A7E"
     )
     scheme_name.set_value("Example University")
-    primary_name.set_value("Institution Blue")
     primary_color.set_value("#123A67")
     save = next(
         element
@@ -953,11 +945,64 @@ def test_colors_settings_saves_scheme_and_remaps_assignments(tmp_path) -> None:
     assert len(persisted) == 1
     updated, kwargs = persisted[0]
     assert updated.color_scheme.name == "Example University"
-    assert updated.color_scheme.primary.name == "Institution Blue"
     assert updated.color_scheme.primary.color == "#123A67"
     assert updated.clinic_policy.site("cedar").color == "#123A67"
     assert kwargs == {"preserve_schedule": True}
     assert applied_themes == [updated.color_scheme]
+
+
+def test_colors_settings_generates_accents_from_unsaved_institutional_colors(
+    tmp_path,
+) -> None:
+    from nicegui import ui
+
+    from rbs.catalog import sample_instance
+    from rbs.models.color_scheme import generate_accent_colors
+    from rbs.store import Store
+    from rbs.ui.settings.view import _colors_settings
+
+    instance = sample_instance()
+    store = Store(tmp_path / "rbs.sqlite")
+    store.init()
+    workspace = store.create("Color workspace", instance)
+    persisted: list[object] = []
+    applied_themes: list[object] = []
+    before = set(ui.context.client.elements)
+
+    _colors_settings(
+        workspace,
+        lambda updated, **_kwargs: persisted.append(updated),
+        applied_themes.append,
+        schedule_is_current=True,
+    )
+
+    created = _created_elements(before)
+    color_inputs = [
+        element
+        for element in created
+        if element.__class__.__name__ == "ColorInput"
+        and "rbs-color-token-value-input" in element._classes
+    ]
+    primary, secondary, neutral, *accents = color_inputs
+    primary.set_value("#123A67")
+    secondary.set_value("#EAAA00")
+    neutral.set_value("#5A5D61")
+    generate = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Generate matching accents"
+    )
+
+    next(iter(generate._event_listeners.values())).handler(None)
+
+    expected = generate_accent_colors("#123A67", "#EAAA00", "#5A5D61")
+    assert tuple(color.value for color in accents) == expected
+    assert not persisted
+    assert not applied_themes
+
+    next(iter(generate._event_listeners.values())).handler(None)
+    assert tuple(color.value for color in accents) == expected
 
 
 def test_advanced_settings_exposes_every_objective_weight(tmp_path) -> None:
