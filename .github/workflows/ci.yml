@@ -68,5 +68,9 @@ jobs:
       # a development machine's cores, so the same budget buys a fraction of
       # the search and the assertions stop meaning anything. They are a local
       # and pre-release gate instead; see tests/solver/conftest.py.
+      #
+      # `desktop` is pywebview via nicegui[native]. The macOS Help-menu tests
+      # import those menu types; without the extra they fail with
+      # ModuleNotFoundError: webview.
       - name: Pytest
-        run: uv run --frozen --extra dev pytest -m "not solve"
+        run: uv run --frozen --extra dev --extra desktop pytest -m "not solve"

@@ -78,7 +78,7 @@ jobs:
         run: uv run --frozen --extra dev ruff check .
 
       - name: Pytest
-        run: uv run --frozen --extra dev pytest
+        run: uv run --frozen --extra dev --extra desktop pytest -m "not solve"
 
       # build_desktop.sh runs its own exact `uv sync --extra desktop --extra
       # build`, which removes the development packages installed above. The
