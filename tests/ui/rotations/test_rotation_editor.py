@@ -373,7 +373,6 @@ def test_rotation_viewer_prioritizes_structured_schedule_rules() -> None:
     assert "Required schedule, block shape, staffing, and placement in one place." not in text
     assert "Required 1 × 4 weeks" in text
     assert rotation.color in text
-    assert instance.color_scheme.palette[rotation.color] not in text
     assert "Rotation code" not in text
     assert "Block configurations" not in text
     assert any("rbs-rotation-pgy-card" in getattr(element, "_classes", []) for element in created)
@@ -560,7 +559,7 @@ def test_rotation_palette_uses_the_workspace_scheme() -> None:
     from nicegui import ui
 
     draft = {"color": "#123A67"}
-    palette = {"#123A67": "Institution Blue", "#EAAA00": "Institution Gold"}
+    palette = ("#123A67", "#EAAA00")
     saved: list[str] = []
     before = set(ui.context.client.elements)
 
@@ -583,8 +582,6 @@ def test_rotation_palette_uses_the_workspace_scheme() -> None:
     assert saved == ["#EAAA00"]
     assert "Selected: #123A67" not in text
     assert "Select from the institutional palette defined in Settings → Colors." not in text
-    assert "Institution Blue" not in text
-    assert "Institution Gold" not in text
 
 
 def test_standard_rotation_header_omits_redundant_kind_label() -> None:
@@ -1272,7 +1269,7 @@ def test_clinic_editor_is_large_and_keeps_internal_id_hidden() -> None:
         if element.__class__.__name__ == "Select"
         and element._props.get("label") == "Schedule color"
     )
-    assert clinic_color.value == "#963C5A"
+    assert clinic_color.value == "#6D6BC2"
     assert len(clinic_color.options) == len(instance.color_scheme.palette)
     assert any(getattr(element, "_text", None) == "Saturday" for element in created)
     assert any(getattr(element, "_text", None) == "Sunday" for element in created)

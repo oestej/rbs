@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Sequence
 from functools import partial
 
 from rbs.models.clinic import ALL_CLINIC_SITES
@@ -29,7 +29,7 @@ def rotation_code_style(color: str) -> str:
 
 def rotation_color_palette(
     draft: Draft,
-    palette: Mapping[str, str],
+    palette: Sequence[str],
     *,
     on_change: Callable[[str], None] | None = None,
     label: str = "Block schedule color",

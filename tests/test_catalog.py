@@ -16,6 +16,7 @@ from rbs.catalog import (
     sample_instance,
 )
 from rbs.models.catalog import ConstraintCatalog
+from rbs.models.color_scheme import DEFAULT_COLOR_SCHEME
 from rbs.models.enums import RotationKind, Session, Weekday
 from rbs.models.instance import SchedulerInput
 from rbs.models.rotation import (
@@ -88,6 +89,19 @@ def test_rotations_store_a_normalized_schedule_color_from_the_palette() -> None:
 
     raw["color"] = "#123ABC"
     assert Rotation.model_validate(raw).color == "#123ABC"
+
+
+def test_bundled_and_blank_catalog_colors_use_the_generated_default_palette() -> None:
+    catalog = bundled_catalog()
+    palette = set(DEFAULT_COLOR_SCHEME.palette)
+    assigned = {
+        catalog.electives.color,
+        *(rotation.color for rotation in catalog.rotations),
+        *(site.color for site in catalog.clinic_policy.sites),
+    }
+
+    assert assigned <= palette
+    assert blank_instance().clinic_policy.sites[0].color == DEFAULT_COLOR_SCHEME.accents[0].color
 
 
 def test_rotations_without_a_color_receive_the_neutral_default() -> None:
@@ -382,13 +396,13 @@ def test_consecutive_caps_and_precept_policy() -> None:
     assert len(secondary.half_days) == 5
     assert policy.site_ids == ("maple", "cedar")
     assert [(site.id, site.name, site.color) for site in policy.sites] == [
-        ("maple", "Maple", "#963C5A"),
+        ("maple", "Maple", "#6D6BC2"),
         ("cedar", "Cedar", "#174A7E"),
     ]
     clinic_colors = {site.color for site in policy.sites}
     assert len(clinic_colors) == len(policy.sites)
     assert rotations["fmed"].color not in clinic_colors
-    assert policy.site("maple").light_color == "#F4ECEE"
+    assert policy.site("maple").light_color == "#F0F0F9"
     assert "light_color" not in policy.site("maple").model_dump(mode="json")
     assert all(site.id != "harbor" for site in policy.sites)
     assert len(policy.closure_days) == 1

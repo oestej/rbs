@@ -9,7 +9,11 @@ from pydantic import ValidationError
 from rbs.academic_year import rebase_academic_year, rebase_week_start, week_start_choices
 from rbs.clinic_locks import automatic_clinic_lock_count
 from rbs.logging import get_logger
-from rbs.models.color_scheme import ColorScheme
+from rbs.models.color_scheme import (
+    ColorScheme,
+    generate_accent_colors,
+    normalize_hex_color,
+)
 from rbs.models.instance import ObjectiveWeights, SolverConfig
 from rbs.models.workspace import Workspace
 from rbs.repository import WorkspaceRepository
@@ -351,7 +355,9 @@ def _colors_settings(
 
     instance = workspace.instance
     draft = instance.color_scheme.model_dump(mode="json")
-    token_inputs: list[tuple[dict, object, object]] = []
+    token_inputs: list[tuple[dict, object]] = []
+    institutional_inputs: dict[str, object] = {}
+    accent_inputs: list[tuple[object, object]] = []
 
     def swatch(color: str):
         return (
@@ -364,30 +370,50 @@ def _colors_settings(
     def update_swatch(event, target) -> None:
         target.style(f"--rbs-color-scheme-value:{str(event.value)}")
 
-    def color_row(role: str, token: dict, scope: str) -> None:
+    def color_row(role: str, token: dict, scope: str) -> tuple[object, object]:
         with ui.row().classes("rbs-color-scheme-row w-full items-center gap-3 py-3 flex-wrap"):
             marker = swatch(str(token["color"]))
             with ui.column().classes("min-w-44 flex-1 gap-0"):
                 ui.label(role).classes("rbs-font-semibold")
                 ui.label(scope).classes("rbs-type-caption rbs-text-muted")
-            color_name = (
-                ui.input("Color name", value=str(token["name"]))
-                .props("outlined dense")
-                .classes("rbs-color-token-name-input w-full sm:w-52")
-            )
             color_value = (
                 ui.color_input("Hex color", value=str(token["color"]))
                 .props("outlined dense")
                 .classes("rbs-color-token-value-input w-full sm:w-48")
             )
             color_value.on_value_change(lambda event, target=marker: update_swatch(event, target))
-            token_inputs.append((token, color_name, color_value))
+            token_inputs.append((token, color_value))
+            return color_value, marker
+
+    def generate_accents() -> None:
+        try:
+            primary = normalize_hex_color(str(institutional_inputs["primary"].value or ""))
+            secondary = normalize_hex_color(str(institutional_inputs["secondary"].value or ""))
+            neutral = normalize_hex_color(str(institutional_inputs["neutral"].value or ""))
+            generated = generate_accent_colors(
+                primary,
+                secondary,
+                neutral,
+                count=len(accent_inputs),
+            )
+            for (color_input, marker), color in zip(
+                accent_inputs,
+                generated,
+                strict=True,
+            ):
+                color_input.set_value(color)
+                marker.style(f"--rbs-color-scheme-value:{color}")
+            ui.notify(
+                "Matching accents generated — save the color scheme to apply them",
+                type="info",
+            )
+        except ValueError as exc:
+            ui.notify(str(exc), type="negative")
 
     def save() -> None:
         try:
             draft["name"] = str(scheme_name.value or "")
-            for token, name_input, color_input in token_inputs:
-                token["name"] = str(name_input.value or "")
+            for token, color_input in token_inputs:
                 token["color"] = str(color_input.value or "")
             scheme = ColorScheme.model_validate(draft)
             revised = replace_color_scheme(instance, scheme)
@@ -407,7 +433,7 @@ def _colors_settings(
                 with ui.column().classes("gap-1"):
                     ui.label("Institutional color scheme").classes("rbs-type-section-title")
                     ui.label(
-                        "Set the named colors for your institution. The primary, secondary, "
+                        "Set the colors for your institution. The primary, secondary, "
                         "and neutral roles theme the application and are also available to "
                         "schedule color selectors."
                     ).classes("rbs-type-body rbs-text-muted")
@@ -417,22 +443,36 @@ def _colors_settings(
                     .classes("rbs-color-scheme-name-input w-full sm:w-96")
                 )
                 with ui.column().classes("w-full gap-0"):
-                    color_row("Primary", draft["primary"], "Page theme + selectors")
-                    color_row("Secondary", draft["secondary"], "Page theme + selectors")
-                    color_row("Neutral", draft["neutral"], "Page theme + selectors")
+                    institutional_inputs["primary"], _ = color_row(
+                        "Primary", draft["primary"], "Page theme + selectors"
+                    )
+                    institutional_inputs["secondary"], _ = color_row(
+                        "Secondary", draft["secondary"], "Page theme + selectors"
+                    )
+                    institutional_inputs["neutral"], _ = color_row(
+                        "Neutral", draft["neutral"], "Page theme + selectors"
+                    )
 
         with ui.card().props("flat bordered").classes("w-full p-0"):
             with ui.column().classes("w-full gap-4 p-5"):
-                with ui.column().classes("gap-1"):
-                    ui.label("Schedule accents").classes("rbs-type-section-title")
-                    ui.label(
-                        "These complete the shared palette shown in rotation and clinic "
-                        "color selectors. Assign colors from those editors; this page only "
-                        "defines the scheme."
-                    ).classes("rbs-type-body rbs-text-muted")
+                with ui.row().classes("w-full items-start justify-between gap-3 flex-wrap"):
+                    with ui.column().classes("gap-1"):
+                        ui.label("Schedule accents").classes("rbs-type-section-title")
+                        ui.label(
+                            "These complete the shared palette shown in rotation and clinic "
+                            "color selectors. Generate a matching set or adjust individual "
+                            "colors before saving."
+                        ).classes("rbs-type-body rbs-text-muted")
+                    ui.button(
+                        "Generate matching accents",
+                        icon="auto_awesome",
+                        on_click=generate_accents,
+                    ).props("outline no-caps")
                 with ui.column().classes("w-full gap-0"):
                     for index, token in enumerate(draft["accents"], start=1):
-                        color_row(f"Accent {index}", token, "Schedule selectors")
+                        accent_inputs.append(
+                            color_row(f"Accent {index}", token, "Schedule selectors")
+                        )
 
         with ui.row().classes("items-center gap-2"):
             ui.button("Save color scheme", icon="palette", on_click=save).props(

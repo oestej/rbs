@@ -244,6 +244,7 @@
 
 .rbs-grid td.rbs-state-cell {
   padding: 0;
+  border-top-color: var(--rbs-white);
 }
 
 .rbs-block-run,

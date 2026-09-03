@@ -1353,10 +1353,10 @@ def _open_clinic_editor_dialog(
                                 "Set the user-facing name and choose from the institutional "
                                 "palette defined in Workspace Settings → Colors."
                             ).classes("rbs-type-caption rbs-text-muted")
-                        color_options = dict(instance.color_scheme.palette)
+                        color_options = list(instance.color_scheme.palette)
                         current_color = str(draft["color"]).upper()
                         if current_color not in color_options:
-                            color_options[current_color] = "Current custom color"
+                            color_options.append(current_color)
                         with ui.row().classes("w-full items-end gap-4 flex-wrap"):
                             name = (
                                 ui.input("Clinic name", value=str(draft["name"]))
@@ -1365,10 +1365,7 @@ def _open_clinic_editor_dialog(
                             )
                             color = (
                                 ui.select(
-                                    {
-                                        value: f"{label} · {value}"
-                                        for value, label in color_options.items()
-                                    },
+                                    color_options,
                                     value=current_color,
                                     label="Schedule color",
                                 )
