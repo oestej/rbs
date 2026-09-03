@@ -111,6 +111,13 @@ carries on, so an unsigned build is still packageable.
 
 ### Repository secrets
 
+Hold these in a repository environment named `release` rather than as
+repository secrets. Repository secrets are readable by any workflow on any
+branch; an environment restricts them to the job that declares it, and a
+deployment rule limiting the environment to `v*` tags, plus a required
+reviewer, means a branch cannot reach the certificate. `release.yml` already
+declares `environment: release`.
+
 Signing is skipped, not failed, when these are absent — a release still
 publishes, with the workflow logging a warning and the release description
 keeping its right-click-to-open note. Setting all of them turns signing on with
@@ -127,4 +134,13 @@ no further change.
 
 The certificate expires; a release that starts failing at the signing step with
 no other change is the first place to look.
+
+Export the `.p12` with only the Developer ID Application certificate and its
+private key, and give the App Store Connect key the Developer role, which is all
+notarization needs.
+
+Both workflows pin every action to a commit rather than a tag, because a tag can
+be moved and these actions run in the same job as the certificate. Bumping one
+means replacing the commit and the version comment beside it together; a test
+fails if a reference is ever left on a tag.
 

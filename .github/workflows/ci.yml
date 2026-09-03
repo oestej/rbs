@@ -21,10 +21,14 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here uses git after checkout, and the test legs run
+          # third-party code.
+          persist-credentials: false
 
       - name: Install uv and Python
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
@@ -47,10 +51,14 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here uses git after checkout, and the test legs run
+          # third-party code.
+          persist-credentials: false
 
       - name: Install uv and Python
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true

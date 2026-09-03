@@ -30,15 +30,24 @@ jobs:
     # RBS Desktop ships for Apple Silicon only, which is what a GitHub-hosted
     # macOS runner is. No Intel artifact is built.
     runs-on: macos-latest
+    # Holds the Apple signing credentials. Scoping them to an environment keeps
+    # them out of reach of workflows on other branches, and lets a deployment
+    # rule restrict them to v* tags.
+    environment: release
     # Covers the build plus two notarization round trips, each of which waits on
     # Apple and is capped at 30 minutes by tools/notarize_desktop.sh.
     timeout-minutes: 150
     steps:
       - name: Check out the tagged commit
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # merge-base below needs history, not just the tagged commit.
           fetch-depth: 0
+          # This job installs and freezes third-party packages, which runs their
+          # code. Discarding the token keeps it out of .git/config while that
+          # happens. The fetch below stays anonymous, which a public repository
+          # allows; making this repository private would require restoring it.
+          persist-credentials: false
 
       - name: Require the tag to name a commit on main
         run: |
@@ -49,7 +58,7 @@ jobs:
           fi
 
       - name: Install uv and Python
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
@@ -178,7 +187,7 @@ jobs:
       # Keeps the artifact reachable even if publishing fails, so a release can
       # be retried without rebuilding.
       - name: Upload the disk image as a workflow artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rbs-desktop-macos-${{ github.ref_name }}
           path: dist/*.dmg

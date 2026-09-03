@@ -623,6 +623,31 @@ def test_disk_image_is_signed_only_when_an_identity_is_available() -> None:
     assert "--options runtime" not in source
 
 
+def test_workflow_actions_are_pinned_to_commit_shas() -> None:
+    root = Path(__file__).resolve().parents[2]
+    workflows = sorted((root / ".github" / "workflows").glob("*.yml"))
+
+    assert workflows
+    used = [
+        line.split("uses:", 1)[1].strip()
+        for workflow in workflows
+        for line in workflow.read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("uses:")
+    ]
+
+    assert used
+    for reference in used:
+        # A third-party action runs in the same job as the Developer ID
+        # certificate, so a moved tag would be enough to leak it. Only a commit
+        # can be pinned; the trailing comment records which version it was.
+        action, _, pinned = reference.partition("@")
+        revision = pinned.split("#", 1)[0].strip()
+        assert len(revision) == 40, f"{action} is not pinned to a commit: {reference}"
+        assert all(character in "0123456789abcdef" for character in revision), (
+            f"{action} is not pinned to a commit: {reference}"
+        )
+
+
 def test_release_workflow_signs_and_notarizes_both_artifacts() -> None:
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github" / "workflows" / "release.yml").read_text(
