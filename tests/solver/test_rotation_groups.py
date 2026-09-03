@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+import pytest
 from ortools.sat.python import cp_model
 
 from rbs.catalog import sample_instance
 from rbs.models.instance import SchedulerInput
 from rbs.solver.core.compile import compile_problem
+
+# Every test here runs a real CP-SAT search.
+pytestmark = pytest.mark.solve
 
 
 def _rotation(

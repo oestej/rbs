@@ -1,9 +1,14 @@
 from copy import deepcopy
 
+import pytest
+
 from rbs.catalog import sample_instance
 from rbs.models.enums import SolverStatus
 from rbs.models.instance import SchedulerInput
 from rbs.solver.core import get_engine
+
+# Every test here runs a real CP-SAT search.
+pytestmark = pytest.mark.solve
 
 
 def _rotation(rotation_id: str, *, kind: str = "standard") -> dict:

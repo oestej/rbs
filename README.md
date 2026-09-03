@@ -129,6 +129,11 @@ tools/build_desktop.sh        # frozen desktop artifact per-OS (see below)
 tools/package_dmg.sh          # macOS disk image around the built application
 ```
 
+Tests marked `solve` run a real CP-SAT search and judge what an anytime solver
+returns inside a wall-clock budget, so they need a machine with CPU to spare.
+CI deselects them with `-m "not solve"`; run the full suite locally and before
+a release. `-m solve` runs only those.
+
 User-facing changes accumulate in [CHANGELOG.md](CHANGELOG.md) under
 `Unreleased`; the release checklist lives in [docs/releases.md](docs/releases.md).
 Pushing a `vX.Y.Z` tag builds and publishes the macOS application from that

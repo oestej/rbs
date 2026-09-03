@@ -63,5 +63,10 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
 
+      # The `solve` tests judge the quality of what an anytime CP-SAT search
+      # returns inside a wall-clock budget. Runners have roughly a quarter of
+      # a development machine's cores, so the same budget buys a fraction of
+      # the search and the assertions stop meaning anything. They are a local
+      # and pre-release gate instead; see tests/solver/conftest.py.
       - name: Pytest
-        run: uv run --frozen --extra dev pytest
+        run: uv run --frozen --extra dev pytest -m "not solve"
