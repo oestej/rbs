@@ -50,9 +50,23 @@ def test_first_run_creates_a_private_validated_settings_file(tmp_path) -> None:
     settings = DesktopSettingsFile(path)
 
     assert settings.error is None
-    assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 1
+    assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 2
     assert path.parent.stat().st_mode & 0o777 == 0o700
     assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_v1_settings_migrate_and_discard_legacy_color_names() -> None:
+    raw = DesktopSettings().model_dump(mode="json")
+    raw["schema_version"] = 1
+    raw["colors"]["scheme"]["primary"]["name"] = "Legacy Navy"
+    raw["colors"]["scheme"]["accents"][0]["name"] = "Legacy Accent"
+
+    migrated = DesktopSettings.model_validate(raw)
+    serialized = migrated.model_dump(mode="json")
+
+    assert migrated.schema_version == 2
+    assert "name" not in serialized["colors"]["scheme"]["primary"]
+    assert "name" not in serialized["colors"]["scheme"]["accents"][0]
 
 
 def test_settings_capture_and_apply_all_application_preferences(tmp_path) -> None:

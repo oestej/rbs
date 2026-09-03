@@ -98,6 +98,8 @@ def test_schedule_styles_live_in_packaged_css_assets() -> None:
     assert "outline" not in vacation
     conference = _css_rule(grid_css, ".rbs-grid td.special")
     assert "outline" not in conference
+    state_cell = _css_rule(grid_css, ".rbs-grid td.rbs-state-cell")
+    assert "border-top-color: var(--rbs-white)" in state_cell
     assert ".rbs-block-weeks" not in grid_css
     assert "max-height: 70vh" not in grid_css
     assert ".rbs-clinic-wrap" in clinic_css
@@ -368,3 +370,17 @@ def test_system_schedule_states_use_fixed_distinct_gray_patterns() -> None:
     assert "90deg" in conference
     assert "0deg" in resident_vacation
     assert "90deg" in resident_conference
+
+
+def test_static_schedule_palette_matches_generated_defaults() -> None:
+    from rbs.models.color_scheme import DEFAULT_COLOR_SCHEME
+
+    tokens_css = files("rbs.ui").joinpath("static", "tokens.css").read_text(encoding="utf-8")
+    declarations = dict(
+        re.findall(r"^\s*(--rbs-palette-[0-9]+):\s*(#[0-9a-fA-F]{6});", tokens_css, re.MULTILINE)
+    )
+
+    assert tuple(
+        declarations[f"--rbs-palette-{index}"].upper()
+        for index in range(len(DEFAULT_COLOR_SCHEME.palette))
+    ) == DEFAULT_COLOR_SCHEME.palette

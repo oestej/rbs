@@ -549,73 +549,56 @@
   "color_scheme": {
     "name": "RBS Navy & Gold",
     "primary": {
-      "name": "Navy",
       "color": "#174A7E"
     },
     "secondary": {
-      "name": "Goldenrod",
       "color": "#C58A17"
     },
     "neutral": {
-      "name": "Slate",
       "color": "#52606D"
     },
     "accents": [
       {
-        "name": "Ocean",
-        "color": "#2B6F8A"
+        "color": "#0058A2"
       },
       {
-        "name": "Denim",
-        "color": "#355C7D"
+        "color": "#006565"
       },
       {
-        "name": "Indigo",
-        "color": "#4B4E9A"
+        "color": "#00694A"
       },
       {
-        "name": "Purple",
-        "color": "#6B4C8A"
+        "color": "#326800"
       },
       {
-        "name": "Plum",
-        "color": "#7A3E65"
+        "color": "#765000"
       },
       {
-        "name": "Terracotta",
-        "color": "#9B4535"
+        "color": "#4F4B9E"
       },
       {
-        "name": "Burnt Orange",
-        "color": "#A65323"
+        "color": "#8E3C00"
       },
       {
-        "name": "Ochre",
-        "color": "#8A6418"
+        "color": "#1978D2"
       },
       {
-        "name": "Olive",
-        "color": "#5F6B2F"
+        "color": "#008988"
       },
       {
-        "name": "Teal",
-        "color": "#1E6F72"
+        "color": "#008D65"
       },
       {
-        "name": "Steel",
-        "color": "#536878"
+        "color": "#4B8A1D"
       },
       {
-        "name": "Brown",
-        "color": "#76543E"
+        "color": "#9E6C00"
       },
       {
-        "name": "Berry",
-        "color": "#963C5A"
+        "color": "#6D6BC2"
       },
       {
-        "name": "Clinic Blue",
-        "color": "#3971B8"
+        "color": "#B45B29"
       }
     ]
   },

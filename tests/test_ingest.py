@@ -24,6 +24,16 @@ def test_committed_sample_input_loads() -> None:
     raw = json.loads(path.read_text(encoding="utf-8"))
     assert "rotations" not in raw
     assert "requirements" not in raw
+    scheme = raw["color_scheme"]
+    assert all(
+        set(token) == {"color"}
+        for token in (
+            scheme["primary"],
+            scheme["secondary"],
+            scheme["neutral"],
+            *scheme["accents"],
+        )
+    )
 
 
 def test_sample_round_trip() -> None:

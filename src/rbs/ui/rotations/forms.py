@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Sequence
 from functools import partial
 
 from pydantic import ValidationError
@@ -256,7 +256,7 @@ def _rotation_editor(
 def _core_settings(
     draft: Draft,
     *,
-    palette: Mapping[str, str] | None = None,
+    palette: Sequence[str] | None = None,
     on_clinic_availability_change: Callable[[], None],
     show_color: bool = True,
     show_max_total_weeks: bool = False,

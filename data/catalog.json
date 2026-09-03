@@ -2,7 +2,7 @@
   "schema_version": 5,
   "calendar_weeks": 52,
   "electives": {
-    "color": "#6B4C8A",
+    "color": "#326800",
     "rotation_options": [
       {
         "rotation_id": "night_float",
@@ -163,7 +163,7 @@
       "id": "night_float",
       "code": "NF",
       "name": "Night Float",
-      "color": "#355C7D",
+      "color": "#006565",
       "kind": "standard",
       "pgy_rules": [
         {
@@ -215,7 +215,7 @@
       "id": "clinic",
       "code": "CLINIC",
       "name": "Clinic",
-      "color": "#7A3E65",
+      "color": "#765000",
       "kind": "clinic",
       "pgy_rules": [
         {
@@ -505,7 +505,7 @@
       "id": "icu",
       "code": "ICU",
       "name": "ICU",
-      "color": "#8A6418",
+      "color": "#1978D2",
       "kind": "standard",
       "pgy_rules": [
         {
@@ -542,7 +542,7 @@
       "id": "cardiology",
       "code": "CARD",
       "name": "Cardiology",
-      "color": "#9B4535",
+      "color": "#4F4B9E",
       "kind": "standard",
       "pgy_rules": [
         {
@@ -670,7 +670,7 @@
       "id": "elective",
       "code": "ELEC",
       "name": "Elective",
-      "color": "#6B4C8A",
+      "color": "#326800",
       "kind": "elective",
       "pgy_rules": [
         {
@@ -798,7 +798,7 @@
       "id": "geriatrics",
       "code": "GERI",
       "name": "Geriatrics",
-      "color": "#6B4C8A",
+      "color": "#326800",
       "kind": "elective",
       "pgy_rules": [
         {
@@ -848,7 +848,7 @@
       "id": "palliative_care",
       "code": "PALL",
       "name": "Palliative Care",
-      "color": "#6B4C8A",
+      "color": "#326800",
       "kind": "elective",
       "pgy_rules": [
         {
@@ -898,7 +898,7 @@
       "id": "outpatient_gyn",
       "code": "GYN",
       "name": "Outpatient GYN",
-      "color": "#963C5A",
+      "color": "#6D6BC2",
       "kind": "standard",
       "pgy_rules": [
         {
@@ -1028,7 +1028,7 @@
       "id": "inpatient_ld",
       "code": "L&D",
       "name": "Inpatient L&D",
-      "color": "#963C5A",
+      "color": "#6D6BC2",
       "kind": "standard",
       "pgy_rules": [
         {
@@ -1158,7 +1158,7 @@
       "id": "peds_community",
       "code": "PEDSC",
       "name": "Community Peds",
-      "color": "#76543E",
+      "color": "#9E6C00",
       "kind": "standard",
       "pgy_rules": [
         {
@@ -1290,7 +1290,7 @@
       "id": "sports_med",
       "code": "SPORTS",
       "name": "Sports Med",
-      "color": "#2B6F8A",
+      "color": "#0058A2",
       "kind": "standard",
       "pgy_rules": [
         {
@@ -1418,7 +1418,7 @@
       "id": "surgery",
       "code": "SURG",
       "name": "Surgery",
-      "color": "#536878",
+      "color": "#4B8A1D",
       "kind": "standard",
       "pgy_rules": [
         {
@@ -1546,7 +1546,7 @@
       "id": "behavioral_health",
       "code": "BH",
       "name": "Behavioral Health",
-      "color": "#4B4E9A",
+      "color": "#00694A",
       "kind": "standard",
       "pgy_rules": [
         {
@@ -1674,7 +1674,7 @@
       "id": "outpatient_peds_cedar",
       "code": "PEDS C",
       "name": "Outpatient Peds - Cedar",
-      "color": "#5F6B2F",
+      "color": "#008988",
       "kind": "standard",
       "pgy_rules": [
         {
@@ -1802,7 +1802,7 @@
       "id": "derm",
       "code": "DERM",
       "name": "Derm",
-      "color": "#A65323",
+      "color": "#8E3C00",
       "kind": "standard",
       "pgy_rules": [
         {
@@ -1930,7 +1930,7 @@
       "id": "population_health_qi",
       "code": "PH/QI",
       "name": "Population Health / QI",
-      "color": "#1E6F72",
+      "color": "#008D65",
       "kind": "standard",
       "pgy_rules": [
         {
@@ -2432,7 +2432,7 @@
       {
         "id": "maple",
         "name": "Maple",
-        "color": "#963C5A",
+        "color": "#6D6BC2",
         "residents_per_attending": 4,
         "half_days": [
           {
