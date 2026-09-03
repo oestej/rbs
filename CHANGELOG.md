@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-03
+
 ### Added
 
 - **Scheduling:** Build full-year residency block schedules with configurable
@@ -18,3 +20,6 @@
   desktop, and hosted interfaces.
 - **Releases:** Download a macOS disk image built from the tagged commit, with
   that release's changelog section as its published description.
+
+[Unreleased]: https://github.com/oestej/rbs/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/oestej/rbs/releases/tag/v0.1.0
