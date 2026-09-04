@@ -212,7 +212,7 @@ async def close_native_document(session: WorkspaceSession) -> None:
         close_document()
         return
 
-    with ui.dialog() as dialog, ui.card().classes("w-full max-w-md gap-4 p-5"):
+    with ui.dialog() as dialog, ui.card().classes("w-full max-w-xl gap-4 p-5"):
         ui.label("Save changes before closing this workspace?").classes("rbs-type-dialog-title")
         ui.label(
             "Closing leaves the saved .rbsc file untouched. Unsaved changes will be lost."
@@ -222,14 +222,14 @@ async def close_native_document(session: WorkspaceSession) -> None:
             if await save_native_document(session):
                 close_document(dialog)
 
-        with ui.row().classes("w-full justify-end gap-2"):
-            ui.button("Cancel", on_click=dialog.close).props("flat no-caps")
+        with ui.row().classes("w-full items-center justify-end gap-2 no-wrap"):
+            ui.button("Cancel", on_click=dialog.close).props("flat no-caps no-wrap")
             ui.button(
                 "Close without saving",
                 on_click=lambda: close_document(dialog),
-            ).props("flat no-caps color=negative")
+            ).props("flat no-caps no-wrap color=negative")
             ui.button("Save and close", icon="save", on_click=save_then_close).props(
-                "unelevated no-caps"
+                "unelevated no-caps no-wrap"
             )
     dialog.open()
 
