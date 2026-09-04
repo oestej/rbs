@@ -729,12 +729,17 @@ def test_native_close_guards_unsaved_changes(tmp_path) -> None:
 
     asyncio.run(close_from_ui())
 
+    created = _created(before)
     buttons = {
         element._props.get("label")
-        for element in _created(before)
+        for element in created
         if element.__class__.__name__ == "Button"
     }
     assert {"Save and close", "Close without saving"} <= buttons
+    card = next(element for element in created if element.__class__.__name__ == "Card")
+    assert "max-w-xl" in card._classes
+    actions = next(element for element in created if element.__class__.__name__ == "Row")
+    assert "no-wrap" in actions._classes
     assert documents.closed is False
     assert session.workspace_id is not None
 

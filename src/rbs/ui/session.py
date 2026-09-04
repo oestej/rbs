@@ -8,6 +8,7 @@ from datetime import date
 from typing import Protocol, runtime_checkable
 
 from rbs.catalog import current_blank_instance, current_sample_instance
+from rbs.models.color_scheme import ColorScheme
 from rbs.models.instance import SchedulerInput
 from rbs.models.schedule import Schedule
 from rbs.models.workspace import Workspace
@@ -77,6 +78,7 @@ class WorkspaceSession:
     active_tab: str = "block_schedule"
     solving: bool = False
     theme: UiElement | None = field(default=None, repr=False)
+    chrome_scheme: ColorScheme | None = field(default=None, repr=False)
     header: UiElement | None = field(default=None, repr=False)
     body: UiElement | None = field(default=None, repr=False)
     navigation: UiElement | None = field(default=None, repr=False)

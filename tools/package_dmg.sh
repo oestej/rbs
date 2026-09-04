@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 
 # Wrap a built RBS Desktop application in the disk image that ships to users.
-# The image holds the application beside an Applications symlink, which is the
-# drag-to-install layout macOS users expect.
+# dmgbuild writes the usual drag-to-Applications Finder window: the application
+# on the left, an Applications symlink on the right, and an arrow between them.
+# packaging/dmg_settings.py owns that layout.
 #
 # macOS gates a downloaded disk image in its own right, so the image is signed
 # here when an identity is available. Notarizing it is a separate step, because
@@ -78,11 +79,19 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
     exit 1
 fi
 
+if ! command -v uv >/dev/null 2>&1; then
+    printf '%s\n' 'Disk images require uv: https://docs.astral.sh/uv/' >&2
+    exit 1
+fi
+
 if [[ ! -d "${application}" ]]; then
     printf 'Application bundle not found: %s\n' "${application}" >&2
     printf '%s\n' 'Run tools/build_desktop.sh first.' >&2
     exit 1
 fi
+
+# dmgbuild copies by path, so a relative --app would depend on the caller's cwd.
+application="$(cd "${application}" && pwd)"
 
 app_version="$(sed -n 's/^__version__ = "\([0-9][0-9.]*\)"$/\1/p' "${VERSION_SOURCE}")"
 if [[ "$(printf '%s' "${app_version}" | grep -c .)" != 1 ]]; then
@@ -94,24 +103,19 @@ if [[ -z "${output}" ]]; then
     output="${PROJECT_ROOT}/dist/RBS-Desktop-${app_version}-macos-$(uname -m).dmg"
 fi
 
-staging="$(mktemp -d)"
-trap 'rm -rf "${staging}"' EXIT
-
-# ditto preserves the bundle's symlinks, permissions, and extended attributes,
-# along with the code signature and any stapled notarization ticket the
-# application already carries.
-ditto "${application}" "${staging}/$(basename "${application}")"
-ln -s /Applications "${staging}/Applications"
-
 mkdir -p "$(dirname "${output}")"
+output="$(cd "$(dirname "${output}")" && pwd)/$(basename "${output}")"
 rm -f "${output}"
-hdiutil create \
-    -volname "RBS Desktop ${app_version}" \
-    -srcfolder "${staging}" \
-    -fs HFS+ \
-    -format UDZO \
-    -ov \
-    "${output}" >/dev/null
+
+# dmgbuild copies the bundle with ditto, so the code signature and any stapled
+# notarization ticket the application already carries stay intact.
+uv --directory "${PROJECT_ROOT}" run --frozen --extra dmg dmgbuild \
+    --settings "${PROJECT_ROOT}/packaging/dmg_settings.py" \
+    --detach-retries 20 \
+    -D "app=${application}" \
+    -D "icon=${PROJECT_ROOT}/packaging/assets/rbs.icns" \
+    "RBS Desktop ${app_version}" \
+    "${output}"
 
 hdiutil verify "${output}" >/dev/null
 

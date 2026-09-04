@@ -104,8 +104,9 @@ exists and notarization can only follow a signature:
 2. `tools/notarize_desktop.sh` uploads the application to Apple, waits for a
    verdict, and staples the ticket into the bundle. Stapling is what lets a
    first launch succeed on a machine that is offline.
-3. `tools/package_dmg.sh` signs the disk image it builds around the stapled
-   application, and `tools/notarize_desktop.sh` notarizes and staples that too.
+3. `tools/package_dmg.sh` builds a drag-to-Applications disk image around the
+   stapled application (`packaging/dmg_settings.py` owns the Finder layout) and
+   signs it, and `tools/notarize_desktop.sh` notarizes and staples that too.
 
 Each script runs on its own, so a signing problem can be reproduced locally
 without pushing a tag, and each takes its credentials from the environment or

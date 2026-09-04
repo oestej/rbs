@@ -9,6 +9,7 @@ import plistlib
 import stat
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -615,19 +616,59 @@ def test_notarizer_waits_for_a_verdict_and_staples_the_ticket() -> None:
     assert "xcrun stapler validate" in source
 
 
-def test_disk_image_is_signed_only_when_an_identity_is_available() -> None:
+def test_disk_image_uses_a_drag_to_applications_installer_window() -> None:
     root = Path(__file__).resolve().parents[2]
     packager = root / "tools" / "package_dmg.sh"
-    source = packager.read_text(encoding="utf-8")
+    settings = root / "packaging" / "dmg_settings.py"
+    icon = root / "packaging" / "assets" / "rbs.icns"
+    packager_source = packager.read_text(encoding="utf-8")
 
-    assert 'identity="${APPLE_DEVELOPER_ID:-}"' in source
-    assert 'if [[ -n "${identity}" ]]; then' in source
-    assert "the disk image is unsigned" in source
+    assert packager.stat().st_mode & stat.S_IXUSR
+    assert "uv --directory" in packager_source
+    assert "--frozen --extra dmg dmgbuild" in packager_source
+    assert "packaging/assets/rbs.icns" in packager_source
+    assert "packaging/dmg_settings.py" in packager_source
+    assert 'identity="${APPLE_DEVELOPER_ID:-}"' in packager_source
+    assert 'if [[ -n "${identity}" ]]; then' in packager_source
+    assert "the disk image is unsigned" in packager_source
     # A disk image is not code: the hardened runtime does not apply to it.
-    assert "--options runtime" not in source
+    assert "--options runtime" not in packager_source
     # The image still needs a secure timestamp, so a TSA refusal is retried.
-    assert "A timestamp was expected but was not found" in source
-    assert "for attempt in 1 2 3 4 5 6 7 8; do" in source
+    assert "A timestamp was expected but was not found" in packager_source
+    assert "for attempt in 1 2 3 4 5 6 7 8; do" in packager_source
+
+    application = "/tmp/RBS Desktop.app"
+    namespace = {"defines": {"app": application, "icon": str(icon)}}
+    exec(settings.read_text(encoding="utf-8"), namespace)
+
+    assert namespace["files"] == [application]
+    assert namespace["symlinks"] == {"Applications": "/Applications"}
+    assert namespace["background"] == "builtin-arrow"
+    assert namespace["window_rect"] == ((200, 120), (640, 280))
+    assert namespace["icon_size"] == 128
+    assert namespace["icon_locations"] == {
+        "RBS Desktop.app": (140, 120),
+        "Applications": (500, 120),
+    }
+    assert namespace["format"] == "UDZO"
+    assert namespace["default_view"] == "icon-view"
+    assert namespace["show_sidebar"] is False
+    assert namespace["hide_extensions"] == ["RBS Desktop.app"]
+    assert namespace["icon"] == str(icon)
+    assert icon.is_file()
+
+
+def test_dmgbuild_is_not_part_of_the_bundled_license_closure() -> None:
+    root = Path(__file__).resolve().parents[2]
+    with (root / "pyproject.toml").open("rb") as pyproject_file:
+        project = tomllib.load(pyproject_file)
+
+    extras = project["project"]["optional-dependencies"]
+    from rbs.desktop.license_bundle import BUNDLED_OPTIONAL_GROUPS
+
+    assert extras["dmg"] == ["dmgbuild>=1.6.7"]
+    assert "dmgbuild" not in extras["build"]
+    assert "dmg" not in BUNDLED_OPTIONAL_GROUPS
 
 
 def test_workflow_actions_are_pinned_to_commit_shas() -> None:

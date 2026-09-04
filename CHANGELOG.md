@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Desktop:** Opening the macOS disk image now shows a drag-to-Applications installer window, with the application on the left and Applications on the right.
+
 ## [0.1.0] - 2026-09-03
 
 ### Added

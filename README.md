@@ -57,7 +57,7 @@ the runner fills those from `--catalog` or the bundled `data/catalog.json`.
 
 Build the desktop artifact with `tools/build_desktop.sh` (`dist/RBS Desktop.app`,
 self-contained, no system Python needed) and wrap it for distribution with
-`tools/package_dmg.sh`.
+`tools/package_dmg.sh`, which produces a drag-to-Applications disk image.
 `rbs ui --desktop` previews desktop chrome locally (native file actions stay
 inert); `--cloud` previews hosted chrome while remaining single-user with no
 retention.
@@ -126,7 +126,7 @@ shared code, and static packaging tests keep it that way.
 python3 -m pytest tests/ -q -p no:cacheprovider
 ruff check src/rbs/ tests/
 tools/build_desktop.sh        # frozen desktop artifact per-OS (see below)
-tools/package_dmg.sh          # macOS disk image around the built application
+tools/package_dmg.sh          # drag-to-Applications disk image around the app
 ```
 
 Tests marked `solve` run a real CP-SAT search and judge what an anytime solver

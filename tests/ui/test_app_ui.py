@@ -1205,6 +1205,74 @@ def test_saved_scheme_updates_the_existing_page_theme_element(monkeypatch) -> No
     assert '"--q-rbs-secondary-text": "#262626"' in scripts[0]
 
 
+def test_empty_chrome_uses_saved_application_color_scheme(tmp_path) -> None:
+    from nicegui import ui
+
+    from rbs.models.color_scheme import ColorScheme
+    from rbs.store import Store
+    from rbs.ui.app_shell import _mount_shell
+    from rbs.ui.host import LocalHost
+    from rbs.ui.session import WorkspaceSession
+
+    raw = ColorScheme().model_dump(mode="json")
+    raw["primary"]["color"] = "#123A67"
+    raw["secondary"]["color"] = "#EAAA00"
+    scheme = ColorScheme.model_validate(raw)
+    store = Store(tmp_path / "empty.sqlite")
+    store.init()
+    session = WorkspaceSession(store=store)
+    session.workspace_host = LocalHost(
+        store,
+        document_io=SimpleNamespace(
+            application_settings=SimpleNamespace(
+                settings=SimpleNamespace(colors=SimpleNamespace(scheme=scheme))
+            )
+        ),
+    )
+    session.header = ui.header()
+    session.body = ui.column()
+
+    _mount_shell(session)
+
+    assert session.theme._props["primary"] == "#123A67"
+    assert session.theme._props["secondary"] == "#EAAA00"
+    assert session.chrome_scheme == scheme
+
+
+def test_chrome_color_scheme_stays_consistent_without_an_open_workspace() -> None:
+    from rbs.models.color_scheme import ColorScheme
+    from rbs.ui.app_shell import _chrome_color_scheme
+
+    def scheme_with(*, primary: str) -> ColorScheme:
+        raw = ColorScheme().model_dump(mode="json")
+        raw["primary"]["color"] = primary
+        return ColorScheme.model_validate(raw)
+
+    workspace_scheme = scheme_with(primary="#111111")
+    saved_scheme = scheme_with(primary="#123A67")
+    last_scheme = scheme_with(primary="#EAAA00")
+    workspace = SimpleNamespace(instance=SimpleNamespace(color_scheme=workspace_scheme))
+    session = SimpleNamespace(
+        chrome_scheme=last_scheme,
+        workspace_host=SimpleNamespace(
+            document_io=SimpleNamespace(
+                application_settings=SimpleNamespace(
+                    settings=SimpleNamespace(colors=SimpleNamespace(scheme=saved_scheme))
+                )
+            )
+        ),
+    )
+
+    assert _chrome_color_scheme(session, workspace) is workspace_scheme
+    assert _chrome_color_scheme(session, None) is saved_scheme
+
+    session.workspace_host.document_io.application_settings = None
+    assert _chrome_color_scheme(session, None) is last_scheme
+
+    session.chrome_scheme = None
+    assert _chrome_color_scheme(session, None).primary.color == ColorScheme().primary.color
+
+
 def test_remember_clinic_section_only_accepts_known_sections() -> None:
     from rbs.ui.app_shell import _remember_clinic_section
 
