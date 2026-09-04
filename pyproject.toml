@@ -22,6 +22,9 @@ dependencies = [
 dev = ["pypdf>=5.0", "pytest>=8.0", "ruff>=0.6", "pyjwt[crypto]>=2.9"]
 desktop = ["nicegui[native]>=3.16"]
 build = ["pyinstaller>=6.10"]
+# Disk-image layout only. Kept out of `build` so the notices bundled into the
+# application do not list packaging tools the user never runs.
+dmg = ["dmgbuild>=1.6.7"]
 # Hosted build only. Kept out of the base dependencies so the desktop build can
 # be packaged without the identity stack; tests/test_packaging.py enforces that
 # nothing outside rbs.cloud reaches for these.
