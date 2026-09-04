@@ -76,9 +76,8 @@ def _mount_shell(session: WorkspaceSession) -> None:
     session.panels.clear()
     session.navigation = None
     workspace = session.workspace()
-    scheme = workspace.instance.color_scheme if workspace else ColorScheme()
     product_name = "RBS Desktop" if _document_io(session) is not None else "RBS"
-    _set_nicegui_theme(session, scheme)
+    _set_nicegui_theme(session, _chrome_color_scheme(session, workspace))
     with session.header:
         with ui.row().classes("rbs-header-primary w-full items-center no-wrap"):
             with (
@@ -606,6 +605,29 @@ def _switch(session: WorkspaceSession, workspace_id) -> None:
     session.switch_workspace(workspace_id)
 
 
+def _application_color_scheme(session: WorkspaceSession) -> ColorScheme | None:
+    """Return the packaging's saved chrome colors, when it owns any."""
+    documents = _document_io(session)
+    settings_file = getattr(documents, "application_settings", None)
+    settings = getattr(settings_file, "settings", None)
+    colors = getattr(settings, "colors", None)
+    scheme = getattr(colors, "scheme", None)
+    return scheme if isinstance(scheme, ColorScheme) else None
+
+
+def _chrome_color_scheme(
+    session: WorkspaceSession, workspace: Workspace | None
+) -> ColorScheme:
+    """Colors for application chrome, whether or not a workspace is open."""
+    if workspace is not None:
+        return workspace.instance.color_scheme
+    return (
+        _application_color_scheme(session)
+        or getattr(session, "chrome_scheme", None)
+        or ColorScheme()
+    )
+
+
 def _nicegui_theme_colors(scheme: ColorScheme) -> dict[str, str]:
     """Translate the saved application roles into NiceGUI/Quasar colors."""
     return {
@@ -630,6 +652,7 @@ def _set_nicegui_theme(session: WorkspaceSession, scheme: ColorScheme) -> None:
         "rbs_primary_text": accessible_text_color(scheme.primary.color),
         "rbs_secondary_text": accessible_text_color(scheme.secondary.color),
     }
+    session.chrome_scheme = scheme
     if session.theme is None:
         session.theme = ui.colors(**colors, **contrast_colors)
         return
