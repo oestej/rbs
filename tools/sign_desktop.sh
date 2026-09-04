@@ -115,21 +115,71 @@ if [[ -n "${keychain}" ]]; then
     codesign_arguments+=(--keychain "${keychain}")
 fi
 
-# Every signature contacts Apple's timestamp service, and a bundle this size
-# asks a few hundred times in a row. That service refuses the occasional
-# request under load, which is worth a retry rather than a failed release.
-sign() {
-    local attempt
-    for attempt in 1 2 3; do
-        if codesign "${codesign_arguments[@]}" "$@"; then
+# codesign waits about fifteen seconds, then fails with "A timestamp was
+# expected but was not found" when Apple's timestamp service does not answer.
+# A hosted runner can sit in front of a dark minute or two of that service,
+# and a bundle this size asks a few hundred times in a row even after it
+# recovers. Wait until the host responds, then retry timestamp refusals with
+# a growing delay. Other codesign failures (a bad identity, a malformed
+# binary) are not the same problem and should not be retried.
+timestamp_refused() {
+    case "$1" in
+        *"A timestamp was expected but was not found"*|*"timestamp service is not available"*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+wait_for_timestamp_service() {
+    local attempt delay=5
+    for attempt in 1 2 3 4 5 6; do
+        if curl -fsS -o /dev/null --connect-timeout 10 --max-time 20 \
+            "http://timestamp.apple.com/ts01"; then
             return 0
         fi
-        printf 'codesign attempt %d failed for %s; retrying.\n' "${attempt}" "${!#}" >&2
-        sleep $((attempt * 5))
+        printf 'timestamp.apple.com did not answer (attempt %d); retrying in %ds.\n' \
+            "${attempt}" "${delay}" >&2
+        sleep "${delay}"
+        delay=$((delay * 2))
+        if ((delay > 30)); then
+            delay=30
+        fi
+    done
+    printf '%s\n' \
+        'timestamp.apple.com never answered; signing will still be attempted.' >&2
+}
+
+sign() {
+    local attempt delay=5 output
+    for attempt in 1 2 3 4 5 6 7 8; do
+        if output="$(codesign "${codesign_arguments[@]}" "$@" 2>&1)"; then
+            [[ -n "${output}" ]] && printf '%s\n' "${output}"
+            return 0
+        fi
+        printf '%s\n' "${output}" >&2
+        if ! timestamp_refused "${output}"; then
+            printf 'Giving up on: %s\n' "${!#}" >&2
+            return 1
+        fi
+        if ((attempt == 8)); then
+            break
+        fi
+        printf 'codesign attempt %d failed for %s; retrying in %ds.\n' \
+            "${attempt}" "${!#}" "${delay}" >&2
+        sleep "${delay}"
+        delay=$((delay * 2))
+        if ((delay > 60)); then
+            delay=60
+        fi
     done
     printf 'Giving up on: %s\n' "${!#}" >&2
     return 1
 }
+
+wait_for_timestamp_service
 
 # Contents/MacOS is skipped here and signed below: those two executables take
 # entitlements, and the bundle's own signature has to be the last one applied.

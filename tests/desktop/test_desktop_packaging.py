@@ -587,9 +587,12 @@ def test_desktop_signer_signs_inside_out_with_the_hardened_runtime() -> None:
     bundle = source.index('sign --entitlements "${entitlements}" "${application}"')
     assert nested < solver < bundle
     assert "codesign --verify --deep --strict" in source
-    # A few hundred consecutive requests to Apple's timestamp service should not
-    # cost a release when one of them is refused.
-    assert "for attempt in 1 2 3; do" in source
+    # Apple's timestamp service can stay dark for a minute or two from a hosted
+    # runner. Three short retries lose the release; keep trying timestamp
+    # refusals with a growing delay, and do not treat a bad identity the same way.
+    assert "A timestamp was expected but was not found" in source
+    assert "timestamp.apple.com/ts01" in source
+    assert "for attempt in 1 2 3 4 5 6 7 8; do" in source
 
 
 def test_notarizer_waits_for_a_verdict_and_staples_the_ticket() -> None:
@@ -622,6 +625,9 @@ def test_disk_image_is_signed_only_when_an_identity_is_available() -> None:
     assert "the disk image is unsigned" in source
     # A disk image is not code: the hardened runtime does not apply to it.
     assert "--options runtime" not in source
+    # The image still needs a secure timestamp, so a TSA refusal is retried.
+    assert "A timestamp was expected but was not found" in source
+    assert "for attempt in 1 2 3 4 5 6 7 8; do" in source
 
 
 def test_workflow_actions_are_pinned_to_commit_shas() -> None:

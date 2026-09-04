@@ -116,13 +116,46 @@ hdiutil create \
 hdiutil verify "${output}" >/dev/null
 
 # A disk image is not code, so it takes a plain signature: no hardened runtime
-# and no entitlements. The timestamp is still required for notarization.
+# and no entitlements. The timestamp is still required for notarization. Apple's
+# timestamp service can refuse a request the same way it does for the app, so
+# this one signature retries those refusals instead of failing the package step.
 if [[ -n "${identity}" ]]; then
     codesign_arguments=(--sign "${identity}" --force --timestamp)
     if [[ -n "${keychain}" ]]; then
         codesign_arguments+=(--keychain "${keychain}")
     fi
-    codesign "${codesign_arguments[@]}" "${output}"
+    delay=5
+    signed=0
+    for attempt in 1 2 3 4 5 6 7 8; do
+        if codesign_output="$(codesign "${codesign_arguments[@]}" "${output}" 2>&1)"; then
+            [[ -n "${codesign_output}" ]] && printf '%s\n' "${codesign_output}"
+            signed=1
+            break
+        fi
+        printf '%s\n' "${codesign_output}" >&2
+        case "${codesign_output}" in
+            *"A timestamp was expected but was not found"*|*"timestamp service is not available"*)
+                ;;
+            *)
+                printf 'Giving up on: %s\n' "${output}" >&2
+                exit 1
+                ;;
+        esac
+        if ((attempt == 8)); then
+            break
+        fi
+        printf 'codesign attempt %d failed for %s; retrying in %ds.\n' \
+            "${attempt}" "${output}" "${delay}" >&2
+        sleep "${delay}"
+        delay=$((delay * 2))
+        if ((delay > 60)); then
+            delay=60
+        fi
+    done
+    if ((signed == 0)); then
+        printf 'Giving up on: %s\n' "${output}" >&2
+        exit 1
+    fi
     codesign --verify --strict --verbose=2 "${output}"
 else
     printf '%s\n' 'No Developer ID identity available; the disk image is unsigned.' >&2
