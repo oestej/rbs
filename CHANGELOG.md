@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-05
+
 ### Changed
 
 - **Desktop:** Opening the macOS disk image now shows a drag-to-Applications installer window, with the application on the left and Applications on the right.
@@ -27,5 +29,6 @@
 - **Releases:** Download a macOS disk image built from the tagged commit, with
   that release's changelog section as its published description.
 
-[Unreleased]: https://github.com/oestej/rbs/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/oestej/rbs/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/oestej/rbs/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/oestej/rbs/releases/tag/v0.1.0
