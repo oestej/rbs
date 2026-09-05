@@ -96,9 +96,7 @@ def assign_clinic_sites(
                 slot.automatic_lock_exempt = reference_slot.automatic_lock_exempt
                 slot.manual_override = reference_slot.manual_override
                 slot.manual_override_added = reference_slot.manual_override_added
-                slot.manual_override_original_site = (
-                    reference_slot.manual_override_original_site
-                )
+                slot.manual_override_original_site = reference_slot.manual_override_original_site
             if slot.admin or slot.week is None:
                 retained.append(slot)
                 continue
@@ -138,9 +136,7 @@ def assign_clinic_sites(
                     pgy=resident.pgy if resident is not None else None,
                     clinic_ids=allowed,
                     calendar_day=calendar_day,
-                    preferred_clinic_id=preferred_sites.get(
-                        occurrence_key
-                    ),
+                    preferred_clinic_id=preferred_sites.get(occurrence_key),
                     locked_clinic_id=protected_sites.get(occurrence_key),
                 )
             )
@@ -196,7 +192,7 @@ def assign_clinic_sites(
         policy.allocation_rules_for(),
         key=lambda rule: (
             rule.clinic_id == primary_clinic,
-            rule.target_fraction,
+            rule.target_percent,
             policy.site_ids.index(rule.clinic_id),
         ),
     )
@@ -330,16 +326,14 @@ def _allocation_targets(
     targets: dict[str, int] = {}
     remainders: list[tuple[float, str]] = []
     rules = policy.allocation_rules_for(pgy=pgy, resident_id=resident_id)
-    target_total = sum(rule.target_fraction for rule in rules)
+    target_total = sum(rule.target_percent for rule in rules)
     for rule in rules:
         normalized_target = (
-            rule.target_fraction / target_total
-            if target_total > 0
-            else 1.0 / len(rules)
+            rule.target_percent / target_total if target_total > 0 else 1.0 / len(rules)
         )
         raw = normalized_target * total
-        minimum = ceil(rule.min_fraction * total - 1e-9)
-        maximum = floor(rule.max_fraction * total + 1e-9)
+        minimum = ceil(rule.min_percent * total / 100.0 - 1e-9)
+        maximum = floor(rule.max_percent * total / 100.0 + 1e-9)
         base = min(max(floor(raw), minimum), maximum)
         targets[rule.clinic_id] = base
         remainders.append((raw - floor(raw), rule.clinic_id))
@@ -356,7 +350,7 @@ def _allocation_targets(
                     pgy=pgy,
                     resident_id=resident_id,
                 )
-                maximum = floor(rule.max_fraction * total + 1e-9)
+                maximum = floor(rule.max_percent * total / 100.0 + 1e-9)
                 if targets[clinic_id] >= maximum:
                     continue
                 targets[clinic_id] += 1
@@ -378,7 +372,7 @@ def _allocation_targets(
                     pgy=pgy,
                     resident_id=resident_id,
                 )
-                minimum = ceil(rule.min_fraction * total - 1e-9)
+                minimum = ceil(rule.min_percent * total / 100.0 - 1e-9)
                 if targets[clinic_id] <= minimum:
                     continue
                 targets[clinic_id] -= 1
@@ -433,9 +427,8 @@ def _under_capacity(
     filled: dict[tuple[str, int, object, object], int],
 ) -> bool:
     week, weekday, session = candidate.key
-    return (
-        filled[clinic_id, week, weekday, session]
-        < policy.max_capacity_on(clinic_id, candidate.calendar_day, session)
+    return filled[clinic_id, week, weekday, session] < policy.max_capacity_on(
+        clinic_id, candidate.calendar_day, session
     )
 
 
@@ -452,8 +445,9 @@ def _under_allocation_max(
             clinic_id,
             pgy=pgy,
             resident_id=resident_id,
-        ).max_fraction
+        ).max_percent
         * total
+        / 100.0
         + 1e-9
     )
     return assigned_by_resident[resident_id, clinic_id] < maximum
@@ -472,9 +466,10 @@ def _target_assignment_key(
     weekly_by_clinic: dict[tuple[str, int], int],
 ) -> tuple:
     week, weekday, session = candidate.key
-    deficit = targets.get((candidate.resident_id, clinic_id), 0) - assigned_by_resident[
-        candidate.resident_id, clinic_id
-    ]
+    deficit = (
+        targets.get((candidate.resident_id, clinic_id), 0)
+        - assigned_by_resident[candidate.resident_id, clinic_id]
+    )
     primary_count = filled[primary_clinic, week, weekday, session]
     primary_attendings = policy.attendings_needed(primary_count, primary_clinic)
     return (
@@ -509,9 +504,10 @@ def _remainder_assignment_key(
     weekly_by_clinic: dict[tuple[str, int], int],
 ) -> tuple:
     week, weekday, session = candidate.key
-    deficit = targets.get((candidate.resident_id, clinic_id), 0) - assigned_by_resident[
-        candidate.resident_id, clinic_id
-    ]
+    deficit = (
+        targets.get((candidate.resident_id, clinic_id), 0)
+        - assigned_by_resident[candidate.resident_id, clinic_id]
+    )
     maximum = max(
         policy.max_capacity_on(clinic_id, candidate.calendar_day, session),
         1,

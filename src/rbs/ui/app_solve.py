@@ -11,7 +11,9 @@ from rbs.logging import (
     get_logger,
 )
 from rbs.models.enums import SolverStatus
+from rbs.models.instance import SolverProblem
 from rbs.models.schedule import SolverDiagnostic
+from rbs.solver.readiness import check_solve_readiness
 from rbs.solver.reference import changed_resident_weeks
 from rbs.ui.app_branding import dialog_wordmark
 from rbs.ui.app_documents import _document_io
@@ -40,6 +42,14 @@ async def _solve(session: WorkspaceSession) -> None:
         return
     workspace = session.workspace()
     if workspace is None:
+        return
+    readiness = check_solve_readiness(SolverProblem.from_instance(workspace.instance))
+    if not readiness.ready:
+        ui.notify(
+            "Allocate every training level's weeks before solving: "
+            + "; ".join(readiness.errors),
+            type="warning",
+        )
         return
     documents = _document_io(session)
     document_generation = documents.generation if documents is not None else None

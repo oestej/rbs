@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 class ConstraintCatalog(StrictModel):
     """Versioned block constraints that can be imported and stored independently."""
 
-    schema_version: Literal[5] = 5
+    schema_version: Literal[6] = 6
     calendar_weeks: int = Field(default=52, ge=1)
     rotations: list[Rotation]
     requirements: list[PGYCurriculum] = Field(min_length=1)
@@ -51,7 +51,7 @@ class ConstraintCatalog(StrictModel):
     @classmethod
     def from_instance(cls, instance: SolverProblem) -> ConstraintCatalog:
         return cls(
-            schema_version=5,
+            schema_version=6,
             calendar_weeks=instance.calendar.weeks,
             rotations=instance.rotations,
             requirements=instance.requirements,
@@ -339,13 +339,12 @@ def _validate_curriculum(
             block,
             by_rotation,
         )
-    if curriculum.blocks:
-        weeks = curriculum.required_weeks()
-        if weeks != calendar_weeks:
-            raise ValueError(
-                f"{curriculum.short_code} curriculum covers {weeks} weeks, "
-                f"expected {calendar_weeks}"
-            )
+    weeks = curriculum.required_weeks()
+    if weeks > calendar_weeks:
+        raise ValueError(
+            f"{curriculum.short_code} curriculum allocates {weeks} weeks, "
+            f"exceeding the {calendar_weeks}-week calendar"
+        )
     return offered
 
 

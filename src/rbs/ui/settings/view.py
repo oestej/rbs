@@ -336,10 +336,16 @@ def save_general_workspace_settings(
                 pass
             else:
                 saved = WorkspaceController(store).save_schedule(saved, prior_schedule)
-    normalized_name = name.strip() or "Untitled"
-    if normalized_name != saved.name:
-        saved = WorkspaceController(store).rename(saved, normalized_name)
+    # Renaming touches only the name column, so it reads the stored revision
+    # instead of the caller's snapshot: a stale dialog (or a double submit)
+    # must not block a rename that cannot clobber scheduling data. A repeat
+    # submit after a successful rename is a no-op returning stored state.
+    stored = store.get(saved.id)
+    if (name.strip() or "Untitled") != stored.name:
+        saved = WorkspaceController(store).rename_live(saved.id, name)
         changed = True
+    elif not changed:
+        saved = stored
     return saved, changed
 
 

@@ -26,7 +26,9 @@ __all__ = [
     "replace_clinic_allocation_rules",
     "replace_clinic_closure_days",
     "replace_academic_half_day",
+    "disable_academic_half_day",
     "set_academic_half_day_override",
+    "cancel_academic_half_day_for_week",
     "remove_academic_half_day_override",
 ]
 
@@ -86,7 +88,7 @@ def add_clinic(
         added_raw["allocation_rules"] = [
             ClinicAllocationRule(
                 clinic_id=added.id,
-                target_fraction=0.0,
+                target_percent=0,
             ).model_dump(mode="json")
         ]
     policy["sites"].append(added_raw)
@@ -117,16 +119,19 @@ def remove_clinic(instance: SchedulerInput, clinic_id: str) -> SchedulerInput:
         )
         grouped.setdefault(scope, []).append(rule)
     for scoped_rules in grouped.values():
-        target_total = sum(float(rule["target_fraction"]) for rule in scoped_rules)
-        for rule in scoped_rules:
-            target = (
-                float(rule["target_fraction"]) / target_total
-                if target_total > 0
-                else 1.0 / len(scoped_rules)
-            )
-            rule["target_fraction"] = target
-            rule["min_fraction"] = min(float(rule["min_fraction"]), target)
-            rule["max_fraction"] = max(float(rule["max_fraction"]), target)
+        targets = [_allocation_percent(rule, "target", 0) for rule in scoped_rules]
+        minimums = [_allocation_percent(rule, "min", 0) for rule in scoped_rules]
+        maximums = [_allocation_percent(rule, "max", 100) for rule in scoped_rules]
+        new_targets = _renormalize_percent_targets(targets)
+        for rule, target, minimum, maximum in zip(
+            scoped_rules, new_targets, minimums, maximums, strict=True
+        ):
+            rule.pop("target_fraction", None)
+            rule.pop("min_fraction", None)
+            rule.pop("max_fraction", None)
+            rule["target_percent"] = target
+            rule["min_percent"] = min(minimum, target)
+            rule["max_percent"] = max(maximum, target)
     policy["allocation_rules"] = rules
     if policy.get("primary_site_id") == clinic_id:
         overall_rules = [
@@ -134,7 +139,7 @@ def remove_clinic(instance: SchedulerInput, clinic_id: str) -> SchedulerInput:
         ]
         policy["primary_site_id"] = max(
             overall_rules,
-            key=lambda rule: float(rule["target_fraction"]),
+            key=lambda rule: _allocation_percent(rule, "target", 0),
         )["clinic_id"]
     _distribute_clinic_allocation_rules(policy)
     _remove_clinic_references(raw["rotations"], clinic_id)
@@ -154,6 +159,35 @@ def replace_clinic_allocation_rules(
     ]
     _distribute_clinic_allocation_rules(raw["clinic_policy"])
     return SchedulerInput.from_payload(raw)
+
+
+def _allocation_percent(rule: Draft, name: str, default: int) -> int:
+    """Read an integer percent, converting legacy float fractions when present."""
+    percent_key = f"{name}_percent"
+    fraction_key = f"{name}_fraction"
+    if rule.get(percent_key) is not None:
+        return int(round(float(rule[percent_key])))
+    if rule.get(fraction_key) is not None:
+        return int(round(float(rule[fraction_key]) * 100))
+    return default
+
+
+def _renormalize_percent_targets(targets: list[int]) -> list[int]:
+    """Rescale integer targets to sum to 100 via largest remainders."""
+    count = len(targets)
+    if count == 0:
+        return []
+    total = sum(targets)
+    if total <= 0:
+        base, remainder = divmod(100, count)
+        return [base + 1 if index < remainder else base for index in range(count)]
+    bases = [(target * 100) // total for target in targets]
+    remainders = [(target * 100) % total for target in targets]
+    leftover = 100 - sum(bases)
+    order = sorted(range(count), key=lambda index: (-remainders[index], index))
+    for index in order[:leftover]:
+        bases[index] += 1
+    return bases
 
 
 def _sync_clinic_allocation_view(policy: Draft) -> None:
@@ -224,26 +258,43 @@ def replace_clinic_closure_days(
 
 def replace_academic_half_day(
     instance: SchedulerInput,
-    weekday: Weekday,
-    session: Session,
+    weekday: Weekday | None,
+    session: Session | None,
 ) -> SchedulerInput:
-    """Return a validated instance with a new system-wide academic half-day."""
+    """Set the system-wide academic half-day, or clear it with ``None``.
+
+    Clearing it removes the recurring half-day for every week that does not
+    override it; week-specific overrides still apply on top.
+    """
+    if (weekday is None) != (session is None):
+        raise ValueError("select both a day and a session for the academic half-day")
     raw = instance.model_dump(mode="json")
     raw["clinic_policy"]["academic"] = {
-        "weekday": weekday.value,
-        "session": session.value,
+        "weekday": weekday.value if weekday is not None else None,
+        "session": session.value if session is not None else None,
         "sites": [],
     }
     return SchedulerInput.from_payload(raw)
 
 
+def disable_academic_half_day(instance: SchedulerInput) -> SchedulerInput:
+    """Return an instance that runs no recurring academic half-day."""
+    return replace_academic_half_day(instance, None, None)
+
+
 def set_academic_half_day_override(
     instance: SchedulerInput,
     week: int,
-    weekday: Weekday,
-    session: Session,
+    weekday: Weekday | None,
+    session: Session | None,
 ) -> SchedulerInput:
-    """Add or replace the Academic half-day override for one week."""
+    """Add or replace the Academic half-day override for one week.
+
+    Passing ``None`` for both cancels that week's academic half-day outright,
+    which is distinct from having no override at all.
+    """
+    if (weekday is None) != (session is None):
+        raise ValueError("select both a day and a session, or cancel the week")
     raw = instance.model_dump(mode="json")
     overrides = [
         item for item in raw.get("academic_half_day_overrides", []) if int(item["week"]) != week
@@ -251,12 +302,20 @@ def set_academic_half_day_override(
     overrides.append(
         {
             "week": week,
-            "weekday": weekday.value,
-            "session": session.value,
+            "weekday": weekday.value if weekday is not None else None,
+            "session": session.value if session is not None else None,
         }
     )
-    raw["academic_half_day_overrides"] = overrides
+    raw["academic_half_day_overrides"] = sorted(overrides, key=lambda item: int(item["week"]))
     return SchedulerInput.from_payload(raw)
+
+
+def cancel_academic_half_day_for_week(
+    instance: SchedulerInput,
+    week: int,
+) -> SchedulerInput:
+    """Record that one week runs no academic half-day."""
+    return set_academic_half_day_override(instance, week, None, None)
 
 
 def remove_academic_half_day_override(
@@ -294,9 +353,9 @@ def _new_clinic_draft(instance: SchedulerInput) -> Draft:
                 "clinic_id": clinic_id,
                 "pgy": None,
                 "resident_id": None,
-                "min_fraction": 0.0,
-                "target_fraction": 0.0,
-                "max_fraction": 1.0,
+                "min_percent": 0,
+                "target_percent": 0,
+                "max_percent": 100,
             }
         ],
     }

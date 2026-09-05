@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "calendar_weeks": 52,
   "electives": {
     "color": "#326800",
@@ -2477,9 +2477,9 @@
             "clinic_id": "maple",
             "pgy": null,
             "resident_id": null,
-            "min_fraction": 0.0,
-            "target_fraction": 0.25,
-            "max_fraction": 1.0
+            "min_percent": 0,
+            "target_percent": 25,
+            "max_percent": 100
           }
         ]
       },
@@ -2555,9 +2555,9 @@
             "clinic_id": "cedar",
             "pgy": null,
             "resident_id": null,
-            "min_fraction": 0.0,
-            "target_fraction": 0.75,
-            "max_fraction": 1.0
+            "min_percent": 0,
+            "target_percent": 75,
+            "max_percent": 100
           }
         ]
       }
@@ -2567,17 +2567,17 @@
         "clinic_id": "maple",
         "pgy": null,
         "resident_id": null,
-        "min_fraction": 0.0,
-        "target_fraction": 0.25,
-        "max_fraction": 1.0
+        "min_percent": 0,
+        "target_percent": 25,
+        "max_percent": 100
       },
       {
         "clinic_id": "cedar",
         "pgy": null,
         "resident_id": null,
-        "min_fraction": 0.0,
-        "target_fraction": 0.75,
-        "max_fraction": 1.0
+        "min_percent": 0,
+        "target_percent": 75,
+        "max_percent": 100
       }
     ],
     "academic": {

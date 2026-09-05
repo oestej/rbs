@@ -4,9 +4,10 @@ from rbs.models.instance import SolverConfig, SolverProblem
 from rbs.models.schedule import Schedule
 from rbs.solver.core import kinds as rotation_kinds
 from rbs.solver.core.constraints import add_hard_constraints
-from rbs.solver.core.context import CompiledProblem, PlanningContext
+from rbs.solver.core.context import CompiledProblem, ModelBuildError, PlanningContext
 from rbs.solver.core.objective import add_clinic_objective
 from rbs.solver.core.stability import add_reference_hints
+from rbs.solver.readiness import check_solve_readiness
 
 
 def compile_problem(
@@ -16,6 +17,11 @@ def compile_problem(
     *,
     reference_schedule: Schedule | None = None,
 ) -> CompiledProblem:
+    # Unallocated curriculum weeks would otherwise surface as an opaque
+    # "week N has no covering block" from inside placement.
+    readiness = check_solve_readiness(instance)
+    if not readiness.ready:
+        raise ModelBuildError("; ".join(readiness.errors))
     context = PlanningContext.compile(instance, options, cp_model)
     matching = add_hard_constraints(context)
     decisions = rotation_kinds.apply_constraints(context)

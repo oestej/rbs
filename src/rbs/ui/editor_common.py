@@ -17,13 +17,13 @@ _CONSECUTIVE_OPTIONS = {
     week: f"{week} week" if week == 1 else f"{week} weeks" for week in range(1, 7)
 }
 _CLINIC_WEEK = (
-    Weekday.SUNDAY,
     Weekday.MONDAY,
     Weekday.TUESDAY,
     Weekday.WEDNESDAY,
     Weekday.THURSDAY,
     Weekday.FRIDAY,
     Weekday.SATURDAY,
+    Weekday.SUNDAY,
 )
 _WEEKDAY_OPTIONS = {weekday.value: weekday.value.title() for weekday in _CLINIC_WEEK}
 _SESSION_OPTIONS = {

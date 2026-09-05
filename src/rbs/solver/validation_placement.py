@@ -269,8 +269,8 @@ def _validate_clinics(
             resident_id=resident_id,
         ):
             count = counts.get(rule.clinic_id, 0)
-            minimum = ceil(rule.min_fraction * total - 1e-9)
-            maximum = floor(rule.max_fraction * total + 1e-9)
+            minimum = ceil(rule.min_percent * total / 100.0 - 1e-9)
+            maximum = floor(rule.max_percent * total / 100.0 + 1e-9)
             if count < minimum:
                 errors.append(
                     f"{resident_id} has {count}/{total} clinic sessions at "

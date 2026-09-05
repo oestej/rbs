@@ -30,13 +30,11 @@ from rbs.ui.editor_common import (
     _academic_block_start_for_week,
     _academic_block_start_options,
     _as_int,
-    _as_percent,
     _as_string_list,
     _as_text,
     _clinic_capacity_range_label,
     _clinic_pgy_capacity_label,
     _default_block_duration,
-    _from_percent,
     _optional_float,
     _remove_index,
     _validation_message,
@@ -369,8 +367,7 @@ def _open_clinic_block_rules_dialog(
                         clinic_week_editor(
                             draft["clinic"],
                             academic_half_day=(
-                                instance.clinic_policy.academic.weekday,
-                                instance.clinic_policy.academic.session,
+                                instance.clinic_policy.recurring_academic_half_day
                             ),
                             site_options={
                                 site.id: site.name for site in instance.clinic_policy.sites
@@ -1228,7 +1225,7 @@ def _clinic_directory_configuration(
                     with ui.element("div").classes("rbs-clinic-metrics w-full"):
                         _clinic_metric(
                             "Target",
-                            f"{round(allocation.target_fraction * 100):g}%",
+                            f"{allocation.target_percent}%",
                         )
                         _clinic_metric("Weekly sessions", str(len(clinic.half_days)))
                         _clinic_metric(
@@ -1259,6 +1256,7 @@ def _clinic_directory_configuration(
                                 original_id=clinic.id,
                                 selected_rotation_id=selected_rotation_id,
                                 on_save=on_save,
+                                active_tab="clinic_exceptions",
                             ),
                         ).props("flat dense no-caps")
 
@@ -1277,6 +1275,7 @@ def _open_clinic_editor_dialog(
     original_id: str | None,
     selected_rotation_id: str | None,
     on_save: SaveRotation,
+    active_tab: str = "clinic_details",
 ) -> None:
     from nicegui import ui
 
@@ -1335,12 +1334,18 @@ def _open_clinic_editor_dialog(
                     label="Exceptions",
                     icon="event",
                 )
+            editor_tab_by_name = {
+                "clinic_details": details_tab,
+                "clinic_allocation": allocation_tab,
+                "clinic_capacity": capacity_tab,
+                "clinic_exceptions": exceptions_tab,
+            }
             ui.space()
             ui.button(icon="close", on_click=dialog.close).props(
                 "flat round dense aria-label='Close clinic editor'"
             )
         with (
-            ui.tab_panels(editor_tabs, value=details_tab)
+            ui.tab_panels(editor_tabs, value=editor_tab_by_name.get(active_tab, details_tab))
             .props("animated")
             .classes("rbs-clinic-editor-panels w-full flex-1 min-h-0")
         ):
@@ -1458,9 +1463,9 @@ def _clinic_owned_allocation_editor(draft: Draft, instance: SchedulerInput) -> N
             "clinic_id": draft["id"],
             "pgy": None,
             "resident_id": None,
-            "min_fraction": 0.0,
-            "target_fraction": 0.0,
-            "max_fraction": 1.0,
+            "min_percent": 0,
+            "target_percent": 0,
+            "max_percent": 100,
         }
         rules.append(overall)
 
@@ -1614,16 +1619,17 @@ def _clinic_owned_allocation_editor(draft: Draft, instance: SchedulerInput) -> N
     render_overrides()
 
 
-def _clinic_allocation_fraction_inputs(rule: Draft) -> None:
+def _clinic_allocation_percent_inputs(rule: Draft) -> None:
     from nicegui import ui
 
     with ui.row().classes("w-full items-end gap-3 flex-wrap"):
         minimum = (
             ui.number(
                 "Minimum %",
-                value=float(rule.get("min_fraction", 0)) * 100,
+                value=int(rule.get("min_percent", 0)),
                 min=0,
                 max=100,
+                precision=0,
                 step=1,
             )
             .props("outlined suffix=%")
@@ -1632,9 +1638,10 @@ def _clinic_allocation_fraction_inputs(rule: Draft) -> None:
         target = (
             ui.number(
                 "Target %",
-                value=float(rule.get("target_fraction", 0)) * 100,
+                value=int(rule.get("target_percent", 0)),
                 min=0,
                 max=100,
+                precision=0,
                 step=1,
             )
             .props("outlined suffix=%")
@@ -1643,17 +1650,21 @@ def _clinic_allocation_fraction_inputs(rule: Draft) -> None:
         maximum = (
             ui.number(
                 "Maximum %",
-                value=float(rule.get("max_fraction", 1)) * 100,
+                value=int(rule.get("max_percent", 100)),
                 min=0,
                 max=100,
+                precision=0,
                 step=1,
             )
             .props("outlined suffix=%")
             .classes("w-40")
         )
-        minimum.bind_value(rule, "min_fraction", forward=_as_percent, backward=_from_percent)
-        target.bind_value(rule, "target_fraction", forward=_as_percent, backward=_from_percent)
-        maximum.bind_value(rule, "max_fraction", forward=_as_percent, backward=_from_percent)
+        minimum.bind_value(rule, "min_percent", forward=_as_int)
+        target.bind_value(rule, "target_percent", forward=_as_int)
+        maximum.bind_value(rule, "max_percent", forward=_as_int)
+
+
+_clinic_allocation_fraction_inputs = _clinic_allocation_percent_inputs
 
 
 def _clinic_capacity_grid(draft: Draft) -> Callable[[], None]:

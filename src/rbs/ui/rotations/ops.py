@@ -19,7 +19,7 @@ from rbs.models.instance import (
     ResidentRotationOverride,
     SchedulerInput,
 )
-from rbs.models.rotation import Rotation
+from rbs.models.rotation import ROTATION_CODE_MAX_LENGTH, Rotation
 from rbs.models.schedule import Schedule
 from rbs.ui.drafts import Draft
 from rbs.ui.locks import ScheduleBlock, schedule_blocks
@@ -37,6 +37,9 @@ __all__ = [
     "replace_rotation_color",
     "replace_elective_color",
     "set_elective_eligibility",
+    "elective_slot_rotation",
+    "direct_elective_counts",
+    "set_elective_allocation",
     "add_elective_rotation",
     "replace_elective_rotation",
     "remove_elective_rotation",
@@ -132,7 +135,7 @@ def add_mandatory_rotation(
     elective_repeatable: bool = False,
     group_members_by_pgy: dict[int, list[str]] | None = None,
 ) -> SchedulerInput:
-    """Add one standard rotation and replace Elective weeks with its requirements."""
+    """Add one standard rotation, spending the level's unallocated weeks."""
     if rotation.kind is not RotationKind.STANDARD:
         raise ValueError("new Mandatory rotations must use the standard rotation kind")
     if rotation.id in instance.rotations_by_id:
@@ -169,6 +172,18 @@ def add_mandatory_rotation(
     if not requirements:
         raise ValueError("select at least one training-level requirement")
 
+    for pgy in sorted({required_pgy for required_pgy, _duration in requirements}):
+        instance = _fund_requirement(
+            instance,
+            pgy,
+            sum(
+                duration * count
+                for (required_pgy, duration), count in requirements.items()
+                if required_pgy == pgy
+            ),
+            requirement_label=rotation.name,
+        )
+
     raw = instance.model_dump(mode="json")
     raw["rotations"].append(rotation.model_dump(mode="json"))
     if eligible_as_elective:
@@ -199,13 +214,7 @@ def add_mandatory_rotation(
         added_weeks = sum(duration * count for duration, count in additions)
         if not added_weeks:
             continue
-        curriculum["blocks"] = _balance_curriculum_against_electives(
-            instance,
-            pgy,
-            list(curriculum["blocks"]),
-            delta_weeks=added_weeks,
-            requirement_label=rotation.name,
-        )
+        curriculum["blocks"] = list(curriculum["blocks"])
         curriculum["blocks"].extend(
             {
                 "rotation_id": rotation.id,
@@ -241,22 +250,12 @@ def remove_mandatory_rotation(
 
     raw = instance.model_dump(mode="json")
     for curriculum in raw["requirements"]:
-        pgy = int(curriculum["pgy"])
-        removed_direct_weeks = sum(
-            int(block["duration_weeks"]) * int(block["count"])
-            for block in curriculum["blocks"]
-            if block["rotation_id"] == rotation_id
-        )
-        blocks = [block for block in curriculum["blocks"] if block["rotation_id"] != rotation_id]
-        restored_weeks = removed_direct_weeks
-        if restored_weeks:
-            blocks = _balance_curriculum_against_electives(
-                instance,
-                pgy,
-                blocks,
-                delta_weeks=-restored_weeks,
-            )
-        curriculum["blocks"] = blocks
+        # Dropping the blocks returns their weeks to the level's unallocated
+        # pool; nothing backfills them, so the curriculum reports the gap until
+        # someone spends it.
+        curriculum["blocks"] = [
+            block for block in curriculum["blocks"] if block["rotation_id"] != rotation_id
+        ]
 
     raw["rotations"] = [
         configured for configured in raw["rotations"] if configured["id"] != rotation_id
@@ -516,6 +515,159 @@ def replace_elective_color(
     return instance.revised(rotations=rotations, electives=configuration)
 
 
+_ELECTIVE_SLOT_ID = "elective"
+_ELECTIVE_SLOT_CODE = "ELEC"
+_ELECTIVE_SLOT_NAME = "Elective"
+
+
+def elective_slot_rotation(instance: SchedulerInput) -> Rotation | None:
+    """The Elective curriculum placeholder: Elective-kind but not itself an option.
+
+    Direct Elective curriculum blocks point here. The slot marks weeks the
+    program has committed to Elective time without naming the service; the
+    solver fills each one from resident preferences at compile time, falling
+    back to Clinic. Standalone Elective services are options instead, so they
+    are excluded.
+    """
+    return next(
+        (
+            rotation
+            for rotation in instance.rotations
+            if rotation.kind is RotationKind.ELECTIVE
+            and not instance.is_elective_option(rotation.id)
+        ),
+        None,
+    )
+
+
+def direct_elective_counts(instance: SchedulerInput, pgy: int) -> dict[int, int]:
+    """Return this level's direct Elective slot counts keyed by block duration."""
+    return instance.direct_elective_block_counts_for_pgy(pgy)
+
+
+def set_elective_allocation(
+    instance: SchedulerInput,
+    pgy: int,
+    counts_by_duration: dict[int, int],
+) -> SchedulerInput:
+    """Spend or release one training level's unallocated weeks as Elective slots.
+
+    This is the only surface that authors direct Elective curriculum blocks.
+    Block sizes are chosen here, where they are a real decision, rather than
+    being forced on a program before it has configured anything.
+    """
+    known_pgys = {curriculum.pgy for curriculum in instance.requirements}
+    if pgy not in known_pgys:
+        raise ValueError(f"training level {pgy} has no configured curriculum")
+    desired: dict[int, int] = {}
+    for raw_duration, raw_count in counts_by_duration.items():
+        duration, count = int(raw_duration), int(raw_count)
+        if count < 0:
+            raise ValueError("Elective slot counts cannot be negative")
+        if not 1 <= duration <= 5:
+            raise ValueError(f"Elective block length {duration} must be 1-5 weeks")
+        if count:
+            desired[duration] = count
+
+    level_code = instance.training_level_label(pgy, compact=True)
+    current_weeks = sum(
+        duration * count for duration, count in direct_elective_counts(instance, pgy).items()
+    )
+    desired_weeks = sum(duration * count for duration, count in desired.items())
+    delta_weeks = desired_weeks - current_weeks
+    if delta_weeks > 0:
+        _require_unallocated_weeks(instance, pgy, delta_weeks, requirement_label="Elective")
+
+    raw = instance.model_dump(mode="json")
+    slot = elective_slot_rotation(instance)
+    if desired:
+        slot_id = _ensure_elective_slot_rules(raw, instance, slot, pgy, sorted(desired))
+    elif slot is None:
+        slot_id = None
+    else:
+        slot_id = slot.id
+
+    slot_ids = {
+        rotation.id
+        for rotation in instance.rotations
+        if rotation.kind is RotationKind.ELECTIVE and not instance.is_elective_option(rotation.id)
+    }
+    for curriculum in raw["requirements"]:
+        if int(curriculum["pgy"]) != pgy:
+            continue
+        blocks = [block for block in curriculum["blocks"] if block["rotation_id"] not in slot_ids]
+        if slot_id is not None:
+            blocks.extend(
+                {
+                    "rotation_id": slot_id,
+                    "duration_weeks": duration,
+                    "count": desired[duration],
+                }
+                for duration in sorted(desired)
+            )
+        curriculum["blocks"] = blocks
+        break
+    else:  # pragma: no cover - guarded by the membership check above
+        raise ValueError(f"{level_code} has no configured curriculum")
+
+    return SchedulerInput.from_payload(raw)
+
+
+def _ensure_elective_slot_rules(
+    raw: dict[str, Any],
+    instance: SchedulerInput,
+    slot: Rotation | None,
+    pgy: int,
+    durations: list[int],
+) -> str:
+    """Create or widen the Elective slot rotation so it allows these block shapes."""
+    if slot is None:
+        used = set(instance.rotations_by_id) | set(instance.special_rotations_by_id)
+        slot_id = _ELECTIVE_SLOT_ID
+        suffix = 2
+        while slot_id in used:
+            slot_id = f"{_ELECTIVE_SLOT_ID}_{suffix}"
+            suffix += 1
+        codes = {existing.code.casefold() for existing in instance.rotations}
+        code = _ELECTIVE_SLOT_CODE
+        suffix = 2
+        while code.casefold() in codes:
+            code = f"{_ELECTIVE_SLOT_CODE}{suffix}"[:ROTATION_CODE_MAX_LENGTH]
+            suffix += 1
+        raw["rotations"].append(
+            {
+                "id": slot_id,
+                "code": code,
+                "name": _ELECTIVE_SLOT_NAME,
+                "color": instance.electives.color,
+                "kind": RotationKind.ELECTIVE.value,
+                "pgy_rules": [
+                    {
+                        "pgy": pgy,
+                        "block_configs": [{"duration_weeks": d} for d in durations],
+                    }
+                ],
+                "max_consecutive_weeks": max(durations),
+            }
+        )
+        return slot_id
+
+    record = next(item for item in raw["rotations"] if item["id"] == slot.id)
+    rule = next((item for item in record["pgy_rules"] if int(item["pgy"]) == pgy), None)
+    if rule is None:
+        rule = {"pgy": pgy, "block_configs": []}
+        record["pgy_rules"].append(rule)
+    configured = {int(config["duration_weeks"]) for config in rule["block_configs"]}
+    rule["block_configs"].extend(
+        {"duration_weeks": duration} for duration in durations if duration not in configured
+    )
+    record["max_consecutive_weeks"] = max(
+        int(record.get("max_consecutive_weeks") or 1),
+        max(durations),
+    )
+    return slot.id
+
+
 def set_elective_eligibility(
     instance: SchedulerInput,
     rotation_id: str,
@@ -589,7 +741,13 @@ def add_elective_rotation(
     eligible_block_sizes: Iterable[int] | None = None,
     repeatable: bool = False,
 ) -> SchedulerInput:
-    """Add a standalone Elective service and make it eligible immediately."""
+    """Add a standalone Elective service and make it eligible immediately.
+
+    An option can only be filled by curriculum slots of a matching size, so any
+    size this service needs but the curriculum lacks is allocated here from
+    unscheduled weeks. That keeps a service and the time it can occupy in one
+    step instead of requiring the program to guess block sizes up front.
+    """
     if rotation.kind is not RotationKind.ELECTIVE:
         raise ValueError("new Elective rotations must use the elective rotation kind")
     if rotation.id in instance.rotations_by_id:
@@ -599,22 +757,22 @@ def add_elective_rotation(
     normalized = Rotation.model_validate(
         {**rotation.model_dump(mode="json"), "color": instance.electives.color}
     )
+    pgys = _normalize_elective_pgys(instance, normalized, eligible_pgys, seedable=True)
+    sizes = _normalize_elective_block_sizes(
+        instance,
+        normalized,
+        eligible_block_sizes,
+        seedable=True,
+    )
+    instance = _seed_elective_slots(instance, normalized, pgys, sizes)
     configuration = ElectiveConfiguration(
         color=instance.electives.color,
         rotation_options=[
             *instance.electives.rotation_options,
             ElectiveRotationOption(
                 rotation_id=normalized.id,
-                eligible_pgys=_normalize_elective_pgys(
-                    instance,
-                    normalized,
-                    eligible_pgys,
-                ),
-                eligible_block_sizes=_normalize_elective_block_sizes(
-                    instance,
-                    normalized,
-                    eligible_block_sizes,
-                ),
+                eligible_pgys=pgys,
+                eligible_block_sizes=sizes,
                 repeatable=repeatable,
             ),
         ],
@@ -623,6 +781,29 @@ def add_elective_rotation(
         rotations=[*instance.rotations, normalized],
         electives=configuration,
     )
+
+
+def _seed_elective_slots(
+    instance: SchedulerInput,
+    rotation: Rotation,
+    pgys: list[int],
+    sizes: list[int],
+) -> SchedulerInput:
+    """Allocate one Elective slot for every size this option can fill but lacks."""
+    for pgy in pgys:
+        existing = direct_elective_counts(instance, pgy)
+        missing = [
+            size
+            for size in sizes
+            if size not in existing and rotation.allows_duration(size, pgy=pgy)
+        ]
+        if not missing:
+            continue
+        desired = dict(existing)
+        for size in missing:
+            desired[size] = 1
+        instance = set_elective_allocation(instance, pgy, desired)
+    return instance
 
 
 def replace_elective_rotation(
@@ -731,8 +912,14 @@ def _normalize_elective_block_sizes(
     instance: SchedulerInput,
     rotation: Rotation,
     values: Iterable[int] | None,
+    *,
+    seedable: bool = False,
 ) -> list[int]:
-    """Normalize an option's sizes, defaulting to compatible curriculum shapes."""
+    """Normalize an option's sizes, defaulting to compatible curriculum shapes.
+
+    ``seedable`` callers allocate the Elective slots they need, so they fall back
+    to the shapes the service itself configures when the curriculum has none.
+    """
     if values is None:
         sizes = [
             duration
@@ -743,6 +930,14 @@ def _normalize_elective_block_sizes(
                 for curriculum in instance.requirements
             )
         ]
+        if not sizes and seedable:
+            sizes = sorted(
+                {
+                    config.duration_weeks
+                    for rule in rotation.pgy_rules
+                    for config in rule.block_configs
+                }
+            )
     else:
         sizes = sorted({int(value) for value in values})
     if not sizes:
@@ -754,8 +949,14 @@ def _normalize_elective_pgys(
     instance: SchedulerInput,
     rotation: Rotation,
     values: Iterable[int] | None,
+    *,
+    seedable: bool = False,
 ) -> list[int]:
-    """Normalize eligible levels, defaulting to compatible Elective curricula."""
+    """Normalize eligible levels, defaulting to compatible Elective curricula.
+
+    ``seedable`` callers allocate the Elective slots they need, so they fall back
+    to every level the service configures when no curriculum offers one yet.
+    """
     if values is None:
         pgys = [
             curriculum.pgy
@@ -765,6 +966,13 @@ def _normalize_elective_pgys(
                 for duration in instance.elective_block_durations_for_pgy(curriculum.pgy)
             )
         ]
+        if not pgys and seedable:
+            configured = {rule.pgy for rule in rotation.pgy_rules}
+            pgys = [
+                curriculum.pgy
+                for curriculum in instance.requirements
+                if curriculum.pgy in configured
+            ]
     else:
         pgys = sorted({int(value) for value in values})
     if not pgys:
@@ -909,7 +1117,7 @@ def _replace_required_rotation_rules(
     requirement_label: str,
     elective_configuration: ElectiveConfiguration | None = None,
 ) -> SchedulerInput:
-    """Replace required-block rules and balance curriculum changes with Electives."""
+    """Replace required-block rules, spending or freeing unallocated weeks."""
     try:
         original = instance.rotation(original_id)
     except KeyError as exc:
@@ -918,6 +1126,37 @@ def _replace_required_rotation_rules(
         raise ValueError(f"{original.name} is not a {requirement_label} rotation")
     if replacement.id != original_id or replacement.kind is not expected_kind:
         raise ValueError(f"invalid {requirement_label} block rule replacement")
+    configured_pgys = {rule.pgy: rule for rule in replacement.pgy_rules}
+
+    def desired_counts_for(pgy: int) -> dict[int, int]:
+        rule = configured_pgys.get(pgy)
+        configured_durations = (
+            {config.duration_weeks for config in rule.block_configs} if rule is not None else set()
+        )
+        return {
+            duration: max(0, int(counts.get((pgy, duration), 0)))
+            for duration in configured_durations
+        }
+
+    # Fund every growing level before the payload is built, so an Elective
+    # rebalance is part of the same edit rather than a follow-up.
+    for curriculum in instance.requirements:
+        original_required_weeks = sum(
+            block.duration_weeks * block.count
+            for block in curriculum.blocks
+            if block.rotation_id == original_id
+        )
+        desired = desired_counts_for(curriculum.pgy)
+        delta_weeks = (
+            sum(duration * count for duration, count in desired.items()) - original_required_weeks
+        )
+        instance = _fund_requirement(
+            instance,
+            curriculum.pgy,
+            delta_weeks,
+            requirement_label=requirement_label,
+        )
+
     raw = instance.model_dump(mode="json")
     if elective_configuration is not None:
         raw["electives"] = elective_configuration.model_dump(mode="json")
@@ -925,35 +1164,11 @@ def _replace_required_rotation_rules(
         replacement.model_dump(mode="json") if rotation["id"] == original_id else rotation
         for rotation in raw["rotations"]
     ]
-    configured_pgys = {rule.pgy: rule for rule in replacement.pgy_rules}
 
     for curriculum in raw["requirements"]:
         pgy = int(curriculum["pgy"])
-        original_blocks = instance.curriculum_for(pgy).blocks
-        original_required_weeks = sum(
-            block.duration_weeks * block.count
-            for block in original_blocks
-            if block.rotation_id == original_id
-        )
-        rule = configured_pgys.get(pgy)
-        configured_durations = (
-            {config.duration_weeks for config in rule.block_configs} if rule is not None else set()
-        )
-        desired_counts = {
-            duration: max(0, int(counts.get((pgy, duration), 0)))
-            for duration in configured_durations
-        }
-        desired_required_weeks = sum(duration * count for duration, count in desired_counts.items())
-        delta_weeks = desired_required_weeks - original_required_weeks
-
+        desired_counts = desired_counts_for(pgy)
         blocks = [block for block in curriculum["blocks"] if block["rotation_id"] != original_id]
-        blocks = _balance_curriculum_against_electives(
-            instance,
-            pgy,
-            blocks,
-            delta_weeks=delta_weeks,
-            requirement_label=requirement_label,
-        )
         blocks.extend(
             {
                 "rotation_id": original_id,
@@ -968,114 +1183,80 @@ def _replace_required_rotation_rules(
     return SchedulerInput.from_payload(raw)
 
 
-def _balance_curriculum_against_electives(
+def _require_unallocated_weeks(
     instance: SchedulerInput,
     pgy: int,
-    blocks: list[Draft],
+    weeks: int,
     *,
-    delta_weeks: int,
-    requirement_label: str = "Clinic",
-) -> list[Draft]:
-    """Offset a required-week change using direct Elective requirements only."""
-    if not delta_weeks:
-        return blocks
-
-    keyed_blocks = {
-        (str(block["rotation_id"]), int(block["duration_weeks"])): dict(block) for block in blocks
-    }
-    direct_electives = [
-        (key, int(block["count"]))
-        for key, block in keyed_blocks.items()
-        if instance.rotation(key[0]).kind is RotationKind.ELECTIVE
-    ]
-
-    if delta_weeks > 0:
-        adjustment = _exact_bounded_block_adjustment(
-            direct_electives,
-            delta_weeks,
+    requirement_label: str,
+) -> None:
+    """Reject a requirement the training level has no unallocated weeks for."""
+    available = instance.unallocated_weeks(pgy)
+    if weeks > available:
+        level_code = instance.training_level_label(pgy, compact=True)
+        raise ValueError(
+            f"{level_code}: {requirement_label} needs {weeks} weeks, but only "
+            f"{available} unscheduled weeks remain; free {weeks - available} more "
+            f"from {level_code}'s existing requirements first"
         )
-        if adjustment is None:
-            available = sum(duration * count for (_rotation, duration), count in direct_electives)
-            raise ValueError(
-                f"{instance.training_level_label(pgy, compact=True)}: "
-                f"{requirement_label} needs {delta_weeks} additional weeks, but "
-                f"only {available} compatible direct Elective weeks can be replaced"
-            )
-        for key, count in adjustment.items():
-            keyed_blocks[key]["count"] = int(keyed_blocks[key]["count"]) - count
-    else:
-        elective_shapes = [key for key, _count in direct_electives]
-        for rotation in instance.rotations:
-            if rotation.kind is not RotationKind.ELECTIVE:
-                continue
-            try:
-                rule = rotation.pgy_rule(pgy)
-            except KeyError:
-                continue
-            for config in rule.block_configs:
-                key = (rotation.id, config.duration_weeks)
-                if key not in elective_shapes:
-                    elective_shapes.append(key)
-        adjustment = _exact_unbounded_block_adjustment(
-            elective_shapes,
-            -delta_weeks,
+
+
+def _fund_requirement(
+    instance: SchedulerInput,
+    pgy: int,
+    weeks: int,
+    *,
+    requirement_label: str,
+) -> SchedulerInput:
+    """Make room for ``weeks`` of requirement, spending Elective time if needed.
+
+    Unscheduled weeks are spent first. A curriculum that has already allocated
+    everything falls back to its direct Elective time, which is the slack a
+    program expects a new requirement to come out of. Only when both pools are
+    too small does the edit fail.
+    """
+    if weeks <= 0:
+        return instance
+    available = instance.unallocated_weeks(pgy)
+    if weeks <= available:
+        return instance
+
+    shortfall = weeks - available
+    elective_counts = direct_elective_counts(instance, pgy)
+    elective_weeks = sum(duration * count for duration, count in elective_counts.items())
+    if shortfall > elective_weeks:
+        level_code = instance.training_level_label(pgy, compact=True)
+        raise ValueError(
+            f"{level_code}: {requirement_label} needs {weeks} weeks, but only "
+            f"{available} unscheduled and {elective_weeks} direct Elective weeks "
+            f"are available to spend"
         )
-        if adjustment is None:
-            raise ValueError(
-                f"{instance.training_level_label(pgy, compact=True)}: no configured "
-                "Elective block combination can absorb "
-                f"{-delta_weeks} restored weeks"
-            )
-        for key, count in adjustment.items():
-            if key in keyed_blocks:
-                keyed_blocks[key]["count"] = int(keyed_blocks[key]["count"]) + count
-            else:
-                keyed_blocks[key] = {
-                    "rotation_id": key[0],
-                    "duration_weeks": key[1],
-                    "count": count,
-                }
-
-    return [block for block in keyed_blocks.values() if int(block["count"]) > 0]
+    return set_elective_allocation(
+        instance,
+        pgy,
+        _repartition_elective_weeks(elective_counts, elective_weeks - shortfall),
+    )
 
 
-def _exact_bounded_block_adjustment(
-    blocks: list[tuple[tuple[str, int], int]],
-    target_weeks: int,
-) -> dict[tuple[str, int], int] | None:
-    combinations: dict[int, dict[tuple[str, int], int]] = {0: {}}
-    for key, available in blocks:
-        duration = key[1]
-        for _ in range(available):
-            for weeks, selection in sorted(combinations.items(), reverse=True):
-                updated_weeks = weeks + duration
-                if updated_weeks > target_weeks or updated_weeks in combinations:
-                    continue
-                combinations[updated_weeks] = {
-                    **selection,
-                    key: selection.get(key, 0) + 1,
-                }
-    return combinations.get(target_weeks)
+def _repartition_elective_weeks(counts: dict[int, int], target_weeks: int) -> dict[int, int]:
+    """Re-shape Elective slots to cover exactly ``target_weeks``.
 
-
-def _exact_unbounded_block_adjustment(
-    shapes: list[tuple[str, int]],
-    target_weeks: int,
-) -> dict[tuple[str, int], int] | None:
-    combinations: dict[int, dict[tuple[str, int], int]] = {0: {}}
-    for weeks in range(target_weeks + 1):
-        selection = combinations.get(weeks)
-        if selection is None:
-            continue
-        for key in shapes:
-            updated_weeks = weeks + key[1]
-            if updated_weeks > target_weeks or updated_weeks in combinations:
-                continue
-            combinations[updated_weeks] = {
-                **selection,
-                key: selection.get(key, 0) + 1,
-            }
-    return combinations.get(target_weeks)
+    Existing block sizes are reused largest-first so a program's chosen shape
+    survives wherever it divides the remaining time. Whatever is left over
+    becomes a single shorter block, which is what lets a requirement of any
+    length be funded instead of only those that happen to tile the old slots.
+    """
+    if target_weeks <= 0:
+        return {}
+    remaining = target_weeks
+    repartitioned: dict[int, int] = {}
+    for size in sorted(counts, reverse=True):
+        if remaining >= size:
+            repartitioned[size] = remaining // size
+            remaining -= size * repartitioned[size]
+    if remaining:
+        repartitioned[remaining] = repartitioned.get(remaining, 0) + 1
+    return repartitioned
 
 
 def add_manual_clinic_block(

@@ -10,6 +10,8 @@ from rbs.models.rotation import ALL_CLINIC_SITES, ClinicRule, Rotation
 from rbs.solver.planning import expand_occurrences
 from rbs.ui.clinic.ops import (
     add_clinic,
+    cancel_academic_half_day_for_week,
+    disable_academic_half_day,
     remove_academic_half_day_override,
     remove_clinic,
     replace_academic_half_day,
@@ -88,7 +90,7 @@ def test_rotation_editor_partitions_standard_and_special_rotations() -> None:
     assert {rotation.id for rotation in editable}.isdisjoint(rotation.id for rotation in special)
 
 
-def test_add_and_remove_mandatory_rotation_rebalances_elective_weeks() -> None:
+def test_add_and_remove_mandatory_rotation_moves_unscheduled_weeks() -> None:
     instance = sample_instance()
     rotation = Rotation.model_validate(
         {
@@ -105,10 +107,14 @@ def test_add_and_remove_mandatory_rotation_rebalances_elective_weeks() -> None:
         }
     )
 
+    # A fully allocated curriculum funds the new requirement from Elective time.
+    assert instance.unallocated_weeks(1) == 0
+
     added = add_mandatory_rotation(instance, rotation, {(1, 2): 1})
 
     assert added.rotation(rotation.id) == rotation
     assert added.curriculum_for(1).required_weeks() == 52
+    assert added.unallocated_weeks(1) == 0
     assert any(
         block.rotation_id == rotation.id and block.duration_weeks == 2 and block.count == 1
         for block in added.curriculum_for(1).blocks
@@ -117,12 +123,10 @@ def test_add_and_remove_mandatory_rotation_rebalances_elective_weeks() -> None:
 
     removed = remove_mandatory_rotation(added, rotation.id)
 
+    # The weeks return to the unscheduled pool rather than being backfilled.
     assert rotation.id not in removed.rotations_by_id
-    assert removed.curriculum_for(1).required_weeks() == 52
-    assert any(
-        block.rotation_id == "elective" and block.duration_weeks == 2 and block.count == 1
-        for block in removed.curriculum_for(1).blocks
-    )
+    assert removed.unallocated_weeks(1) == 2
+    assert not any(block.rotation_id == "elective" for block in removed.curriculum_for(1).blocks)
 
 
 def test_remove_mandatory_rotation_repairs_references_and_prerequisites() -> None:
@@ -168,8 +172,10 @@ def test_remove_mandatory_rotation_repairs_references_and_prerequisites() -> Non
 
     assert "night_float" not in removed.rotations_by_id
     assert "night_float" not in removed.rotation("icu").pgy_rule(1).prerequisite_rotation_ids
-    assert removed.curriculum_for(1).required_weeks() == 52
-    assert removed.curriculum_for(2).required_weeks() == 52
+    assert removed.unallocated_weeks(1) == instance.curriculum_for(1).required_weeks() - (
+        removed.curriculum_for(1).required_weeks()
+    )
+    assert removed.curriculum_for(1).required_weeks() < 52
     assert all(lock.rotation_id != "night_float" for lock in removed.locks)
     assert all(
         override.rotation_id != "night_float" and override.replaces_rotation_id != "night_float"
@@ -177,7 +183,7 @@ def test_remove_mandatory_rotation_repairs_references_and_prerequisites() -> Non
     )
 
 
-def test_add_mandatory_rotation_requires_enough_elective_time() -> None:
+def test_add_mandatory_rotation_requires_enough_unscheduled_time() -> None:
     instance = sample_instance()
     rotation = Rotation.model_validate(
         {
@@ -193,7 +199,11 @@ def test_add_mandatory_rotation_requires_enough_elective_time() -> None:
         }
     )
 
-    with pytest.raises(ValueError, match="only 2 compatible direct Elective weeks"):
+    # PGY1 is fully allocated and holds only 2 direct Elective weeks to give up.
+    with pytest.raises(
+        ValueError,
+        match="only 0 unscheduled and 2 direct Elective weeks",
+    ):
         add_mandatory_rotation(instance, rotation, {(1, 4): 1})
 
 
@@ -665,7 +675,7 @@ def test_clinic_overlay_primary_controls_share_one_row() -> None:
     assert len({element.parent_slot.parent.id for element in primary}) == 1
 
 
-def test_allowed_clinic_half_days_render_as_sunday_through_saturday_week() -> None:
+def test_allowed_clinic_half_days_render_as_monday_through_sunday_week() -> None:
     from nicegui import ui
 
     instance = sample_instance()
@@ -692,13 +702,15 @@ def test_allowed_clinic_half_days_render_as_sunday_through_saturday_week() -> No
         element._props.get("label") for element in created if element.__class__.__name__ == "Button"
     ]
     day_labels = [
-        weekday.value.title() for weekday in (Weekday.SUNDAY, *WEEKDAYS_MF, Weekday.SATURDAY)
+        weekday.value.title() for weekday in (*WEEKDAYS_MF, Weekday.SATURDAY, Weekday.SUNDAY)
     ]
     clinic_grid = next(
         element for element in created if "rbs-clinic-week-grid" in getattr(element, "_classes", [])
     )
     assert {"w-full", "min-w-0", "max-w-full"} <= set(clinic_grid._classes)
     assert all(label in labels for label in day_labels)
+    day_positions = [labels.index(label) for label in day_labels]
+    assert day_positions == sorted(day_positions), day_labels
     assert labels.count("Morning") == 7
     assert labels.count("Afternoon") == 7
     assert "Add half-day" not in button_labels
@@ -1150,6 +1162,87 @@ def test_academic_override_row_has_edit_and_delete_actions() -> None:
     assert any(getattr(element, "_text", None) == "Tuesday · Morning" for element in created)
 
 
+def test_academic_screen_offers_a_switch_to_turn_the_half_day_off() -> None:
+    from nicegui import ui
+
+    before = set(ui.context.client.elements)
+    render_rotations_tab(
+        sample_instance(),
+        selected_rotation_id=None,
+        on_select=lambda _rotation_id: None,
+        on_save=lambda _instance, _rotation_id: None,
+    )
+    created = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+
+    switches = [
+        element
+        for element in created
+        if element.__class__.__name__ == "Switch"
+        and getattr(element, "_text", None) == "Program runs a recurring academic half-day"
+    ]
+    assert len(switches) == 1
+    assert switches[0].value is True
+
+    assert any(
+        element.__class__.__name__ == "Checkbox"
+        and getattr(element, "_text", None) == "No academic half-day this week"
+        for element in created
+    )
+
+
+def test_academic_screen_reflects_a_program_that_runs_none() -> None:
+    from nicegui import ui
+
+    instance = disable_academic_half_day(
+        sample_instance().model_copy(update={"academic_half_day_overrides": []})
+    )
+    before = set(ui.context.client.elements)
+    render_rotations_tab(
+        instance,
+        selected_rotation_id=None,
+        on_select=lambda _rotation_id: None,
+        on_save=lambda _instance, _rotation_id: None,
+    )
+    created = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+
+    switch = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Switch"
+        and getattr(element, "_text", None) == "Program runs a recurring academic half-day"
+    )
+    assert switch.value is False
+
+
+def test_a_cancelled_week_renders_as_no_academic_half_day() -> None:
+    from nicegui import ui
+
+    instance = cancel_academic_half_day_for_week(sample_instance(), 12)
+    before = set(ui.context.client.elements)
+    render_rotations_tab(
+        instance,
+        selected_rotation_id=None,
+        on_select=lambda _rotation_id: None,
+        on_save=lambda _instance, _rotation_id: None,
+    )
+    created = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+
+    assert any(element._props.get("aria-label") == "Edit week 12 override" for element in created)
+    assert any(getattr(element, "_text", None) == "No academic half-day" for element in created)
+
+
 def test_academic_override_can_be_added_updated_and_removed_for_one_week() -> None:
     instance = sample_instance()
     seeded = instance.academic_half_day_overrides
@@ -1409,6 +1502,57 @@ def test_clinic_editor_is_large_and_keeps_internal_id_hidden() -> None:
         if "rbs-clinic-editor-dialog" in getattr(element, "_classes", [])
     )
     assert dialog_card._style["width"] == "calc(100vw - 48px)"
+
+
+def test_add_closure_day_opens_the_clinic_editor_on_exceptions() -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    before = set(ui.context.client.elements)
+    _open_clinic_editor_dialog(
+        instance,
+        original_id="maple",
+        selected_rotation_id=None,
+        on_save=lambda _instance, _rotation_id: None,
+    )
+    default_panels = next(
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+        and element.__class__.__name__ == "TabPanels"
+        and "rbs-clinic-editor-panels" in getattr(element, "_classes", [])
+    )
+    assert default_panels._props.get("model-value") == "clinic_details"
+
+    tab_before = set(ui.context.client.elements)
+    render_clinic_tab(
+        instance,
+        on_save=lambda _instance, _rotation_id: None,
+    )
+    add_closure = next(
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in tab_before
+        and element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Add closure day"
+    )
+    handlers = [
+        listener.handler
+        for listener in add_closure._event_listeners.values()
+        if listener.type == "click"
+    ]
+    assert len(handlers) == 1
+
+    dialog_before = set(ui.context.client.elements)
+    handlers[0](None)
+    panels = next(
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in dialog_before
+        and element.__class__.__name__ == "TabPanels"
+        and "rbs-clinic-editor-panels" in getattr(element, "_classes", [])
+    )
+    assert panels._props.get("model-value") == "clinic_exceptions"
 
 
 def test_clinic_tab_omits_redundant_title_block_and_rotation_subtitle() -> None:
@@ -1761,7 +1905,7 @@ def test_generic_editor_keeps_rotation_id_and_kind_immutable() -> None:
         replace_standard_rotation(instance, original.id, special_kind)
 
 
-def test_clinic_count_changes_always_rebalance_against_electives() -> None:
+def test_clinic_count_changes_spend_and_release_unscheduled_weeks() -> None:
     instance = sample_instance()
     clinic = instance.rotation("clinic")
     counts = {
@@ -1781,6 +1925,7 @@ def test_clinic_count_changes_always_rebalance_against_electives() -> None:
 
     pgy1 = increased.curriculum_for(1)
     assert pgy1.required_weeks() == 52
+    assert increased.unallocated_weeks(1) == 0
     assert (
         sum(
             block.count
@@ -1793,18 +1938,12 @@ def test_clinic_count_changes_always_rebalance_against_electives() -> None:
 
     counts[1, 2] -= 1
     restored = replace_clinic_block_rules(increased, clinic.id, clinic, counts)
-    assert restored.curriculum_for(1).required_weeks() == 52
-    assert (
-        sum(
-            block.count
-            for block in restored.curriculum_for(1).blocks
-            if block.rotation_id == "elective" and block.duration_weeks == 2
-        )
-        == 1
-    )
+    assert restored.curriculum_for(1).required_weeks() == 50
+    assert restored.unallocated_weeks(1) == 2
+    assert not any(block.rotation_id == "elective" for block in restored.curriculum_for(1).blocks)
 
 
-def test_fmed_pgy_rule_changes_rebalance_electives_and_preserve_service_identity() -> None:
+def test_fmed_pgy_rule_changes_spend_weeks_and_preserve_service_identity() -> None:
     instance = sample_instance()
     original = instance.rotation("fmed")
     raw = original.model_dump(mode="json")
@@ -1845,6 +1984,7 @@ def test_fmed_pgy_rule_changes_rebalance_electives_and_preserve_service_identity
     saved = updated.rotation(original.id)
 
     assert updated.curriculum_for(1).required_weeks() == 52
+    assert updated.unallocated_weeks(1) == 0
     assert saved.allows_duration(2, pgy=1)
     assert saved.block_config(1, 2).vacation.allowed
     assert saved.pgy_rule(1).earliest_start_week == 2
@@ -1868,11 +2008,9 @@ def test_fmed_pgy_rule_changes_rebalance_electives_and_preserve_service_identity
         saved,
         counts,
     )
-    assert restored.curriculum_for(1).required_weeks() == 52
-    assert any(
-        block.rotation_id == "elective" and block.duration_weeks == 2 and block.count == 1
-        for block in restored.curriculum_for(1).blocks
-    )
+    assert restored.curriculum_for(1).required_weeks() == 50
+    assert restored.unallocated_weeks(1) == 2
+    assert not any(block.rotation_id == "elective" for block in restored.curriculum_for(1).blocks)
 
 
 def test_manual_clinic_block_rejects_non_elective_replacement() -> None:

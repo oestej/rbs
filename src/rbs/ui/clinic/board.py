@@ -122,7 +122,7 @@ def half_days(
 
 def is_academic(policy: ClinicPolicy, weekday: Weekday, session: Session) -> bool:
     """Whether a slot matches the recurring program academic half-day."""
-    return weekday is policy.academic.weekday and session is policy.academic.session
+    return (weekday, session) == policy.recurring_academic_half_day
 
 
 def is_academic_week(

@@ -268,7 +268,9 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
                     f"academic half-day override week {override.week} exceeds calendar of "
                     f"{self.calendar.weeks} weeks"
                 )
-            if override.weekday is recurring_day:
+            if override.cancels_week:
+                continue
+            if recurring_day is not None and override.weekday is recurring_day:
                 raise ValueError(
                     f"academic half-day override week {override.week} must use a different "
                     "day from the recurring academic half-day"
@@ -346,7 +348,7 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
                         f"{resident.id}: clinic half-day references unknown site(s): "
                         + ", ".join(sorted(unknown_sites))
                     )
-                if (
+                if self.clinic_policy.academic_enabled and (
                     half_day.weekday is self.clinic_policy.academic.weekday
                     and half_day.session is self.clinic_policy.academic.session
                 ):
@@ -367,15 +369,23 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
     def constraint_catalog(self) -> ConstraintCatalog:
         return ConstraintCatalog.from_instance(self)
 
-    def academic_half_day_for_week(self, week: int) -> tuple[Weekday, Session]:
-        """Return the effective academic half-day for one academic week."""
+    def academic_half_day_for_week(self, week: int) -> tuple[Weekday, Session] | None:
+        """Return the effective academic half-day for one week, or None if it has none.
+
+        A program can run no academic half-day at all, and any single week can
+        cancel its own, so callers must treat the absence as ordinary.
+        """
         if not 1 <= week <= self.calendar.weeks:
             raise ValueError(f"academic week must be between 1 and {self.calendar.weeks}")
         override = self._academic_override_by_week.get(week)
         if override is not None:
+            # An override is that week's whole answer, including cancelling it.
+            if override.cancels_week:
+                return None
             return override.weekday, override.session
         academic = self.clinic_policy.academic
-        assert academic.weekday is not None and academic.session is not None
+        if academic.weekday is None or academic.session is None:
+            return None
         return academic.weekday, academic.session
 
     def is_academic_half_day(
@@ -385,8 +395,10 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
         session: Session,
     ) -> bool:
         """Whether a half-day is Academic for this specific week."""
-        academic_weekday, academic_session = self.academic_half_day_for_week(week)
-        return weekday is academic_weekday and session is academic_session
+        academic = self.academic_half_day_for_week(week)
+        if academic is None:
+            return False
+        return weekday is academic[0] and session is academic[1]
 
     def has_academic_half_day_override(self, week: int) -> bool:
         return week in self._academic_override_by_week
@@ -492,6 +504,15 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
             return self._curriculum_by_pgy[pgy]
         except KeyError:
             raise KeyError(pgy) from None
+
+    def unallocated_weeks(self, pgy: int) -> int:
+        """Calendar weeks this training level has not yet committed to a block.
+
+        Curricula are built up rather than swapped: a level starts with every
+        week unallocated and spends them on Mandatory, Clinic, and Elective
+        requirements. Solving requires this to reach zero, but editing does not.
+        """
+        return self.calendar.weeks - self.curriculum_for(pgy).required_weeks()
 
     @property
     def training_level_ids(self) -> tuple[int, ...]:

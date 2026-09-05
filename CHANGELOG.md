@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Scheduling:** Programs with no protected teaching time can turn the recurring
+  academic half-day off entirely, and individual weeks can cancel theirs to
+  record conference or holiday weeks that displace teaching.
+- **Scheduling:** Training levels show how many of their weeks are allocated and
+  how many are still unscheduled, and solving stays blocked with a per-level
+  message until every enrolled level's weeks are allocated.
+
+### Changed
+
+- **Clinic:** Allocation targets are stored as whole-number percents (0–100);
+  fractions of a percent are rejected and existing files convert automatically.
+- **Rotations:** New requirements spend each training level's unscheduled weeks
+  first, drawing on Elective time only for the remainder, with live budget
+  feedback in the editor.
+- **Clinic:** Every Clinic Block week grid now starts on Monday, matching the
+  capacity grid and schedule views.
+- **Scheduling:** Curricula may be partially built while editing; only
+  over-allocating past the calendar length is rejected.
+
+### Fixed
+
+- **Workspaces:** Renaming no longer fails with a revision conflict after
+  another save lands first, and repeat submits are harmless no-ops.
+- **Residents:** The New resident form focuses the Full name field on open.
+- **Clinic:** "Add closure day" opens the clinic editor on the Exceptions tab.
+
 ## [0.1.1] - 2026-09-05
 
 ### Changed

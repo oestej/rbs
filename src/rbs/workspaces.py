@@ -45,6 +45,19 @@ class WorkspaceController:
             expected_workspace_revision=workspace.workspace_revision,
         )
 
+    def rename_live(self, workspace_id: int, name: str) -> Workspace:
+        """Rename against the revision stored right now, not a held snapshot.
+
+        Renaming only writes the name column, so it cannot clobber scheduling
+        data. Reading the revision at call time keeps a stale dialog — or a
+        double submit — from failing with a revision conflict.
+        """
+        current = self.repository.get(workspace_id)
+        normalized = name.strip() or "Untitled"
+        if normalized == current.name:
+            return current
+        return self.rename(current, name)
+
     def delete(self, workspace: Workspace) -> None:
         self.repository.delete(
             workspace.id,

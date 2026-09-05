@@ -215,8 +215,16 @@ def test_resident_directory_owns_the_new_resident_action() -> None:
     assert "rbs-master-no-selection" in master_split._classes
 
 
-def test_new_resident_form_autofocuses_full_name_and_hides_time_off() -> None:
+def test_new_resident_form_autofocuses_full_name_and_hides_time_off(monkeypatch) -> None:
     from nicegui import ui
+    from nicegui.elements.input import Input
+
+    focus_calls: list = []
+    monkeypatch.setattr(
+        Input,
+        "run_method",
+        lambda self, name, *args, **kwargs: focus_calls.append((self, name)),
+    )
 
     instance = sample_instance()
     before = set(ui.context.client.elements)
@@ -242,9 +250,32 @@ def test_new_resident_form_autofocuses_full_name_and_hides_time_off() -> None:
     }
 
     assert full_name._props.get("autofocus") is True
+    assert (full_name, "focus") in focus_calls
     assert "Vacation and Other Days Off (single days)" not in labels
     assert "Vacation weeks" not in labels
     assert "Other days off" not in labels
+
+
+def test_edit_resident_form_does_not_request_focus(monkeypatch) -> None:
+    from nicegui.elements.input import Input
+
+    from rbs.ui.residents.tab import _resident_form
+
+    focus_calls: list = []
+    monkeypatch.setattr(
+        Input,
+        "run_method",
+        lambda self, name, *args, **kwargs: focus_calls.append((self, name)),
+    )
+
+    _resident_form(
+        sample_instance(),
+        resident=sample_instance().residents[0],
+        on_cancel=lambda: None,
+        on_save=lambda _instance, _resident_id: None,
+    )
+
+    assert focus_calls == []
 
 
 def test_selected_resident_uses_the_compact_detail_layout() -> None:
