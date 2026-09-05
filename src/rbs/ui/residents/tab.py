@@ -365,7 +365,7 @@ def _resident_form(
                 with ui.row().classes("w-full items-start gap-4"):
                     name = (
                         ui.input("Full name", value=initial_name)
-                        .props("outlined")
+                        .props("outlined autofocus" if creating else "outlined")
                         .classes("w-full md:flex-1")
                     )
                     pgy = (
@@ -378,17 +378,20 @@ def _resident_form(
                         .classes("w-full md:w-56")
                     )
 
-            with ui.column().classes("rbs-resident-form-section w-full gap-3 rounded p-4"):
-                with ui.column().classes("gap-0"):
-                    ui.label("Vacation and Other Days Off (single days)").classes(
-                        "rbs-type-section-title"
-                    )
-                    ui.label("Add whole vacation weeks or individual full days away.").classes(
-                        "rbs-type-caption rbs-text-muted"
-                    )
-                vacation_weeks = _vacation_week_editor(instance, initial_vacations)
-                ui.separator()
-                days_off = _days_off_editor(instance, initial_days_off)
+            vacation_weeks = initial_vacations
+            days_off = initial_days_off
+            if not creating:
+                with ui.column().classes("rbs-resident-form-section w-full gap-3 rounded p-4"):
+                    with ui.column().classes("gap-0"):
+                        ui.label("Vacation and Other Days Off (single days)").classes(
+                            "rbs-type-section-title"
+                        )
+                        ui.label("Add whole vacation weeks or individual full days away.").classes(
+                            "rbs-type-caption rbs-text-muted"
+                        )
+                    vacation_weeks = _vacation_week_editor(instance, initial_vacations)
+                    ui.separator()
+                    days_off = _days_off_editor(instance, initial_days_off)
 
             with ui.column().classes("rbs-resident-form-section w-full gap-3 rounded p-4"):
                 with ui.column().classes("gap-0"):

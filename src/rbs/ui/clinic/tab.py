@@ -1350,31 +1350,25 @@ def _open_clinic_editor_dialog(
                         with ui.column().classes("gap-1"):
                             ui.label("Clinic details").classes("rbs-type-section-title")
                             ui.label(
-                                "Set the user-facing name and choose from the institutional "
-                                "palette defined in Workspace Settings → Colors."
+                                "Set the user-facing name, then choose an institutional "
+                                "palette color or enter a custom hex value."
                             ).classes("rbs-type-caption rbs-text-muted")
-                        color_options = list(instance.color_scheme.palette)
-                        current_color = str(draft["color"]).upper()
-                        if current_color not in color_options:
-                            color_options.append(current_color)
                         with ui.row().classes("w-full items-end gap-4 flex-wrap"):
                             name = (
                                 ui.input("Clinic name", value=str(draft["name"]))
                                 .props("outlined")
                                 .classes("min-w-72 flex-1")
                             )
-                            color = (
-                                ui.select(
-                                    color_options,
-                                    value=current_color,
+                            with ui.column().classes("w-full sm:w-72"):
+                                rotation_color_palette(
+                                    draft,
+                                    instance.color_scheme.palette,
                                     label="Schedule color",
+                                    compact=True,
+                                    allow_custom=True,
                                 )
-                                .props("outlined dense options-dense")
-                                .classes("rbs-clinic-color-select w-full sm:w-72")
-                            )
 
                         name.bind_value(draft, "name", forward=_as_text)
-                        color.bind_value(draft, "color", forward=_as_text)
 
             with ui.tab_panel(allocation_tab).classes("h-full p-0"):
                 with ui.scroll_area().classes("h-full w-full"):
