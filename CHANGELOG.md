@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-05
+
 ### Added
 
 - **Scheduling:** Programs with no protected teaching time can turn the recurring
@@ -57,6 +59,7 @@
 - **Releases:** Download a macOS disk image built from the tagged commit, with
   that release's changelog section as its published description.
 
-[Unreleased]: https://github.com/oestej/rbs/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/oestej/rbs/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/oestej/rbs/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/oestej/rbs/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/oestej/rbs/releases/tag/v0.1.0
