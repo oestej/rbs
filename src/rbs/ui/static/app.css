@@ -1173,6 +1173,11 @@
   max-width: 420px;
 }
 
+.rbs-rotation-color-custom {
+  padding-top: var(--rbs-space-3);
+  border-top: 1px solid var(--rbs-border-subtle);
+}
+
 .q-btn.rbs-rotation-color-choice {
   width: 36px;
   min-width: 36px !important;

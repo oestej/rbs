@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 from functools import partial
 
 from rbs.models.clinic import ALL_CLINIC_SITES
-from rbs.models.color_scheme import contrasting_text_color
+from rbs.models.color_scheme import contrasting_text_color, normalize_hex_color
 from rbs.models.enums import RotationKind, Session, Weekday
 from rbs.models.instance import SchedulerInput
 from rbs.ui.drafts import Draft
@@ -34,22 +34,24 @@ def rotation_color_palette(
     on_change: Callable[[str], None] | None = None,
     label: str = "Block schedule color",
     compact: bool = False,
+    allow_custom: bool = False,
 ) -> None:
-    """Render the schedule-color chooser from the workspace's saved scheme."""
+    """Render a schedule-color chooser with palette swatches and optional hex entry."""
     from nicegui import ui
 
-    options = list(palette)
+    palette_colors = list(dict.fromkeys(str(color).upper() for color in palette))
     current = str(draft.get("color") or "").upper()
-    if current and current not in options:
-        options.append(current)
+    if current and current not in palette_colors:
+        palette_colors.append(current)
     container = ui.column().classes(
         "rbs-rotation-color-palette" + (" is-compact" if compact else "") + " w-full gap-2"
     )
 
     def choose(color: str) -> None:
-        draft["color"] = color
+        normalized = normalize_hex_color(color)
+        draft["color"] = normalized
         if on_change is not None:
-            on_change(color)
+            on_change(normalized)
         else:
             render()
 
@@ -59,7 +61,7 @@ def rotation_color_palette(
 
         def color_choices() -> None:
             with ui.row().classes("w-full items-center gap-2 flex-wrap"):
-                for color in options:
+                for color in palette_colors:
                     is_selected = color == selected
                     button = (
                         ui.button(
@@ -96,8 +98,47 @@ def rotation_color_palette(
                         ui.label(label).classes("rbs-type-control-label")
                         ui.label(selected).classes("rbs-type-caption rbs-text-muted")
                     with ui.button("Change", icon="palette").props("outline dense no-caps"):
-                        with ui.menu().classes("rbs-rotation-color-menu p-3"):
+                        with ui.menu() as menu:
+                            menu.classes("rbs-rotation-color-menu p-3")
                             color_choices()
+                            if allow_custom:
+                                with ui.column().classes("rbs-rotation-color-custom w-full gap-2"):
+                                    ui.label("Custom color").classes("rbs-type-control-label")
+                                    with ui.row().classes("w-full items-start gap-2 flex-nowrap"):
+                                        custom = (
+                                            ui.input(
+                                                "Custom hex",
+                                                value=selected,
+                                                placeholder="#2B6F8A",
+                                            )
+                                            .props("outlined dense maxlength=7")
+                                            .classes("min-w-0 flex-1")
+                                        )
+
+                                        def apply_custom() -> None:
+                                            raw = str(custom.value or "").strip()
+                                            candidate = raw if raw.startswith("#") else f"#{raw}"
+                                            try:
+                                                normalized = normalize_hex_color(candidate)
+                                            except ValueError:
+                                                status.set_text(
+                                                    "Enter six hex digits, such as #2B6F8A."
+                                                )
+                                                return
+                                            menu.close()
+                                            choose(normalized)
+
+                                        ui.button(
+                                            "Apply",
+                                            icon="check",
+                                            on_click=apply_custom,
+                                        ).props("unelevated dense no-caps")
+                                    status = (
+                                        ui.label()
+                                        .props("role=alert")
+                                        .classes("rbs-type-caption rbs-text-danger")
+                                    )
+                                    custom.on("keydown.enter", apply_custom)
             else:
                 ui.label(label).classes("rbs-type-control-label")
                 color_choices()

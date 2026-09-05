@@ -33,7 +33,7 @@ from rbs.ui.residents.ops import (
     vacation_week_for_monday,
 )
 from rbs.ui.residents.schedule import _resident_schedule_workspace
-from rbs.ui.residents.tab import _resident_view, render_residents_tab
+from rbs.ui.residents.tab import NEW_RESIDENT_ID, _resident_view, render_residents_tab
 
 
 def test_elective_preferences_preserve_order_duplicates_and_prune_incompatible() -> None:
@@ -213,6 +213,38 @@ def test_resident_directory_owns_the_new_resident_action() -> None:
     assert "items-stretch" in master_split._classes
     assert "items-start" not in master_split._classes
     assert "rbs-master-no-selection" in master_split._classes
+
+
+def test_new_resident_form_autofocuses_full_name_and_hides_time_off() -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    before = set(ui.context.client.elements)
+
+    render_residents_tab(
+        instance,
+        selected_resident_id=NEW_RESIDENT_ID,
+        on_select=lambda _resident_id: None,
+        on_save=lambda _instance, _resident_id: None,
+    )
+
+    full_name = next(
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+        and element.__class__.__name__ == "Input"
+        and element._props.get("label") == "Full name"
+    )
+    labels = {
+        getattr(element, "_text", None)
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    }
+
+    assert full_name._props.get("autofocus") is True
+    assert "Vacation and Other Days Off (single days)" not in labels
+    assert "Vacation weeks" not in labels
+    assert "Other days off" not in labels
 
 
 def test_selected_resident_uses_the_compact_detail_layout() -> None:
