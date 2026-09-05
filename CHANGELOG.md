@@ -5,6 +5,7 @@
 ### Changed
 
 - **Desktop:** Opening the macOS disk image now shows a drag-to-Applications installer window, with the application on the left and Applications on the right.
+- **Rotations:** New workspaces now include default FMED/Inpatient and Clinic block rotations, which cannot be added from the Mandatory editor.
 
 ## [0.1.0] - 2026-09-03
 
