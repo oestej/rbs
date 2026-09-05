@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from rbs.catalog import sample_instance
+from rbs.catalog import blank_instance, sample_instance
 from rbs.models.enums import WEEKDAYS_MF, RotationKind, Session, Weekday
 from rbs.models.rotation import ALL_CLINIC_SITES, ClinicRule, Rotation
 from rbs.solver.planning import expand_occurrences
@@ -872,6 +872,60 @@ def test_fmed_tab_starts_directly_with_its_rotation_cards() -> None:
     assert "Dedicated FMED configuration" not in text
     assert "Dedicated configuration" not in text
     assert instance.rotation("fmed").name in text
+    assert any(
+        element.__class__.__name__ == "Button" and element._props.get("label") == "Edit rules"
+        for element in created
+    )
+
+
+def test_blank_workspace_fmed_tab_shows_the_default_inpatient_rotation() -> None:
+    from nicegui import ui
+
+    instance = blank_instance()
+    before = set(ui.context.client.elements)
+
+    render_rotations_tab(
+        instance,
+        selected_rotation_id=None,
+        on_select=lambda _rotation_id: None,
+        on_save=lambda _instance, _rotation_id: None,
+        active_section="fmed_configuration",
+    )
+
+    created = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+    text = {getattr(element, "_text", None) for element in created}
+    assert instance.rotation("fmed").name in text
+    assert "No configuration found" not in text
+    assert "Import a constraint catalog containing this rotation type." not in text
+    assert any(
+        element.__class__.__name__ == "Button" and element._props.get("label") == "Edit rules"
+        for element in created
+    )
+
+
+def test_blank_workspace_clinic_tab_shows_the_default_block_rotation() -> None:
+    from nicegui import ui
+
+    instance = blank_instance()
+    before = set(ui.context.client.elements)
+
+    render_clinic_tab(
+        instance,
+        on_save=lambda _instance, _rotation_id: None,
+        active_section="clinic_block_rules",
+    )
+
+    created = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+    text = {getattr(element, "_text", None) for element in created}
+    assert "No Clinic block rotation is configured." not in text
     assert any(
         element.__class__.__name__ == "Button" and element._props.get("label") == "Edit rules"
         for element in created
