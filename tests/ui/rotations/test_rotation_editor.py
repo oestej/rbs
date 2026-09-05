@@ -584,6 +584,46 @@ def test_rotation_palette_uses_the_workspace_scheme() -> None:
     assert "Select from the institutional palette defined in Settings → Colors." not in text
 
 
+def test_compact_rotation_palette_accepts_a_custom_hex_color() -> None:
+    from nicegui import ui
+
+    draft = {"color": "#123A67"}
+    before = set(ui.context.client.elements)
+
+    rotation_color_palette(
+        draft,
+        ("#123A67", "#EAAA00"),
+        compact=True,
+        allow_custom=True,
+    )
+    created = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+    custom = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Input" and element._props.get("label") == "Custom hex"
+    )
+    apply = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Button" and element._props.get("label") == "Apply"
+    )
+    status = next(element for element in created if element._props.get("role") == "alert")
+
+    custom.set_value("#123")
+    next(iter(apply._event_listeners.values())).handler(None)
+    assert draft["color"] == "#123A67"
+    assert status._text == "Enter six hex digits, such as #2B6F8A."
+
+    custom.set_value("123abc")
+    next(iter(apply._event_listeners.values())).handler(None)
+
+    assert draft["color"] == "#123ABC"
+
+
 def test_standard_rotation_header_omits_redundant_kind_label() -> None:
     assert _rotation_kind_label(sample_instance().rotation("sports_med")) is None
 
@@ -1262,15 +1302,31 @@ def test_clinic_editor_is_large_and_keeps_internal_id_hidden() -> None:
         and "rbs-clinic-editor-tabs" in getattr(element, "_classes", [])
     )
     assert tab_bar._props.get("inline-label") is True
-    assert not any(element.__class__.__name__ == "ColorInput" for element in created)
-    clinic_color = next(
+    assert not any(
         element
         for element in created
         if element.__class__.__name__ == "Select"
         and element._props.get("label") == "Schedule color"
     )
-    assert clinic_color.value == "#6D6BC2"
-    assert len(clinic_color.options) == len(instance.color_scheme.palette)
+    color_choices = [
+        element
+        for element in created
+        if element.__class__.__name__ == "Button"
+        and "rbs-rotation-color-choice" in element._classes
+    ]
+    current_swatch = next(
+        element
+        for element in created
+        if "rbs-rotation-color-swatch-large" in getattr(element, "_classes", [])
+    )
+    custom_color = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Input" and element._props.get("label") == "Custom hex"
+    )
+    assert len(color_choices) == len(instance.color_scheme.palette)
+    assert current_swatch._style["--rbs-rotation-choice-color"] == "#6D6BC2"
+    assert custom_color.value == "#6D6BC2"
     assert any(getattr(element, "_text", None) == "Saturday" for element in created)
     assert any(getattr(element, "_text", None) == "Sunday" for element in created)
     assert any(
