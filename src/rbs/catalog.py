@@ -16,15 +16,17 @@ from rbs.academic_year import (
 )
 from rbs.models.catalog import ConstraintCatalog
 from rbs.models.clinic import (
+    ALL_CLINIC_SITES,
     ClinicAllocationRule,
     ClinicPolicy,
+    ClinicRule,
     ClinicSiteConfig,
     ClinicSlot,
 )
 from rbs.models.color_scheme import DEFAULT_COLOR_SCHEME
 from rbs.models.curriculum import PGYCurriculum
 from rbs.models.elective import ElectiveConfiguration
-from rbs.models.enums import RotationKind, Session, Weekday
+from rbs.models.enums import WEEKDAYS_MF, RotationKind, Session, Weekday
 from rbs.models.instance import (
     AcademicHalfDayOverride,
     Calendar,
@@ -33,7 +35,12 @@ from rbs.models.instance import (
 )
 from rbs.models.locks import LockedPlacement
 from rbs.models.resident import ElectivePreferenceRequest, Resident
-from rbs.models.rotation import Rotation
+from rbs.models.rotation import (
+    PGYRotationRule,
+    Rotation,
+    RotationBlockConfig,
+    VacationRule,
+)
 from rbs.models.special import SpecialRotation, SpecialRotationKind
 
 
@@ -195,9 +202,101 @@ def sample_academic_overrides() -> list[AcademicHalfDayOverride]:
 SAMPLE_ACADEMIC_YEAR = "2026-2027"
 
 
+def _default_fmed_rotation(
+    *,
+    training_level_ids: tuple[int, ...],
+    academic: ClinicSlot,
+    color: str,
+) -> Rotation:
+    """Seed the dedicated inpatient service that cannot be created from Mandatory.
+
+    FMED/Inpatient uses a purpose-built editor and cannot be added as a
+    Mandatory rotation, so every new workspace needs this rotation present.
+    """
+    return Rotation(
+        id="fmed",
+        code="FMED",
+        name="Inpatient",
+        color=color,
+        kind=RotationKind.FMED,
+        pgy_rules=[
+            PGYRotationRule(
+                pgy=pgy,
+                block_configs=[RotationBlockConfig(duration_weeks=4)],
+            )
+            for pgy in training_level_ids
+        ],
+        clinic=ClinicRule(
+            half_days_per_week=1,
+            slots=[
+                ClinicSlot(
+                    weekday=weekday,
+                    session=Session.AFTERNOON,
+                    sites=[ALL_CLINIC_SITES],
+                )
+                for weekday in WEEKDAYS_MF
+                if weekday is not academic.weekday
+            ],
+            max_concurrent=1,
+        ),
+        max_consecutive_weeks=4,
+    )
+
+
+def _default_clinic_rotation(
+    *,
+    training_level_ids: tuple[int, ...],
+    color: str,
+) -> Rotation:
+    """Seed the dedicated Clinic block that cannot be created from Mandatory.
+
+    Clinic blocks use a purpose-built editor and cannot be added as a
+    Mandatory rotation, so every new workspace needs this rotation present.
+    """
+    return Rotation(
+        id="clinic",
+        code="CLINIC",
+        name="Clinic",
+        color=color,
+        kind=RotationKind.CLINIC,
+        pgy_rules=[
+            PGYRotationRule(
+                pgy=pgy,
+                block_configs=[
+                    RotationBlockConfig(
+                        duration_weeks=2,
+                        vacation=VacationRule(allowed=True),
+                    )
+                ],
+            )
+            for pgy in training_level_ids
+        ],
+        clinic=ClinicRule(
+            half_days_per_week=1,
+            slots=[
+                ClinicSlot(
+                    weekday=weekday,
+                    session=session,
+                    sites=[ALL_CLINIC_SITES],
+                )
+                for weekday in WEEKDAYS_MF
+                for session in Session
+            ],
+            admin_half_days_per_week=1,
+        ),
+        max_consecutive_weeks=6,
+    )
+
+
 def blank_instance(*, academic_year: str = SAMPLE_ACADEMIC_YEAR) -> SchedulerInput:
     """Create an editable workspace without bundled demonstration data."""
     first_week_start = first_week_start_for_academic_year(academic_year)
+    academic = ClinicSlot(
+        weekday=Weekday.WEDNESDAY,
+        session=Session.AFTERNOON,
+    )
+    requirements = [PGYCurriculum(pgy=1, code="PGY1", label="PGY 1")]
+    training_level_ids = tuple(item.pgy for item in requirements)
     return SchedulerInput(
         academic_year=academic_year,
         calendar=Calendar(
@@ -206,8 +305,18 @@ def blank_instance(*, academic_year: str = SAMPLE_ACADEMIC_YEAR) -> SchedulerInp
             block_start_alignment=1,
         ),
         residents=[],
-        rotations=[],
-        requirements=[PGYCurriculum(pgy=1, code="PGY1", label="PGY 1")],
+        rotations=[
+            _default_clinic_rotation(
+                training_level_ids=training_level_ids,
+                color=DEFAULT_COLOR_SCHEME.accents[4].color,
+            ),
+            _default_fmed_rotation(
+                training_level_ids=training_level_ids,
+                academic=academic,
+                color=DEFAULT_COLOR_SCHEME.secondary.color,
+            ),
+        ],
+        requirements=requirements,
         rotation_groups=[],
         electives=ElectiveConfiguration(),
         clinic_policy=ClinicPolicy(
@@ -227,10 +336,7 @@ def blank_instance(*, academic_year: str = SAMPLE_ACADEMIC_YEAR) -> SchedulerInp
                     max_fraction=1.0,
                 )
             ],
-            academic=ClinicSlot(
-                weekday=Weekday.WEDNESDAY,
-                session=Session.AFTERNOON,
-            ),
+            academic=academic,
         ),
         solver=SolverConfig(),
     )

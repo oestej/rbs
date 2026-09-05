@@ -21,6 +21,7 @@ from rbs.desktop.documents import (
 )
 from rbs.desktop.recovery import allocate_recovery_path
 from rbs.desktop.settings import DesktopSettingsFile
+from rbs.models.enums import RotationKind
 from rbs.models.instance import SchedulerInput
 from rbs.store import DownloadState, Store
 from rbs.ui.host import LocalHost
@@ -509,7 +510,9 @@ def test_new_document_replaces_the_workspace_and_advances_generation(tmp_path) -
 
     assert workspace.name == "Untitled"
     assert workspace.instance.residents == []
-    assert workspace.instance.rotations == []
+    assert [rotation.id for rotation in workspace.instance.rotations] == ["clinic", "fmed"]
+    assert workspace.instance.rotation("clinic").kind is RotationKind.CLINIC
+    assert workspace.instance.rotation("fmed").kind is RotationKind.FMED
     assert [item.id for item in store.list()] == [workspace.id]
     assert controller.path is None
     assert controller.dirty

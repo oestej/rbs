@@ -815,7 +815,33 @@ def test_blank_instance_has_only_editable_workspace_scaffolding() -> None:
 
     assert instance.academic_year == "2032-2033"
     assert instance.residents == []
-    assert instance.rotations == []
+    assert [rotation.id for rotation in instance.rotations] == ["clinic", "fmed"]
+    clinic = instance.rotation("clinic")
+    assert clinic.kind is RotationKind.CLINIC
+    assert clinic.code == "CLINIC"
+    assert clinic.name == "Clinic"
+    assert clinic.requires_dedicated_configuration
+    assert [rule.pgy for rule in clinic.pgy_rules] == [1]
+    assert clinic.allows_duration(2, pgy=1)
+    assert clinic.clinic is not None
+    assert clinic.clinic.half_days_per_week == 1
+    assert clinic.clinic.admin_half_days_per_week == 1
+    assert clinic.color == DEFAULT_COLOR_SCHEME.accents[4].color
+    fmed = instance.rotation("fmed")
+    assert fmed.kind is RotationKind.FMED
+    assert fmed.code == "FMED"
+    assert fmed.name == "Inpatient"
+    assert fmed.requires_dedicated_configuration
+    assert [rule.pgy for rule in fmed.pgy_rules] == [1]
+    assert fmed.allows_duration(4, pgy=1)
+    assert fmed.clinic is not None
+    assert fmed.clinic.max_concurrent == 1
+    assert fmed.clinic.half_days_per_week == 1
+    assert all(
+        slot.weekday is not instance.clinic_policy.academic.weekday
+        for slot in fmed.clinic.expanded_slots()
+    )
+    assert fmed.color == DEFAULT_COLOR_SCHEME.secondary.color
     assert instance.rotation_groups == []
     assert instance.electives.rotation_options == []
     assert len(instance.requirements) == 1
