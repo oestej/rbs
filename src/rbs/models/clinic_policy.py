@@ -128,9 +128,9 @@ class ClinicPolicy(StrictModel):
                         "clinic_id": site_id,
                         "pgy": None,
                         "resident_id": None,
-                        "min_fraction": 0.0,
-                        "target_fraction": 0.0,
-                        "max_fraction": 1.0,
+                        "min_percent": 0,
+                        "target_percent": 0,
+                        "max_percent": 100,
                     }
                 )
         raw_rules = [rule for rules in grouped_rules.values() for rule in rules]
@@ -189,8 +189,11 @@ class ClinicPolicy(StrictModel):
 
     @model_validator(mode="after")
     def validate_policy(self) -> ClinicPolicy:
-        if self.academic.weekday is None or self.academic.session is None:
-            raise ValueError("academic half day must select a day and session")
+        if (self.academic.weekday is None) != (self.academic.session is None):
+            raise ValueError(
+                "academic half day must select both a day and a session, or neither "
+                "to run no academic half-day"
+            )
         ids = [site.id for site in self.sites]
         if len(ids) != len(set(ids)):
             raise ValueError("clinic site IDs must be unique")
@@ -323,7 +326,24 @@ class ClinicPolicy(StrictModel):
         closed = set(self.closed_site_ids(calendar_day))
         return [site_id for site_id in resolved if site_id not in closed]
 
+    @property
+    def academic_enabled(self) -> bool:
+        """Whether the program runs a recurring academic half-day at all."""
+        return self.academic.weekday is not None and self.academic.session is not None
+
+    @property
+    def recurring_academic_half_day(self) -> tuple[Weekday, Session] | None:
+        """The program-wide academic half-day, or None where it runs none."""
+        if not self.academic_enabled:
+            return None
+        assert self.academic.weekday is not None and self.academic.session is not None
+        return self.academic.weekday, self.academic.session
+
     def is_academic(self, slot: ClinicSlot) -> bool:
+        # A disabled academic half-day is stored as an empty slot, which would
+        # otherwise compare equal to a wildcard clinic slot.
+        if not self.academic_enabled:
+            return False
         return slot.weekday is self.academic.weekday and slot.session is self.academic.session
 
     def max_capacity(

@@ -438,10 +438,7 @@ def _elective_rotation_editor(
     size_draft: Draft = {
         "eligible_block_sizes": list(instance.eligible_elective_block_sizes(rotation.id)),
     }
-    academic_half_day = (
-        instance.clinic_policy.academic.weekday,
-        instance.clinic_policy.academic.session,
-    )
+    academic_half_day = instance.clinic_policy.recurring_academic_half_day
     site_options = {site.id: site.name for site in instance.clinic_policy.sites}
     default_site_ids = list(instance.clinic_policy.site_ids)
     clinic_editor = None
@@ -593,10 +590,7 @@ def _open_elective_rotation_dialog(
     elective_size_draft: Draft = {
         "eligible_block_sizes": list(configured_elective_sizes),
     }
-    academic_half_day = (
-        instance.clinic_policy.academic.weekday,
-        instance.clinic_policy.academic.session,
-    )
+    academic_half_day = instance.clinic_policy.recurring_academic_half_day
     site_options = {site.id: site.name for site in instance.clinic_policy.sites}
     default_site_ids = list(instance.clinic_policy.site_ids)
     clinic_editor = None

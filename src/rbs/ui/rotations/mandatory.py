@@ -28,13 +28,13 @@ from rbs.ui.editor_common import (
     _validation_message,
 )
 from rbs.ui.rotations.forms import (
-    _direct_elective_weeks,
     _mandatory_elective_availability,
     _rotation_detail_contents,
     _rotation_editor,
 )
 from rbs.ui.rotations.ops import (
     add_mandatory_rotation,
+    direct_elective_counts,
     next_mandatory_rotation_id,
     remove_mandatory_rotation,
 )
@@ -109,6 +109,26 @@ def _rotation_detail_panel(
     render_panel()
 
 
+def _spendable_weeks(instance: SchedulerInput, pgy: int) -> int:
+    """Weeks this level can fund a new requirement with.
+
+    Unscheduled time is spent first, then direct Elective time, which is the
+    slack a program expects a new requirement to displace.
+    """
+    return instance.unallocated_weeks(pgy) + sum(
+        duration * count
+        for duration, count in direct_elective_counts(instance, pgy).items()
+    )
+
+
+def _budget_label(unscheduled: int, available: int) -> str:
+    """Describe what is left, naming Elective time only when it is in play."""
+    elective = available - unscheduled
+    if not elective:
+        return f"{unscheduled} unscheduled"
+    return f"{unscheduled} unscheduled · {elective} Elective"
+
+
 def _new_mandatory_rotation_form(
     instance: SchedulerInput,
     *,
@@ -122,7 +142,7 @@ def _new_mandatory_rotation_form(
         (
             curriculum.pgy
             for curriculum in instance.requirements
-            if _direct_elective_weeks(instance, curriculum.pgy)
+            if _spendable_weeks(instance, curriculum.pgy)
         ),
         None,
     )
@@ -176,11 +196,12 @@ def _new_mandatory_rotation_form(
                 with ui.column().classes("gap-0"):
                     ui.label("Training-level requirements").classes("rbs-type-section-title")
                     ui.label(
-                        "Required blocks replace the same total number of direct Elective "
-                        "weeks so every curriculum remains complete."
+                        "Required blocks spend each training level's unscheduled weeks. "
+                        "Whatever is left stays unscheduled until it is allocated."
                     ).classes("rbs-type-caption rbs-text-muted")
                 for pgy, requirement in requirements.items():
-                    available_weeks = _direct_elective_weeks(instance, pgy)
+                    unscheduled_weeks = instance.unallocated_weeks(pgy)
+                    available_weeks = _spendable_weeks(instance, pgy)
                     with (
                         ui.card()
                         .props("flat bordered")
@@ -191,11 +212,7 @@ def _new_mandatory_rotation_form(
                                 f"Required for {instance.training_level_name(pgy)}",
                                 value=bool(requirement["enabled"]),
                             )
-                            ui.label(
-                                f"{available_weeks} direct Elective weeks available"
-                                if available_weeks
-                                else "No direct Elective weeks available"
-                            ).classes("rbs-type-caption rbs-text-muted")
+                            budget = ui.label().classes("rbs-type-caption rbs-text-muted")
                         with ui.row().classes("w-full items-end gap-3"):
                             duration = (
                                 ui.select(
@@ -229,18 +246,62 @@ def _new_mandatory_rotation_form(
                         )
                         count.bind_value(requirement, "count", forward=_as_int)
 
+                        def refresh_budget(
+                            _event=None,
+                            *,
+                            requirement: Draft = requirement,
+                            available_weeks: int = available_weeks,
+                            unscheduled_weeks: int = unscheduled_weeks,
+                            budget=budget,
+                        ) -> None:
+                            # The requirement is sized here, so what fits has to
+                            # be recomputed as block length and count change.
+                            if not available_weeks:
+                                budget.set_text("No weeks available to allocate")
+                                budget.classes(remove="rbs-text-danger")
+                                return
+                            requested = int(requirement["duration_weeks"]) * int(
+                                requirement["count"]
+                            )
+                            if requirement["enabled"] and requested > available_weeks:
+                                budget.set_text(
+                                    f"{requested} weeks requested, only "
+                                    f"{available_weeks} available"
+                                )
+                                budget.classes(add="rbs-text-danger")
+                                return
+                            budget.classes(remove="rbs-text-danger")
+                            if not requirement["enabled"]:
+                                budget.set_text(_budget_label(unscheduled_weeks, available_weeks))
+                                return
+                            # Unscheduled weeks are spent first; the rest comes
+                            # out of this level's Elective time.
+                            from_elective = max(0, requested - unscheduled_weeks)
+                            budget.set_text(
+                                _budget_label(
+                                    unscheduled_weeks - min(requested, unscheduled_weeks),
+                                    available_weeks - requested,
+                                )
+                                + (f" · {from_elective} from Elective" if from_elective else "")
+                            )
+
                         def toggle_requirement(
                             event,
                             *,
                             requirement: Draft = requirement,
                             duration=duration,
                             count=count,
+                            refresh_budget=refresh_budget,
                         ) -> None:
                             requirement["enabled"] = bool(event.value)
                             duration.set_enabled(bool(event.value))
                             count.set_enabled(bool(event.value))
+                            refresh_budget()
 
                         enabled.on_value_change(toggle_requirement)
+                        duration.on_value_change(refresh_budget)
+                        count.on_value_change(refresh_budget)
+                        refresh_budget()
 
             ui.label(
                 "The new rotation starts with no continuity clinic. Staffing, placement, "

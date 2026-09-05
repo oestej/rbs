@@ -98,10 +98,7 @@ def _rotation_editor(
         ),
         "repeatable": bool(elective_option and elective_option.repeatable),
     }
-    academic_half_day = (
-        instance.clinic_policy.academic.weekday,
-        instance.clinic_policy.academic.session,
-    )
+    academic_half_day = instance.clinic_policy.recurring_academic_half_day
     site_options = {site.id: site.name for site in instance.clinic_policy.sites}
     default_site_ids = list(instance.clinic_policy.site_ids)
     resident_override_drafts = [

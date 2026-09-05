@@ -125,15 +125,15 @@ def test_catalog_schema_rejects_curriculum_choice_groups() -> None:
         ConstraintCatalog.model_validate(raw)
 
 
-def test_pre_v5_catalogs_are_rejected() -> None:
+def test_pre_v6_catalogs_are_rejected() -> None:
     raw = bootstrap_catalog().model_dump(mode="json")
-    raw["schema_version"] = 3
+    raw["schema_version"] = 4
 
-    with pytest.raises(ValidationError, match="Input should be 5"):
+    with pytest.raises(ValidationError, match="Input should be 6"):
         ConstraintCatalog.model_validate(raw)
 
-    raw["schema_version"] = 4
-    with pytest.raises(ValidationError, match="Input should be 5"):
+    raw["schema_version"] = 5
+    with pytest.raises(ValidationError, match="Input should be 6"):
         ConstraintCatalog.model_validate(raw)
 
 
@@ -151,7 +151,7 @@ def test_instance_catalog_projection_preserves_explicit_elective_policy() -> Non
     catalog = instance.constraint_catalog()
     option = catalog.electives.option_for("night_float")
 
-    assert catalog.schema_version == 5
+    assert catalog.schema_version == 6
     assert option is not None
     assert option.eligible_pgys == [2]
     assert not option.repeatable

@@ -2126,10 +2126,8 @@ def _resident_clinic_half_day_editor(
             for weekday in weekdays
             for session in sessions
             if (weekday, session) not in existing
-            and not (
-                Weekday(weekday) is instance.clinic_policy.academic.weekday
-                and Session(session) is instance.clinic_policy.academic.session
-            )
+            and (Weekday(weekday), Session(session))
+            != instance.clinic_policy.recurring_academic_half_day
         ]
         if not available:
             ui.notify("All available half-days have already been added", type="warning")

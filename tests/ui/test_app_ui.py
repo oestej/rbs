@@ -534,6 +534,46 @@ def test_moving_the_annual_start_date_rejects_dates_outside_the_year(
         )
 
 
+def test_renaming_a_workspace_ignores_a_stale_snapshot(tmp_path) -> None:
+    from rbs.catalog import sample_instance
+    from rbs.store import Store
+    from rbs.ui.settings.view import save_general_workspace_settings
+    from rbs.workspaces import WorkspaceController
+
+    store = Store(tmp_path / "rbs.sqlite")
+    store.init()
+    workspace = store.create("Workplace", sample_instance())
+
+    # An interleaved save (week-start change, lock toggle, another tab, or a
+    # double submit's first write) moves the stored revision past the snapshot
+    # a rename dialog holds. Renaming only writes the name column, so it must
+    # not fail with a revision conflict.
+    WorkspaceController(store).rename(store.get(workspace.id), "Touched elsewhere")
+
+    renamed, did_change = save_general_workspace_settings(
+        store,
+        workspace,
+        name="Renamed",
+        academic_year=workspace.academic_year,
+    )
+
+    assert did_change
+    assert renamed.name == "Renamed"
+    assert renamed.instance == workspace.instance
+    assert store.get(workspace.id).name == "Renamed"
+
+    # A repeat submit after the rename is a no-op returning stored state.
+    again, did_again = save_general_workspace_settings(
+        store,
+        workspace,
+        name="Renamed",
+        academic_year=workspace.academic_year,
+    )
+
+    assert not did_again
+    assert again.name == "Renamed"
+
+
 def test_general_settings_leads_with_the_annual_calendar(tmp_path) -> None:
     from datetime import timedelta
 

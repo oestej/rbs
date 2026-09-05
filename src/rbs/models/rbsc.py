@@ -21,7 +21,7 @@ RBSC_FORMAT = "rbsc"
 # application-owned presentation (colors, solver tuning, automatic-locking
 # state) by design; import restores neutral defaults. A Save As deliberately
 # clears the bundled-sample flag before producing the user's document.
-RBSC_SCHEMA_VERSION = 6
+RBSC_SCHEMA_VERSION = 7
 _AUTOMATIC_LOCK_SOURCE = "through_today"
 
 
@@ -175,7 +175,7 @@ class RBSCState(StrictModel):
     """The complete portable state of one RBS SQLite database."""
 
     format: Literal["rbsc"] = RBSC_FORMAT
-    schema_version: Literal[6] = RBSC_SCHEMA_VERSION
+    schema_version: Literal[7] = RBSC_SCHEMA_VERSION
     exported_at: str
     current_workspace_id: int | None = Field(default=None, ge=1)
     app_metadata: dict[str, str] = Field(default_factory=dict)

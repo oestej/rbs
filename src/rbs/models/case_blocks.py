@@ -2,18 +2,40 @@
 
 from __future__ import annotations
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from rbs.models.common import StrictModel
 from rbs.models.enums import Session, Weekday
 
 
 class AcademicHalfDayOverride(StrictModel):
-    """A one-week replacement for the program's recurring academic half-day."""
+    """A one-week change to the program's recurring academic half-day.
+
+    Setting a day and session moves that week's academic half-day. Omitting both
+    cancels it for the week, which is how a program records a conference week or
+    a holiday that displaces teaching without moving it.
+    """
 
     week: int = Field(ge=1)
-    weekday: Weekday
-    session: Session
+    weekday: Weekday | None = Field(
+        default=None,
+        description="None, with no session, cancels the academic half-day for this week.",
+    )
+    session: Session | None = Field(default=None)
+
+    @model_validator(mode="after")
+    def day_and_session_move_together(self) -> AcademicHalfDayOverride:
+        if (self.weekday is None) != (self.session is None):
+            raise ValueError(
+                "academic half-day override must set both a day and a session, "
+                "or neither to cancel the week"
+            )
+        return self
+
+    @property
+    def cancels_week(self) -> bool:
+        """Whether this override removes the week's academic half-day entirely."""
+        return self.weekday is None
 
 
 class ManualClinicBlock(StrictModel):

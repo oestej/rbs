@@ -28,6 +28,9 @@ from rbs.ui.rotations.types import (
     SaveRotation,
 )
 
+_DEFAULT_ACADEMIC_WEEKDAY = Weekday.WEDNESDAY
+_DEFAULT_ACADEMIC_SESSION = Session.AFTERNOON
+
 
 def _academic_configuration(
     instance: SchedulerInput,
@@ -38,14 +41,23 @@ def _academic_configuration(
     from nicegui import ui
 
     academic = instance.clinic_policy.academic
+    enabled_draft = {"enabled": instance.clinic_policy.academic_enabled}
     with master_detail.detail_card():
         with ui.column().classes("w-full gap-4 p-5"):
             ui.label("Default academic half-day").classes("rbs-type-section-title")
+            enabled = ui.switch(
+                "Program runs a recurring academic half-day",
+                value=enabled_draft["enabled"],
+            )
+            ui.label(
+                "Turn this off for a program with no protected teaching half-day. "
+                "Individual weeks can still schedule or cancel one below."
+            ).classes("rbs-type-caption rbs-text-muted")
             with ui.row().classes("w-full items-end gap-3 flex-wrap"):
                 weekday = (
                     ui.select(
                         _WEEKDAY_OPTIONS,
-                        value=academic.weekday.value,
+                        value=(academic.weekday or _DEFAULT_ACADEMIC_WEEKDAY).value,
                         label="Day",
                     )
                     .props("outlined options-dense")
@@ -54,21 +66,34 @@ def _academic_configuration(
                 session = (
                     ui.select(
                         _SESSION_OPTIONS,
-                        value=academic.session.value,
+                        value=(academic.session or _DEFAULT_ACADEMIC_SESSION).value,
                         label="Time",
                     )
                     .props("outlined options-dense")
                     .classes("w-full sm:w-56")
                 )
 
+                def refresh_enabled(event=None) -> None:
+                    enabled_draft["enabled"] = bool(enabled.value)
+                    weekday.set_enabled(enabled_draft["enabled"])
+                    session.set_enabled(enabled_draft["enabled"])
+
+                enabled.on_value_change(refresh_enabled)
+                refresh_enabled()
+
                 def save() -> None:
                     try:
                         updated = replace_academic_half_day(
                             instance,
-                            Weekday(str(weekday.value)),
-                            Session(str(session.value)),
+                            Weekday(str(weekday.value)) if enabled_draft["enabled"] else None,
+                            Session(str(session.value)) if enabled_draft["enabled"] else None,
                         )
-                        ui.notify("Academic half-day saved", type="positive")
+                        ui.notify(
+                            "Academic half-day saved"
+                            if enabled_draft["enabled"]
+                            else "Academic half-day turned off",
+                            type="positive",
+                        )
                         on_save(updated, selected_rotation_id)
                     except (ValidationError, ValueError) as exc:
                         ui.notify(
@@ -93,6 +118,7 @@ def _academic_configuration(
             default_override_weekday = next(
                 day for day in _CLINIC_WEEK if day is not recurring_weekday
             )
+            cancel_draft = {"cancel": False}
             overrides_by_week = {
                 override.week: override for override in instance.academic_half_day_overrides
             }
@@ -118,24 +144,42 @@ def _academic_configuration(
                 override_session = (
                     ui.select(
                         _SESSION_OPTIONS,
-                        value=academic.session.value,
+                        value=(academic.session or _DEFAULT_ACADEMIC_SESSION).value,
                         label="Time",
                     )
                     .props("outlined options-dense")
                     .classes("w-full sm:w-52")
                 )
+                cancel = ui.checkbox(
+                    "No academic half-day this week",
+                    value=cancel_draft["cancel"],
+                )
+
+                def refresh_cancel(event=None) -> None:
+                    cancel_draft["cancel"] = bool(cancel.value)
+                    override_weekday.set_enabled(not cancel_draft["cancel"])
+                    override_session.set_enabled(not cancel_draft["cancel"])
+
+                cancel.on_value_change(refresh_cancel)
+                refresh_cancel()
 
                 def save_override() -> None:
                     try:
                         if override_week.value is None:
                             raise ValueError("select a week")
+                        cancelled = cancel_draft["cancel"]
                         updated = set_academic_half_day_override(
                             instance,
                             int(override_week.value),
-                            Weekday(str(override_weekday.value)),
-                            Session(str(override_session.value)),
+                            None if cancelled else Weekday(str(override_weekday.value)),
+                            None if cancelled else Session(str(override_session.value)),
                         )
-                        ui.notify("Academic override saved", type="positive")
+                        ui.notify(
+                            "Academic half-day cancelled for that week"
+                            if cancelled
+                            else "Academic override saved",
+                            type="positive",
+                        )
                         on_save(updated, selected_rotation_id)
                     except (ValidationError, ValueError) as exc:
                         ui.notify(
@@ -154,8 +198,10 @@ def _academic_configuration(
                 existing = overrides_by_week.get(week)
                 if existing is None:
                     return
-                override_weekday.value = existing.weekday.value
-                override_session.value = existing.session.value
+                cancel.value = existing.cancels_week
+                if existing.weekday is not None and existing.session is not None:
+                    override_weekday.value = existing.weekday.value
+                    override_session.value = existing.session.value
 
             def load_selected_override(event) -> None:
                 if event.value is not None:
@@ -192,14 +238,20 @@ def _academic_configuration(
                         with ui.row().classes(
                             "rbs-academic-override-row w-full items-center gap-3 rounded px-3 py-2"
                         ):
-                            ui.icon("event_repeat").classes("rbs-text-primary")
+                            ui.icon(
+                                "event_busy" if override.cancels_week else "event_repeat"
+                            ).classes("rbs-text-primary")
                             with ui.column().classes("min-w-0 flex-1 gap-0"):
                                 ui.label(_academic_week_label(instance, override.week)).classes(
                                     "rbs-font-semibold"
                                 )
                                 ui.label(
-                                    f"{override.weekday.value.title()} · "
-                                    f"{_SESSION_OPTIONS[override.session.value]}"
+                                    "No academic half-day"
+                                    if override.cancels_week
+                                    else (
+                                        f"{override.weekday.value.title()} · "
+                                        f"{_SESSION_OPTIONS[override.session.value]}"
+                                    )
                                 ).classes("rbs-type-caption rbs-text-muted")
                             ui.button(
                                 icon="edit",

@@ -368,6 +368,11 @@ def _resident_form(
                         .props("outlined autofocus" if creating else "outlined")
                         .classes("w-full md:flex-1")
                     )
+                    if creating:
+                        # The autofocus prop alone does not move focus when the
+                        # form mounts after clicking New resident, so focus the
+                        # name field explicitly on open.
+                        name.run_method("focus")
                     pgy = (
                         ui.select(
                             pgy_options,

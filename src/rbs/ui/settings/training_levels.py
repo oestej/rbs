@@ -188,10 +188,13 @@ def training_level_settings(
                             ui.label(curriculum.display_label).classes(
                                 "rbs-training-level-name rbs-type-section-title"
                             )
+                            unscheduled = instance.unallocated_weeks(curriculum.pgy)
                             ui.label(
                                 f"{resident_count} resident"
                                 f"{'s' if resident_count != 1 else ''} · "
-                                f"{curriculum.required_weeks()} curriculum weeks"
+                                f"{curriculum.required_weeks()} of "
+                                f"{instance.calendar.weeks} weeks allocated"
+                                + (f" · {unscheduled} unscheduled" if unscheduled else "")
                             ).classes("rbs-type-caption rbs-text-muted")
 
                     with ui.element("div").classes("rbs-training-level-editor-grid w-full"):

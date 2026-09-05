@@ -26,14 +26,45 @@ def clinic_slot_date(first_week_start: date, week: int, weekday: Weekday) -> dat
 
 
 class ClinicAllocationRule(StrictModel):
-    """Resident-level allocation bounds and target for one clinic."""
+    """Resident-level allocation bounds and target for one clinic.
+
+    Targets are stored as integer percents (0-100) to avoid floating point
+    persistence issues. Fractions of a percent are not supported. The solver
+    converts to float fractions (``percent / 100``) at the computation
+    boundary.
+    """
 
     clinic_id: str
     pgy: int | None = Field(default=None, ge=1)
     resident_id: str | None = None
-    min_fraction: float = Field(default=0.0, ge=0.0, le=1.0)
-    target_fraction: float = Field(ge=0.0, le=1.0)
-    max_fraction: float = Field(default=1.0, ge=0.0, le=1.0)
+    min_percent: int = Field(default=0, ge=0, le=100)
+    target_percent: int = Field(ge=0, le=100)
+    max_percent: int = Field(default=100, ge=0, le=100)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_fractions(cls, value: Any) -> Any:
+        """Accept persisted float fractions while emitting integer percents."""
+        if not isinstance(value, dict):
+            return value
+        migrated = dict(value)
+        for legacy_key, percent_key in (
+            ("min_fraction", "min_percent"),
+            ("target_fraction", "target_percent"),
+            ("max_fraction", "max_percent"),
+        ):
+            if legacy_key not in migrated:
+                continue
+            legacy_value = migrated.pop(legacy_key)
+            if percent_key in migrated:
+                continue
+            try:
+                fraction = float(legacy_value)
+            except (TypeError, ValueError):
+                migrated[percent_key] = legacy_value
+            else:
+                migrated[percent_key] = int(round(fraction * 100))
+        return migrated
 
     @field_validator("clinic_id")
     @classmethod
@@ -59,11 +90,26 @@ class ClinicAllocationRule(StrictModel):
             raise ValueError(
                 "clinic allocation rule cannot target both a training level and resident"
             )
-        if not self.min_fraction <= self.target_fraction <= self.max_fraction:
+        if not self.min_percent <= self.target_percent <= self.max_percent:
             raise ValueError(
-                "clinic allocation fractions must satisfy minimum <= target <= maximum"
+                "clinic allocation percentages must satisfy minimum <= target <= maximum"
             )
         return self
+
+    @property
+    def min_fraction(self) -> float:
+        """Legacy float view, converted for the solver boundary."""
+        return self.min_percent / 100.0
+
+    @property
+    def target_fraction(self) -> float:
+        """Legacy float view, converted for the solver boundary."""
+        return self.target_percent / 100.0
+
+    @property
+    def max_fraction(self) -> float:
+        """Legacy float view, converted for the solver boundary."""
+        return self.max_percent / 100.0
 
     @property
     def scope_key(self) -> tuple[str, int | str | None]:

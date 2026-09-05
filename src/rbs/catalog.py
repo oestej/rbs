@@ -331,9 +331,9 @@ def blank_instance(*, academic_year: str = SAMPLE_ACADEMIC_YEAR) -> SchedulerInp
             allocation_rules=[
                 ClinicAllocationRule(
                     clinic_id="clinic",
-                    min_fraction=0.0,
-                    target_fraction=1.0,
-                    max_fraction=1.0,
+                    min_percent=0,
+                    target_percent=100,
+                    max_percent=100,
                 )
             ],
             academic=academic,
