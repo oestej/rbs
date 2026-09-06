@@ -107,8 +107,16 @@ def _validate_rotation_groups(
                 )
                 for rotation_id in group.rotation_ids
             }
+            waived_counts = {
+                rotation_id: sum(
+                    1
+                    for waiver in instance.resident_rotation_waivers
+                    if waiver.resident_id == resident.id and waiver.rotation_id == rotation_id
+                )
+                for rotation_id in group.rotation_ids
+            }
             expected_counts = {
-                rotation_id: required_clusters + unmatched[rotation_id]
+                rotation_id: required_clusters + unmatched[rotation_id] - waived_counts[rotation_id]
                 for rotation_id in group.rotation_ids
             }
             actual_counts = {

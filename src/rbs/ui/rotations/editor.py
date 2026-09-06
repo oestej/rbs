@@ -33,7 +33,6 @@ from rbs.ui.rotations.elective import (
     _elective_time_row,
     _new_elective_rotation_draft,
     _open_elective_properties_dialog,
-    _open_elective_rotation_dialog,
 )
 from rbs.ui.rotations.fmed import (
     _dedicated_rotation_cards,
@@ -51,7 +50,6 @@ from rbs.ui.rotations.forms import (
     _direct_elective_weeks,
     _draft_has_clinic_configuration,
     _draft_requirement_label,
-    _mandatory_elective_availability,
     _open_bulk_clinic_sites_dialog,
     _pgy_rule_editor,
     _remove_block_config,
@@ -66,7 +64,6 @@ from rbs.ui.rotations.forms import (
 )
 from rbs.ui.rotations.mandatory import (
     _confirm_remove_mandatory_rotation,
-    _new_mandatory_rotation_form,
     _rotation_detail_panel,
     _rotation_view,
 )
@@ -172,11 +169,9 @@ __all__ = [
     "_set_required_block_count",
     "_change_required_block_duration",
     "_remove_required_block_config",
-    "_mandatory_elective_availability",
     "_direct_elective_weeks",
     "_rotation_detail_contents",
     "_rotation_detail_panel",
-    "_new_mandatory_rotation_form",
     "_rotation_view",
     "_confirm_remove_mandatory_rotation",
     "_dedicated_rotation_cards",
@@ -190,7 +185,6 @@ __all__ = [
     "_elective_rotation_view",
     "_new_elective_rotation_draft",
     "_elective_rotation_editor",
-    "_open_elective_rotation_dialog",
     "_confirm_remove_elective_rotation",
     "_elective_shared_summary",
     "_elective_time_level_summary",

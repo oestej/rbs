@@ -410,7 +410,13 @@ def toggle_pgy_rule(
     refresh()
 
 
-def add_block_config(rule: Draft, refresh: Callable[[], None]) -> None:
+def add_block_config(
+    rule: Draft,
+    refresh: Callable[[], None],
+    *,
+    pgy: int | None = None,
+    requirement_counts: dict[tuple[int, int], int] | None = None,
+) -> None:
     used = {int(config["duration_weeks"]) for config in rule["block_configs"]}
     duration = _default_block_duration(
         candidate for candidate in [2, 4, 1, 3, 5] if candidate not in used
@@ -424,6 +430,10 @@ def add_block_config(rule: Draft, refresh: Callable[[], None]) -> None:
         }
     )
     rule["block_configs"].sort(key=lambda config: int(config["duration_weeks"]))
+    if requirement_counts is not None and pgy is not None:
+        # New shapes start as mandatory; the editor can flip them to
+        # elective-only afterwards.
+        requirement_counts[pgy, duration] = max(1, int(requirement_counts.get((pgy, duration), 1)))
     refresh()
 
 

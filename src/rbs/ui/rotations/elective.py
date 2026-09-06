@@ -57,6 +57,7 @@ from rbs.ui.rotations.summary import (
     _rotation_overview_row,
 )
 from rbs.ui.rotations.types import (
+    NEW_ELECTIVE_ROTATION_ID,
     SaveRotation,
     SelectRotation,
 )
@@ -86,6 +87,8 @@ def _elective_configuration(
         None,
     )
 
+    creating = selected_rotation_id == NEW_ELECTIVE_ROTATION_ID
+
     with ui.column().classes("w-full gap-4"):
         with master_detail.detail_card():
             with ui.column().classes("w-full gap-3 p-5"):
@@ -105,7 +108,7 @@ def _elective_configuration(
                     ).props("outline dense no-caps")
                 _elective_shared_summary(instance)
 
-        with master_detail.split(detail_selected=selected is not None):
+        with master_detail.split(detail_selected=selected is not None or creating):
             _elective_directory(
                 instance,
                 available,
@@ -116,10 +119,12 @@ def _elective_configuration(
             _elective_detail_panel(
                 instance,
                 rotation=selected,
+                creating=creating,
                 missing_id=(
                     selected_rotation_id
                     if selected_rotation_id is not None
                     and selected_rotation_id not in instance.rotations_by_id
+                    and not creating
                     else None
                 ),
                 on_select=on_select,
@@ -481,12 +486,7 @@ def _elective_directory(
         search_placeholder="Code, name, type, training level, or block size",
         action_label="New elective",
         action_icon="add",
-        on_action=partial(
-            _open_elective_rotation_dialog,
-            instance,
-            selected_rotation_id=selected_rotation_id,
-            on_save=on_save,
-        ),
+        on_action=partial(on_select, NEW_ELECTIVE_ROTATION_ID),
     )
     search = elements.search
     directory = elements.body
@@ -603,6 +603,7 @@ def _elective_detail_panel(
     instance: SchedulerInput,
     *,
     rotation: Rotation | None,
+    creating: bool,
     missing_id: str | None,
     on_select: SelectRotation,
     on_save: SaveRotation,
@@ -614,6 +615,14 @@ def _elective_detail_panel(
         nonlocal editing
         panel.clear()
         with panel:
+            if creating:
+                _elective_rotation_editor(
+                    instance,
+                    None,
+                    on_cancel=partial(on_select, None),
+                    on_save=on_save,
+                )
+                return
             if rotation is None:
                 master_detail.empty_detail(
                     icon="school",
@@ -762,21 +771,44 @@ def _new_elective_rotation_draft(instance: SchedulerInput) -> Draft:
     return draft
 
 
+def _elective_rule_pgys(draft: Draft) -> list[int]:
+    """Training levels with rules in a standalone-elective draft.
+
+    The editor's per-year availability checkboxes own these; the save passes
+    them through as the option's eligible years so newly added years take
+    effect instead of lingering on the previous option.
+    """
+    return sorted({int(rule["pgy"]) for rule in draft.get("pgy_rules", [])})
+
+
 def _elective_rotation_editor(
     instance: SchedulerInput,
-    rotation: Rotation,
+    rotation: Rotation | None,
     *,
     on_cancel: Callable[[], None],
     on_save: SaveRotation,
 ) -> None:
-    """Edit an existing standalone Elective in the master-detail workspace."""
+    """Edit a standalone Elective in the master-detail workspace.
+
+    A None rotation creates a new Elective with the same full-screen editor,
+    so adding and editing share every option and component.
+    """
     from nicegui import ui
 
-    draft = rotation_editor_state(rotation)
+    creating = rotation is None
+    draft = (
+        rotation_editor_state(rotation)
+        if rotation is not None
+        else _new_elective_rotation_draft(instance)
+    )
     draft["color"] = instance.electives.color
     draft["kind"] = RotationKind.ELECTIVE.value
     size_draft: Draft = {
-        "eligible_block_sizes": list(instance.eligible_elective_block_sizes(rotation.id)),
+        "eligible_block_sizes": (
+            list(instance.eligible_elective_block_sizes(rotation.id))
+            if rotation is not None
+            else list(instance.elective_block_sizes)
+        ),
     }
     academic_half_day = instance.clinic_policy.recurring_academic_half_day
     site_options = {site.id: site.name for site in instance.clinic_policy.sites}
@@ -803,6 +835,11 @@ def _elective_rotation_editor(
 
     def save() -> None:
         try:
+            if creating:
+                draft["id"] = next_mandatory_rotation_id(
+                    instance,
+                    str(draft.get("name") or ""),
+                )
             draft["color"] = instance.electives.color
             draft["kind"] = RotationKind.ELECTIVE.value
             replacement = rotation_from_editor_state(draft)
@@ -811,11 +848,20 @@ def _elective_rotation_editor(
             ]
             if not eligible_block_sizes:
                 raise ValueError("select at least one eligible Elective block size")
-            updated = replace_elective_rotation(
-                instance,
-                rotation.id,
-                replacement,
-                eligible_block_sizes=eligible_block_sizes,
+            updated = (
+                add_elective_rotation(
+                    instance,
+                    replacement,
+                    eligible_block_sizes=eligible_block_sizes,
+                )
+                if creating
+                else replace_elective_rotation(
+                    instance,
+                    rotation.id,
+                    replacement,
+                    eligible_pgys=_elective_rule_pgys(draft),
+                    eligible_block_sizes=eligible_block_sizes,
+                )
             )
             if save_error is not None:
                 save_error.set_text("")
@@ -831,7 +877,13 @@ def _elective_rotation_editor(
         with ui.row().classes(
             "rbs-rotation-detail-header w-full items-center justify-between gap-3 p-5"
         ):
-            _rotation_identity(rotation, instance=instance, editing=True)
+            if creating:
+                with ui.column().classes("min-w-0 gap-1"):
+                    with ui.row().classes("items-center gap-2"):
+                        ui.label("New elective").classes("rbs-type-page-title")
+                        ui.badge("Creating", color="secondary").props("outline")
+            else:
+                _rotation_identity(rotation, instance=instance, editing=True)
             with ui.button(icon="close", on_click=on_cancel).props(
                 button_props(
                     ICON_BUTTON_PROPS,
@@ -886,7 +938,11 @@ def _elective_rotation_editor(
             with ui.tab_panel(pgy_tab).classes("p-0"):
                 with ui.column().classes("w-full gap-4 p-5"):
                     ui.label("Elective Rules").classes("rbs-type-section-title")
-                    _staffing_and_blocks(instance, draft, rotation.id)
+                    _staffing_and_blocks(
+                        instance,
+                        draft,
+                        rotation.id if rotation is not None else str(draft["id"]),
+                    )
 
             with ui.tab_panel(clinic_tab).classes("p-0"):
                 with ui.column().classes("w-full gap-4 p-5"):
@@ -902,166 +958,6 @@ def _elective_rotation_editor(
                 "rbs-rotation-save-error min-w-0 flex-1 rbs-type-caption rbs-text-danger"
             )
             ui.button("Save elective", icon="save", on_click=save).props("unelevated no-caps")
-
-
-def _open_elective_rotation_dialog(
-    instance: SchedulerInput,
-    *,
-    selected_rotation_id: str | None,
-    on_save: SaveRotation,
-    initial: Rotation | None = None,
-) -> None:
-    """Edit a standalone Elective with the shared rotation-rule fields."""
-    from nicegui import ui
-
-    draft = (
-        rotation_editor_state(initial)
-        if initial is not None
-        else _new_elective_rotation_draft(instance)
-    )
-    draft["color"] = instance.electives.color
-    draft["kind"] = RotationKind.ELECTIVE.value
-    available_elective_sizes = instance.elective_block_sizes
-    configured_elective_sizes = (
-        instance.eligible_elective_block_sizes(initial.id)
-        if initial is not None and instance.is_elective_option(initial.id)
-        else available_elective_sizes
-    )
-    elective_size_draft: Draft = {
-        "eligible_block_sizes": list(configured_elective_sizes),
-    }
-    academic_half_day = instance.clinic_policy.recurring_academic_half_day
-    site_options = {site.id: site.name for site in instance.clinic_policy.sites}
-    default_site_ids = list(instance.clinic_policy.site_ids)
-    clinic_editor = None
-
-    def render_clinic_editor() -> None:
-        if clinic_editor is None:
-            return
-        clinic_editor.clear()
-        with clinic_editor:
-            _clinic_rule_editor(
-                draft,
-                "clinic",
-                enable_label="Schedule continuity clinic during this elective",
-                show_enable=False,
-                disabled=bool(draft.get("no_clinic_hours")),
-                academic_half_day=academic_half_day,
-                site_options=site_options,
-                default_site_ids=default_site_ids,
-            )
-
-    title = "Edit elective rotation" if initial is not None else "New elective rotation"
-    with (
-        ui.dialog() as dialog,
-        (
-            ui.card()
-            .classes("rbs-elective-editor-dialog p-0 gap-0")
-            .style("width:calc(100vw - 32px);max-width:1200px;max-height:calc(100vh - 32px)")
-        ),
-    ):
-        with ui.row().classes("rbs-clinic-editor-header w-full items-center gap-5 px-5 py-4"):
-            ui.label(title).classes(
-                "rbs-clinic-editor-title rbs-type-dialog-title whitespace-nowrap"
-            )
-            with (
-                ui.tabs()
-                .props("dense no-caps inline-label align=left mobile-arrows outside-arrows")
-                .classes("rbs-clinic-editor-tabs min-w-0") as tabs
-            ):
-                general_tab = ui.tab("elective_general", label="General", icon="tune")
-                pgy_tab = ui.tab(
-                    "elective_pgy",
-                    label="Training-level rules",
-                    icon="groups",
-                )
-                clinic_tab = ui.tab(
-                    "elective_clinic",
-                    label="Clinic",
-                    icon="event_available",
-                )
-            ui.space()
-            ui.button(icon="close", on_click=dialog.close).props(
-                "flat round dense aria-label='Close elective rotation dialog'"
-            )
-        with ui.scroll_area().classes("rbs-elective-editor-scroll w-full h-[min(68vh,800px)]"):
-            with ui.tab_panels(tabs, value=general_tab).classes(
-                "rbs-elective-editor-panels w-full min-w-0 max-w-full"
-            ):
-                with ui.tab_panel(general_tab).classes("p-5"):
-                    _core_settings(
-                        draft,
-                        palette=instance.color_scheme.palette,
-                        on_clinic_availability_change=render_clinic_editor,
-                        show_color=False,
-                        show_max_total_weeks=True,
-                    )
-                    elective_sizes = (
-                        ui.select(
-                            _elective_block_size_options(available_elective_sizes),
-                            value=list(elective_size_draft["eligible_block_sizes"]),
-                            label="Eligible elective block sizes",
-                            multiple=True,
-                        )
-                        .props("outlined options-dense use-chips")
-                        .classes("w-full")
-                    )
-                    elective_sizes.bind_value(
-                        elective_size_draft,
-                        "eligible_block_sizes",
-                    )
-                    elective_sizes.set_enabled(
-                        bool(available_elective_sizes)
-                        and (initial is None or instance.is_elective_option(initial.id))
-                    )
-                with ui.tab_panel(pgy_tab).classes("p-5"):
-                    ui.label("Elective Rules").classes("rbs-type-section-title")
-                    _staffing_and_blocks(instance, draft, str(draft["id"]))
-                with ui.tab_panel(clinic_tab).classes("min-w-0 max-w-full p-5"):
-                    clinic_editor = ui.column().classes("w-full min-w-0 max-w-full")
-                    render_clinic_editor()
-        ui.separator()
-        with ui.row().classes("w-full items-center justify-end gap-3 p-4"):
-
-            def save() -> None:
-                try:
-                    if initial is None:
-                        draft["id"] = next_mandatory_rotation_id(
-                            instance,
-                            str(draft.get("name") or ""),
-                        )
-                    draft["color"] = instance.electives.color
-                    draft["kind"] = RotationKind.ELECTIVE.value
-                    replacement = rotation_from_editor_state(draft)
-                    eligible_block_sizes = [
-                        int(size) for size in elective_size_draft.get("eligible_block_sizes", [])
-                    ]
-                    if not eligible_block_sizes:
-                        raise ValueError("select at least one eligible Elective block size")
-                    updated = (
-                        add_elective_rotation(
-                            instance,
-                            replacement,
-                            eligible_block_sizes=eligible_block_sizes,
-                        )
-                        if initial is None
-                        else replace_elective_rotation(
-                            instance,
-                            initial.id,
-                            replacement,
-                            eligible_block_sizes=eligible_block_sizes,
-                        )
-                    )
-                    dialog.close()
-                    ui.notify(f"Saved {replacement.code} — {replacement.name}", type="positive")
-                    on_save(updated, replacement.id)
-                except (ValidationError, ValueError) as exc:
-                    ui.notify(_validation_message(exc), type="negative", multi_line=True)
-
-            ui.button("Save elective rotation", icon="save", on_click=save).props(
-                "unelevated no-caps"
-            )
-    dialog.open()
 
 
 def _confirm_remove_elective_rotation(

@@ -286,7 +286,10 @@ class SolverIntegrityMixin:
                     "resident rotation override references unknown rotation "
                     f"{override.rotation_id!r}"
                 )
-            if override.replaces_rotation_id not in rotation_ids:
+            if (
+                override.replaces_rotation_id is not None
+                and override.replaces_rotation_id not in rotation_ids
+            ):
                 raise ValueError(
                     "resident rotation override replaces unknown rotation "
                     f"{override.replaces_rotation_id!r}"
@@ -294,11 +297,6 @@ class SolverIntegrityMixin:
             rotation = self.rotation(override.rotation_id)
             if rotation.kind is not RotationKind.STANDARD:
                 raise ValueError("resident rotation overrides can only add Mandatory rotations")
-            replacement = self.rotation(override.replaces_rotation_id)
-            if replacement.kind is not RotationKind.ELECTIVE:
-                raise ValueError(
-                    "resident Mandatory rotation overrides must replace Elective blocks"
-                )
             try:
                 rotation.block_config(resident.pgy, override.duration_weeks)
             except KeyError as exc:
@@ -307,6 +305,13 @@ class SolverIntegrityMixin:
                     f"{override.duration_weeks}-week blocks for "
                     f"{self.training_level_label(resident.pgy, compact=True)}"
                 ) from exc
+            if override.replaces_rotation_id is None:
+                continue
+            replacement = self.rotation(override.replaces_rotation_id)
+            if replacement.kind is not RotationKind.ELECTIVE:
+                raise ValueError(
+                    "resident Mandatory rotation overrides must replace Elective blocks"
+                )
             if not any(
                 block.rotation_id == override.replaces_rotation_id
                 and block.duration_weeks == override.duration_weeks
@@ -350,6 +355,38 @@ class SolverIntegrityMixin:
                     "block from every member of one configured rotation group"
                 )
 
+    def _check_resident_rotation_waivers(self, rotation_ids: set[str]) -> None:
+        residents = self.residents_by_id
+        for waiver in self.resident_rotation_waivers:
+            resident = residents.get(waiver.resident_id)
+            if resident is None:
+                raise ValueError(
+                    f"resident rotation waiver references unknown resident {waiver.resident_id!r}"
+                )
+            if waiver.rotation_id not in rotation_ids:
+                raise ValueError(
+                    f"resident rotation waiver references unknown rotation {waiver.rotation_id!r}"
+                )
+            rotation = self.rotation(waiver.rotation_id)
+            try:
+                rotation.block_config(resident.pgy, waiver.duration_weeks)
+            except KeyError as exc:
+                raise ValueError(
+                    f"resident rotation waiver: {rotation.code} does not allow "
+                    f"{waiver.duration_weeks}-week blocks for "
+                    f"{self.training_level_label(resident.pgy, compact=True)}"
+                ) from exc
+            if not any(
+                block.rotation_id == waiver.rotation_id
+                and block.duration_weeks == waiver.duration_weeks
+                for block in self.curriculum_for(resident.pgy).blocks
+            ):
+                raise ValueError(
+                    "resident rotation waiver: "
+                    f"{self.training_level_label(resident.pgy, compact=True)} has no direct "
+                    f"{waiver.duration_weeks}-week {rotation.code} block to waive"
+                )
+
     def _check_resident_replacement_inventory(self) -> None:
         residents = self.residents_by_id
         consumed: dict[tuple[str, str, int], int] = {}
@@ -368,7 +405,13 @@ class SolverIntegrityMixin:
                 override.duration_weeks,
             )
             for override in self.resident_rotation_overrides
+            if override.replaces_rotation_id is not None
         )
+        for waiver in self.resident_rotation_waivers:
+            if waiver.resident_id not in residents:
+                # The waiver validator reports the more direct error.
+                continue
+            replacements.append((waiver.resident_id, waiver.rotation_id, waiver.duration_weeks))
         for resident_id, rotation_id, duration_weeks in replacements:
             key = (resident_id, rotation_id, duration_weeks)
             consumed[key] = consumed.get(key, 0) + 1
@@ -381,7 +424,25 @@ class SolverIntegrityMixin:
             )
             if used > available:
                 raise ValueError(
-                    f"resident overrides replace {used} {duration_weeks}-week "
+                    f"resident overrides and waivers consume {used} {duration_weeks}-week "
                     f"{rotation_id!r} blocks for {resident_id}, but only "
+                    f"{available} are available"
+                )
+        unallocated_use: dict[int, int] = {}
+        for override in self.resident_rotation_overrides:
+            if override.replaces_rotation_id is not None:
+                continue
+            resident = residents.get(override.resident_id)
+            if resident is None:
+                continue
+            unallocated_use[resident.pgy] = (
+                unallocated_use.get(resident.pgy, 0) + override.duration_weeks
+            )
+        for pgy, weeks in sorted(unallocated_use.items()):
+            available = self.unallocated_weeks(pgy)
+            if weeks > available:
+                raise ValueError(
+                    f"resident overrides use {weeks} unallocated weeks for "
+                    f"{self.training_level_label(pgy, compact=True)}, but only "
                     f"{available} are available"
                 )

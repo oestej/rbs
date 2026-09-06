@@ -400,8 +400,15 @@ def _open_clinic_block_rules_dialog(
                         replacement,
                         counts,
                     )
+                    released = len(instance.locks) - len(updated.locks)
                     dialog.close()
-                    ui.notify("Clinic block rules updated", type="positive")
+                    message = "Clinic block rules updated"
+                    if released:
+                        message += (
+                            f" · {released} locked placement"
+                            f"{'s' if released != 1 else ''} released"
+                        )
+                    ui.notify(message, type="positive")
                     on_save(updated, None)
                 except (ValidationError, ValueError) as exc:
                     ui.notify(
@@ -439,7 +446,9 @@ def _clinic_pgy_rule_panel(
                     f"Clinic required for {level_name}",
                     value=rule is not None,
                 ).classes("shrink-0")
-            enabled.on_value_change(partial(toggle_pgy_rule, draft, pgy, render))
+            enabled.on_value_change(
+                partial(toggle_pgy_rule, draft, pgy, instance.training_level_ids, render)
+            )
             if rule is None:
                 return
 

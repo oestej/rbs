@@ -1,4 +1,4 @@
-"""Mandatory rotation detail panel and creation form."""
+"""Mandatory rotation detail panel; creation shares the full-screen editor."""
 
 from __future__ import annotations
 
@@ -7,44 +7,24 @@ from functools import partial
 
 from pydantic import ValidationError
 
-from rbs.models.enums import RotationKind
 from rbs.models.instance import SchedulerInput
-from rbs.models.rotation import (
-    ROTATION_CODE_MAX_LENGTH,
-    Rotation,
-)
+from rbs.models.rotation import Rotation
 from rbs.ui import master_detail
 from rbs.ui.buttons import (
     ICON_BUTTON_PROPS,
     PRIMARY_BUTTON_PROPS,
-    TERTIARY_BUTTON_PROPS,
     button_props,
 )
-from rbs.ui.drafts import Draft
-from rbs.ui.editor_common import (
-    _DEFAULT_BLOCK_DURATION_WEEKS,
-    _DURATION_OPTIONS,
-    _as_int,
-    _validation_message,
-)
+from rbs.ui.editor_common import _validation_message
 from rbs.ui.rotations.forms import (
-    _mandatory_elective_availability,
     _rotation_detail_contents,
     _rotation_editor,
 )
-from rbs.ui.rotations.ops import (
-    add_mandatory_rotation,
-    direct_elective_counts,
-    next_mandatory_rotation_id,
-    remove_mandatory_rotation,
-)
+from rbs.ui.rotations.ops import remove_mandatory_rotation
 from rbs.ui.rotations.summary import _rotation_identity
 from rbs.ui.rotations.types import (
     SaveRotation,
     SelectRotation,
-)
-from rbs.ui.rotations.widgets import (
-    rotation_color_palette,
 )
 
 
@@ -65,8 +45,9 @@ def _rotation_detail_panel(
         panel.clear()
         with panel:
             if creating:
-                _new_mandatory_rotation_form(
+                _rotation_editor(
                     instance,
+                    None,
                     on_cancel=partial(on_select, None),
                     on_save=on_save,
                 )
@@ -107,282 +88,6 @@ def _rotation_detail_panel(
                 )
 
     render_panel()
-
-
-def _spendable_weeks(instance: SchedulerInput, pgy: int) -> int:
-    """Weeks this level can fund a new requirement with.
-
-    Unscheduled time is spent first, then direct Elective time, which is the
-    slack a program expects a new requirement to displace.
-    """
-    return instance.unallocated_weeks(pgy) + sum(
-        duration * count
-        for duration, count in direct_elective_counts(instance, pgy).items()
-    )
-
-
-def _budget_label(unscheduled: int, available: int) -> str:
-    """Describe what is left, naming Elective time only when it is in play."""
-    elective = available - unscheduled
-    if not elective:
-        return f"{unscheduled} unscheduled"
-    return f"{unscheduled} unscheduled · {elective} Elective"
-
-
-def _new_mandatory_rotation_form(
-    instance: SchedulerInput,
-    *,
-    on_cancel: Callable[[], None],
-    on_save: SaveRotation,
-) -> None:
-    from nicegui import ui
-
-    requirements: dict[int, Draft] = {}
-    first_eligible_pgy = next(
-        (
-            curriculum.pgy
-            for curriculum in instance.requirements
-            if _spendable_weeks(instance, curriculum.pgy)
-        ),
-        None,
-    )
-    for curriculum in instance.requirements:
-        requirements[curriculum.pgy] = {
-            "enabled": curriculum.pgy == first_eligible_pgy,
-            "duration_weeks": _DEFAULT_BLOCK_DURATION_WEEKS,
-            "count": 1,
-        }
-    color_draft: Draft = {"color": instance.color_scheme.neutral.color}
-    elective_draft: Draft = {
-        "eligible": False,
-        "eligible_pgys": [],
-        "eligible_block_sizes": list(instance.elective_block_sizes),
-        "repeatable": False,
-    }
-
-    with master_detail.detail_card():
-        with ui.row().classes("w-full items-center justify-between gap-4 p-5"):
-            with ui.column().classes("gap-0"):
-                ui.label("New mandatory rotation").classes("rbs-type-page-title")
-                ui.label(
-                    "Create its training-level requirements, then configure advanced rules."
-                ).classes("rbs-text-muted")
-            with ui.button(icon="close", on_click=on_cancel).props(
-                button_props(
-                    ICON_BUTTON_PROPS,
-                    "aria-label='Cancel new rotation'",
-                )
-            ):
-                ui.tooltip("Cancel new rotation")
-        ui.separator()
-        with ui.column().classes("w-full gap-5 p-5"):
-            with ui.column().classes("w-full gap-3"):
-                ui.label("Basic information").classes("rbs-type-section-title")
-                with ui.row().classes("w-full items-start gap-4"):
-                    code = (
-                        ui.input("Rotation code")
-                        .props(f"outlined maxlength={ROTATION_CODE_MAX_LENGTH} counter")
-                        .classes("rbs-rotation-code-input w-full sm:w-56")
-                    )
-                    name = ui.input("Rotation name").props("outlined").classes("w-full sm:flex-1")
-                rotation_color_palette(color_draft, instance.color_scheme.palette)
-
-            _mandatory_elective_availability(
-                elective_draft,
-                instance,
-            )
-
-            with ui.column().classes("w-full gap-3"):
-                with ui.column().classes("gap-0"):
-                    ui.label("Training-level requirements").classes("rbs-type-section-title")
-                    ui.label(
-                        "Required blocks spend each training level's unscheduled weeks. "
-                        "Whatever is left stays unscheduled until it is allocated."
-                    ).classes("rbs-type-caption rbs-text-muted")
-                for pgy, requirement in requirements.items():
-                    unscheduled_weeks = instance.unallocated_weeks(pgy)
-                    available_weeks = _spendable_weeks(instance, pgy)
-                    with (
-                        ui.card()
-                        .props("flat bordered")
-                        .classes("rbs-rotation-nested-card w-full p-4 gap-3")
-                    ):
-                        with ui.row().classes("w-full items-center justify-between gap-3"):
-                            enabled = ui.checkbox(
-                                f"Required for {instance.training_level_name(pgy)}",
-                                value=bool(requirement["enabled"]),
-                            )
-                            budget = ui.label().classes("rbs-type-caption rbs-text-muted")
-                        with ui.row().classes("w-full items-end gap-3"):
-                            duration = (
-                                ui.select(
-                                    _DURATION_OPTIONS,
-                                    value=int(requirement["duration_weeks"]),
-                                    label="Block length",
-                                )
-                                .props("outlined options-dense")
-                                .classes("w-full sm:flex-1")
-                            )
-                            count = (
-                                ui.number(
-                                    "Blocks per resident",
-                                    value=int(requirement["count"]),
-                                    min=1,
-                                    max=instance.calendar.weeks,
-                                    precision=0,
-                                    step=1,
-                                )
-                                .props("outlined")
-                                .classes("w-full sm:flex-1")
-                            )
-                        controls_enabled = bool(requirement["enabled"]) and bool(available_weeks)
-                        duration.set_enabled(controls_enabled)
-                        count.set_enabled(controls_enabled)
-                        enabled.set_enabled(bool(available_weeks))
-                        duration.bind_value(
-                            requirement,
-                            "duration_weeks",
-                            forward=_as_int,
-                        )
-                        count.bind_value(requirement, "count", forward=_as_int)
-
-                        def refresh_budget(
-                            _event=None,
-                            *,
-                            requirement: Draft = requirement,
-                            available_weeks: int = available_weeks,
-                            unscheduled_weeks: int = unscheduled_weeks,
-                            budget=budget,
-                        ) -> None:
-                            # The requirement is sized here, so what fits has to
-                            # be recomputed as block length and count change.
-                            if not available_weeks:
-                                budget.set_text("No weeks available to allocate")
-                                budget.classes(remove="rbs-text-danger")
-                                return
-                            requested = int(requirement["duration_weeks"]) * int(
-                                requirement["count"]
-                            )
-                            if requirement["enabled"] and requested > available_weeks:
-                                budget.set_text(
-                                    f"{requested} weeks requested, only "
-                                    f"{available_weeks} available"
-                                )
-                                budget.classes(add="rbs-text-danger")
-                                return
-                            budget.classes(remove="rbs-text-danger")
-                            if not requirement["enabled"]:
-                                budget.set_text(_budget_label(unscheduled_weeks, available_weeks))
-                                return
-                            # Unscheduled weeks are spent first; the rest comes
-                            # out of this level's Elective time.
-                            from_elective = max(0, requested - unscheduled_weeks)
-                            budget.set_text(
-                                _budget_label(
-                                    unscheduled_weeks - min(requested, unscheduled_weeks),
-                                    available_weeks - requested,
-                                )
-                                + (f" · {from_elective} from Elective" if from_elective else "")
-                            )
-
-                        def toggle_requirement(
-                            event,
-                            *,
-                            requirement: Draft = requirement,
-                            duration=duration,
-                            count=count,
-                            refresh_budget=refresh_budget,
-                        ) -> None:
-                            requirement["enabled"] = bool(event.value)
-                            duration.set_enabled(bool(event.value))
-                            count.set_enabled(bool(event.value))
-                            refresh_budget()
-
-                        enabled.on_value_change(toggle_requirement)
-                        duration.on_value_change(refresh_budget)
-                        count.on_value_change(refresh_budget)
-                        refresh_budget()
-
-            ui.label(
-                "The new rotation starts with no continuity clinic. Staffing, placement, "
-                "vacation, and clinic rules can be changed after it is added."
-            ).classes("rbs-type-caption rbs-text-muted")
-
-            def save() -> None:
-                try:
-                    selected = {
-                        pgy: requirement
-                        for pgy, requirement in requirements.items()
-                        if requirement.get("enabled")
-                    }
-                    if not selected:
-                        raise ValueError("select at least one training-level requirement")
-                    maximum_duration = max(
-                        int(requirement["duration_weeks"]) for requirement in selected.values()
-                    )
-                    rotation_id = next_mandatory_rotation_id(
-                        instance,
-                        str(name.value or code.value or ""),
-                    )
-                    rotation = Rotation.model_validate(
-                        {
-                            "id": rotation_id,
-                            "code": str(code.value or ""),
-                            "name": str(name.value or ""),
-                            "color": color_draft["color"],
-                            "kind": RotationKind.STANDARD.value,
-                            "pgy_rules": [
-                                {
-                                    "pgy": pgy,
-                                    "min_concurrent": None,
-                                    "max_concurrent": None,
-                                    "prerequisite_rotation_ids": [],
-                                    "earliest_start_week": None,
-                                    "block_configs": [
-                                        {
-                                            "duration_weeks": int(requirement["duration_weeks"]),
-                                            "vacation": {
-                                                "allowed": False,
-                                                "max_weeks_per_block": None,
-                                            },
-                                        }
-                                    ],
-                                }
-                                for pgy, requirement in selected.items()
-                            ],
-                            "no_clinic_hours": True,
-                            "max_consecutive_weeks": max(4, maximum_duration),
-                        }
-                    )
-                    counts = {
-                        (pgy, int(requirement["duration_weeks"])): int(requirement["count"])
-                        for pgy, requirement in selected.items()
-                    }
-                    updated = add_mandatory_rotation(
-                        instance,
-                        rotation,
-                        counts,
-                        eligible_as_elective=bool(elective_draft["eligible"]),
-                        eligible_elective_pgys=[
-                            int(pgy) for pgy in elective_draft.get("eligible_pgys", [])
-                        ],
-                        eligible_elective_block_sizes=[
-                            int(size)
-                            for size in elective_draft.get(
-                                "eligible_block_sizes",
-                                [],
-                            )
-                        ],
-                        elective_repeatable=bool(elective_draft.get("repeatable")),
-                    )
-                    ui.notify(f"Added {rotation.name}", type="positive")
-                    on_save(updated, rotation.id)
-                except (TypeError, ValidationError, ValueError) as exc:
-                    ui.notify(_validation_message(exc), type="negative", multi_line=True)
-
-            with ui.row().classes("items-center gap-2"):
-                ui.button("Add rotation", icon="add", on_click=save).props(PRIMARY_BUTTON_PROPS)
-                ui.button("Cancel", on_click=on_cancel).props(TERTIARY_BUTTON_PROPS)
 
 
 def _rotation_view(

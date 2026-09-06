@@ -11,12 +11,13 @@ from collections import Counter
 from collections.abc import Iterable
 from typing import Any
 
-from rbs.models.curriculum import RotationGroup
+from rbs.models.curriculum import BlockRequirement, RotationGroup
 from rbs.models.elective import ElectiveConfiguration, ElectiveRotationOption
 from rbs.models.enums import RotationKind
 from rbs.models.instance import (
     ManualClinicBlock,
     ResidentRotationOverride,
+    ResidentRotationWaiver,
     SchedulerInput,
 )
 from rbs.models.rotation import ROTATION_CODE_MAX_LENGTH, Rotation
@@ -37,6 +38,8 @@ __all__ = [
     "replace_rotation_color",
     "replace_elective_color",
     "set_elective_eligibility",
+    "elective_shapes_for_rotation",
+    "elective_pgys_sizes_for_shapes",
     "elective_slot_rotation",
     "direct_elective_counts",
     "set_elective_allocation",
@@ -132,10 +135,16 @@ def add_mandatory_rotation(
     eligible_as_elective: bool = False,
     eligible_elective_pgys: Iterable[int] | None = None,
     eligible_elective_block_sizes: Iterable[int] | None = None,
+    elective_shapes: Iterable[tuple[int, int]] | None = None,
     elective_repeatable: bool = False,
     group_members_by_pgy: dict[int, list[str]] | None = None,
 ) -> SchedulerInput:
-    """Add one standard rotation, spending the level's unallocated weeks."""
+    """Add one standard rotation, spending the level's unallocated weeks.
+
+    When ``elective_shapes`` is given it takes precedence over the explicit
+    elective PGYs and sizes: PGYs and sizes derive from the marked shapes
+    after funding, so the new requirements cannot leave stale sizes behind.
+    """
     if rotation.kind is not RotationKind.STANDARD:
         raise ValueError("new Mandatory rotations must use the standard rotation kind")
     if rotation.id in instance.rotations_by_id:
@@ -186,20 +195,33 @@ def add_mandatory_rotation(
 
     raw = instance.model_dump(mode="json")
     raw["rotations"].append(rotation.model_dump(mode="json"))
-    if eligible_as_elective:
+    if elective_shapes is not None:
+        pgys, sizes = elective_pgys_sizes_for_shapes(
+            instance,
+            rotation,
+            elective_shapes,
+        )
+        should_offer = bool(pgys)
+    elif eligible_as_elective:
+        pgys = _normalize_elective_pgys(
+            instance,
+            rotation,
+            eligible_elective_pgys,
+        )
         sizes = _normalize_elective_block_sizes(
             instance,
             rotation,
             eligible_elective_block_sizes,
+            eligible_pgys=pgys,
         )
+        should_offer = True
+    else:
+        should_offer = False
+    if should_offer:
         raw["electives"]["rotation_options"].append(
             ElectiveRotationOption(
                 rotation_id=rotation.id,
-                eligible_pgys=_normalize_elective_pgys(
-                    instance,
-                    rotation,
-                    eligible_elective_pgys,
-                ),
+                eligible_pgys=pgys,
                 eligible_block_sizes=sizes,
                 repeatable=elective_repeatable,
             ).model_dump(mode="json")
@@ -296,7 +318,7 @@ def remove_mandatory_rotation(
         override
         for override in raw["resident_rotation_overrides"]
         if override["rotation_id"] != rotation_id
-        and override["replaces_rotation_id"] != rotation_id
+        and override.get("replaces_rotation_id") != rotation_id
         and (
             override.get("group_instance_id") is None
             or (
@@ -305,6 +327,11 @@ def remove_mandatory_rotation(
             )
             not in removed_override_groups
         )
+    ]
+    raw["resident_rotation_waivers"] = [
+        waiver
+        for waiver in raw.get("resident_rotation_waivers", [])
+        if waiver["rotation_id"] != rotation_id
     ]
     return SchedulerInput.from_payload(raw)
 
@@ -315,13 +342,26 @@ def replace_standard_rotation(
     replacement: Rotation,
     *,
     resident_overrides: list[ResidentRotationOverride | Draft] | None = None,
+    resident_waivers: list[ResidentRotationWaiver | Draft] | None = None,
     eligible_as_elective: bool | None = None,
     eligible_elective_pgys: Iterable[int] | None = None,
     eligible_elective_block_sizes: Iterable[int] | None = None,
+    elective_shapes: Iterable[tuple[int, int]] | None = None,
     elective_repeatable: bool | None = None,
     group_members_by_pgy: dict[int, list[str]] | None = None,
+    counts: dict[tuple[int, int], int] | None = None,
 ) -> SchedulerInput:
-    """Replace a standard rotation and validate all catalog references together."""
+    """Replace a standard rotation and validate all catalog references together.
+
+    When ``counts`` is given, mandatory curriculum blocks for this rotation are
+    rewritten per training level: a zero count makes that block shape
+    elective-only, a positive count makes it a mandatory requirement. Growing
+    requirements spend unallocated weeks first, then direct Elective time.
+
+    When ``elective_shapes`` is given it takes precedence over the explicit
+    elective PGYs and sizes: PGYs and sizes derive from the marked shapes
+    after funding, so growing requirements cannot leave stale sizes behind.
+    """
     try:
         original = instance.rotation(original_id)
     except KeyError as exc:
@@ -332,6 +372,58 @@ def replace_standard_rotation(
         raise ValueError("rotation ID is a system key and cannot be changed")
     if replacement.kind is not RotationKind.STANDARD:
         raise ValueError("a standard rotation cannot be changed into a special rotation")
+
+    if counts is not None:
+        configured = {rule.pgy: rule for rule in replacement.pgy_rules}
+
+        def desired_counts_for(pgy: int) -> dict[int, int]:
+            rule = configured.get(pgy)
+            allowed = (
+                {config.duration_weeks for config in rule.block_configs}
+                if rule is not None
+                else set()
+            )
+            return {duration: max(0, int(counts.get((pgy, duration), 0))) for duration in allowed}
+
+        for curriculum in instance.requirements:
+            original_weeks = sum(
+                block.duration_weeks * block.count
+                for block in curriculum.blocks
+                if block.rotation_id == original_id
+            )
+            desired = desired_counts_for(curriculum.pgy)
+            desired_weeks = sum(duration * count for duration, count in desired.items())
+            rule = configured.get(curriculum.pgy)
+            cap = rule.max_total_weeks if rule is not None else None
+            if cap is not None and desired_weeks > cap:
+                level_code = instance.training_level_label(curriculum.pgy, compact=True)
+                raise ValueError(
+                    f"{level_code}: {replacement.name} requires {desired_weeks} "
+                    f"mandatory weeks, exceeding its {cap}-week maximum"
+                )
+            delta = desired_weeks - original_weeks
+            instance = _fund_requirement(
+                instance,
+                curriculum.pgy,
+                delta,
+                requirement_label=replacement.name,
+            )
+
+        requirements = []
+        for curriculum in instance.requirements:
+            desired = desired_counts_for(curriculum.pgy)
+            blocks = [block for block in curriculum.blocks if block.rotation_id != original_id]
+            blocks.extend(
+                BlockRequirement(
+                    rotation_id=original_id,
+                    duration_weeks=duration,
+                    count=count,
+                )
+                for duration, count in sorted(desired.items())
+                if count
+            )
+            requirements.append(curriculum.model_copy(update={"blocks": blocks}))
+        instance = instance.model_copy(update={"requirements": requirements})
 
     rotations = [
         replacement if rotation.id == original_id else rotation for rotation in instance.rotations
@@ -344,40 +436,45 @@ def replace_standard_rotation(
             group_members_by_pgy,
             extra_rotation=replacement,
         )
-    if eligible_as_elective is not None:
+    if elective_shapes is not None or eligible_as_elective is not None:
         options = [
             option
             for option in instance.electives.rotation_options
             if option.rotation_id != original_id
         ]
-        if eligible_as_elective:
-            original_option = instance.electives.option_for(original_id)
-            configured_sizes = (
-                eligible_elective_block_sizes
-                if eligible_elective_block_sizes is not None
-                else instance.electives.block_sizes_for(original_id) or None
+        original_option = instance.electives.option_for(original_id)
+        if elective_shapes is not None:
+            pgys, sizes = elective_pgys_sizes_for_shapes(
+                instance,
+                replacement,
+                elective_shapes,
             )
+            should_offer = bool(pgys)
+        elif eligible_as_elective:
+            pgys = _normalize_elective_pgys(
+                instance,
+                replacement,
+                (
+                    eligible_elective_pgys
+                    if eligible_elective_pgys is not None
+                    else (original_option.eligible_pgys if original_option is not None else None)
+                ),
+            )
+            sizes = _normalize_elective_block_sizes(
+                instance,
+                replacement,
+                eligible_elective_block_sizes,
+                eligible_pgys=pgys,
+            )
+            should_offer = True
+        else:
+            should_offer = False
+        if should_offer:
             options.append(
                 ElectiveRotationOption(
                     rotation_id=original_id,
-                    eligible_pgys=_normalize_elective_pgys(
-                        instance,
-                        replacement,
-                        (
-                            eligible_elective_pgys
-                            if eligible_elective_pgys is not None
-                            else (
-                                original_option.eligible_pgys
-                                if original_option is not None
-                                else None
-                            )
-                        ),
-                    ),
-                    eligible_block_sizes=_normalize_elective_block_sizes(
-                        instance,
-                        replacement,
-                        configured_sizes,
-                    ),
+                    eligible_pgys=pgys,
+                    eligible_block_sizes=sizes,
                     repeatable=(
                         elective_repeatable
                         if elective_repeatable is not None
@@ -416,6 +513,21 @@ def replace_standard_rotation(
                 original_id,
             )
         ] + normalized
+    if resident_waivers is not None:
+        normalized_waivers = [
+            waiver
+            if isinstance(waiver, ResidentRotationWaiver)
+            else ResidentRotationWaiver.model_validate(waiver)
+            for waiver in resident_waivers
+        ]
+        for waiver in normalized_waivers:
+            if waiver.rotation_id != original_id:
+                raise ValueError("resident waiver belongs to a different rotation")
+        updates["resident_rotation_waivers"] = [
+            waiver
+            for waiver in instance.resident_rotation_waivers
+            if waiver.rotation_id != original_id
+        ] + normalized_waivers
     return instance.revised(**updates)
 
 
@@ -695,29 +807,35 @@ def set_elective_eligibility(
     ]
     if eligible:
         original_option = instance.electives.option_for(rotation_id)
-        configured_sizes = (
-            eligible_block_sizes
-            if eligible_block_sizes is not None
-            else instance.electives.block_sizes_for(rotation_id) or None
+        pgys = _normalize_elective_pgys(
+            instance,
+            rotation,
+            (
+                eligible_pgys
+                if eligible_pgys is not None
+                else (original_option.eligible_pgys if original_option is not None else None)
+            ),
         )
+        # Mandatory/FMED sizes follow Training-level rules; an explicit size
+        # list is still honored for backward compatibility (raw imports, tests).
+        # UI callers pass None so sizes are derived from the resolved levels.
+        sizes_arg: Iterable[int] | None = eligible_block_sizes
+        if sizes_arg is None and rotation.kind in {RotationKind.STANDARD, RotationKind.FMED}:
+            original_sizes = (
+                instance.electives.block_sizes_for(rotation_id) or None
+                if original_option is not None and eligible_pgys is None
+                else None
+            )
+            sizes_arg = original_sizes
         options.append(
             ElectiveRotationOption(
                 rotation_id=rotation_id,
-                eligible_pgys=_normalize_elective_pgys(
-                    instance,
-                    rotation,
-                    (
-                        eligible_pgys
-                        if eligible_pgys is not None
-                        else (
-                            original_option.eligible_pgys if original_option is not None else None
-                        )
-                    ),
-                ),
+                eligible_pgys=pgys,
                 eligible_block_sizes=_normalize_elective_block_sizes(
                     instance,
                     rotation,
-                    configured_sizes,
+                    sizes_arg,
+                    eligible_pgys=pgys,
                 ),
                 repeatable=(
                     repeatable
@@ -908,28 +1026,100 @@ def remove_elective_rotation(
     return SchedulerInput.from_payload(raw)
 
 
+def elective_shapes_for_rotation(
+    instance: SchedulerInput,
+    rotation_id: str,
+) -> set[tuple[int, int]]:
+    """Return the stored elective (pgy, duration) shapes for one service.
+
+    Faithful to the saved option: a shape is present exactly when the option
+    admits it, before fillability filtering at save time.
+    """
+    option = instance.electives.option_for(rotation_id)
+    if option is None:
+        return set()
+    return {
+        (pgy, duration) for pgy in option.eligible_pgys for duration in option.eligible_block_sizes
+    }
+
+
+def elective_pgys_sizes_for_shapes(
+    instance: SchedulerInput,
+    rotation: Rotation,
+    elective_shapes: Iterable[tuple[int, int]],
+) -> tuple[list[int], list[int]]:
+    """Derive explicit option PGYs and sizes from per-shape elective flags.
+
+    Only fillable shapes survive into sizes: the duration must be Elective
+    curriculum time for that level and allowed by the rotation's own rules.
+    """
+    shapes = {(int(pgy), int(duration)) for pgy, duration in elective_shapes}
+    pgys = sorted({pgy for pgy, _ in shapes})
+    sizes = sorted(
+        {
+            duration
+            for pgy, duration in shapes
+            if duration in instance.elective_block_durations_for_pgy(pgy)
+            and rotation.allows_duration(duration, pgy=pgy)
+        }
+    )
+    if pgys and not sizes:
+        raise ValueError(
+            "elective block shapes do not match any Elective curriculum time; "
+            "check the marked shapes' training levels and block lengths"
+        )
+    return pgys, sizes
+
+
+def _derived_elective_block_sizes(
+    instance: SchedulerInput,
+    rotation: Rotation,
+    eligible_pgys: Iterable[int],
+) -> list[int]:
+    """Derive Elective sizes from Training-level rules and the Elective curriculum.
+
+    Sizes follow the rotation's own ``block_configs`` (the second screen): a
+    duration is eligible only when the Elective curriculum offers it for an
+    eligible training level and the rotation allows it there.
+    """
+    return sorted(
+        {
+            duration
+            for pgy in {int(value) for value in eligible_pgys}
+            for duration in instance.elective_block_durations_for_pgy(pgy)
+            if rotation.allows_duration(duration, pgy=pgy)
+        }
+    )
+
+
 def _normalize_elective_block_sizes(
     instance: SchedulerInput,
     rotation: Rotation,
     values: Iterable[int] | None,
     *,
     seedable: bool = False,
+    eligible_pgys: Iterable[int] | None = None,
 ) -> list[int]:
     """Normalize an option's sizes, defaulting to compatible curriculum shapes.
 
     ``seedable`` callers allocate the Elective slots they need, so they fall back
     to the shapes the service itself configures when the curriculum has none.
+    When ``eligible_pgys`` is given and ``values`` is omitted, sizes are derived
+    from those levels' Training-level rules instead of the global curriculum.
     """
     if values is None:
-        sizes = [
-            duration
-            for duration in instance.elective_block_sizes
-            if any(
-                duration in instance.elective_block_durations_for_pgy(curriculum.pgy)
-                and rotation.allows_duration(duration, pgy=curriculum.pgy)
-                for curriculum in instance.requirements
-            )
-        ]
+        if eligible_pgys is not None:
+            sizes = _derived_elective_block_sizes(instance, rotation, eligible_pgys)
+        else:
+            sizes = [
+                duration
+                for duration in instance.elective_block_sizes
+                if any(
+                    duration in instance.elective_block_durations_for_pgy(curriculum.pgy)
+                    and rotation.allows_duration(duration, pgy=curriculum.pgy)
+                    for curriculum in instance.requirements
+                )
+            ]
         if not sizes and seedable:
             sizes = sorted(
                 {
@@ -1028,9 +1218,19 @@ def replace_fmed_pgy_rules(
     eligible_as_elective: bool | None = None,
     eligible_elective_pgys: Iterable[int] | None = None,
     eligible_elective_block_sizes: Iterable[int] | None = None,
+    elective_shapes: Iterable[tuple[int, int]] | None = None,
     elective_repeatable: bool | None = None,
 ) -> SchedulerInput:
-    """Replace editable FMED staffing, block, and clinic-concurrency rules."""
+    """Replace editable FMED staffing, block, and clinic rules.
+
+    The dedicated editor owns concurrency caps and the eligible clinic days;
+    every other clinic setting (workload, admin time, academic-day handling)
+    stays as configured.
+
+    When ``elective_shapes`` is given it takes precedence over the explicit
+    elective PGYs and sizes: PGYs and sizes derive from the marked shapes
+    after funding, so growing requirements cannot leave stale sizes behind.
+    """
     try:
         original = instance.rotation(original_id)
     except KeyError as exc:
@@ -1044,9 +1244,11 @@ def replace_fmed_pgy_rules(
     if clinic is not None and replacement.clinic is not None:
         clinic["max_concurrent"] = replacement.clinic.max_concurrent
         clinic["max_concurrent_by_pgy"] = replacement.clinic.max_concurrent_by_pgy
+        clinic["slots"] = [slot.model_dump(mode="json") for slot in replacement.clinic.slots]
 
-    # Keep identity, clinic timing/site behavior, operational flags, and color
-    # untouched; the dedicated editor owns only these rules and concurrency caps.
+    # Keep identity, remaining clinic behavior, operational flags, and color
+    # untouched; the dedicated editor owns only these rules, the concurrency
+    # caps, and the eligible clinic days.
     constrained = Rotation.model_validate(
         {
             **original.model_dump(mode="json"),
@@ -1056,7 +1258,7 @@ def replace_fmed_pgy_rules(
         }
     )
     elective_configuration = None
-    if eligible_as_elective is not None:
+    if elective_shapes is None and eligible_as_elective is not None:
         options = [
             option
             for option in instance.electives.rotation_options
@@ -1064,26 +1266,24 @@ def replace_fmed_pgy_rules(
         ]
         if eligible_as_elective:
             original_option = instance.electives.option_for(original_id)
+            pgys = _normalize_elective_pgys(
+                instance,
+                constrained,
+                (
+                    eligible_elective_pgys
+                    if eligible_elective_pgys is not None
+                    else (original_option.eligible_pgys if original_option is not None else None)
+                ),
+            )
             options.append(
                 ElectiveRotationOption(
                     rotation_id=original_id,
-                    eligible_pgys=_normalize_elective_pgys(
-                        instance,
-                        constrained,
-                        (
-                            eligible_elective_pgys
-                            if eligible_elective_pgys is not None
-                            else (
-                                original_option.eligible_pgys
-                                if original_option is not None
-                                else None
-                            )
-                        ),
-                    ),
+                    eligible_pgys=pgys,
                     eligible_block_sizes=_normalize_elective_block_sizes(
                         instance,
                         constrained,
                         eligible_elective_block_sizes,
+                        eligible_pgys=pgys,
                     ),
                     repeatable=(
                         elective_repeatable
@@ -1104,6 +1304,8 @@ def replace_fmed_pgy_rules(
         expected_kind=RotationKind.FMED,
         requirement_label="FMED",
         elective_configuration=elective_configuration,
+        elective_shapes=elective_shapes,
+        elective_repeatable=elective_repeatable,
     )
 
 
@@ -1116,8 +1318,20 @@ def _replace_required_rotation_rules(
     expected_kind: RotationKind,
     requirement_label: str,
     elective_configuration: ElectiveConfiguration | None = None,
+    elective_shapes: Iterable[tuple[int, int]] | None = None,
+    elective_repeatable: bool | None = None,
 ) -> SchedulerInput:
-    """Replace required-block rules, spending or freeing unallocated weeks."""
+    """Replace required-block rules, spending or freeing unallocated weeks.
+
+    Pinned placements the edited requirement can no longer honor are
+    released, mirroring whole-rotation removal: removing a training-level
+    rule (or zeroing its blocks) orphans locks that depended on those weeks,
+    so the save releases them instead of failing validation.
+
+    When ``elective_shapes`` is given (instead of a prebuilt configuration),
+    PGYs and sizes derive from the marked shapes after funding, so growing
+    requirements cannot leave stale sizes behind.
+    """
     try:
         original = instance.rotation(original_id)
     except KeyError as exc:
@@ -1147,9 +1361,16 @@ def _replace_required_rotation_rules(
             if block.rotation_id == original_id
         )
         desired = desired_counts_for(curriculum.pgy)
-        delta_weeks = (
-            sum(duration * count for duration, count in desired.items()) - original_required_weeks
-        )
+        desired_weeks = sum(duration * count for duration, count in desired.items())
+        rule = configured_pgys.get(curriculum.pgy)
+        cap = rule.max_total_weeks if rule is not None else None
+        if cap is not None and desired_weeks > cap:
+            level_code = instance.training_level_label(curriculum.pgy, compact=True)
+            raise ValueError(
+                f"{level_code}: {requirement_label} requires {desired_weeks} "
+                f"mandatory weeks, exceeding its {cap}-week maximum"
+            )
+        delta_weeks = desired_weeks - original_required_weeks
         instance = _fund_requirement(
             instance,
             curriculum.pgy,
@@ -1158,7 +1379,36 @@ def _replace_required_rotation_rules(
         )
 
     raw = instance.model_dump(mode="json")
-    if elective_configuration is not None:
+    if elective_shapes is not None:
+        pgys, sizes = elective_pgys_sizes_for_shapes(
+            instance,
+            replacement,
+            elective_shapes,
+        )
+        options = [
+            option
+            for option in instance.electives.rotation_options
+            if option.rotation_id != original_id
+        ]
+        if pgys:
+            original_option = instance.electives.option_for(original_id)
+            options.append(
+                ElectiveRotationOption(
+                    rotation_id=original_id,
+                    eligible_pgys=pgys,
+                    eligible_block_sizes=sizes,
+                    repeatable=(
+                        elective_repeatable
+                        if elective_repeatable is not None
+                        else bool(original_option and original_option.repeatable)
+                    ),
+                )
+            )
+        raw["electives"] = ElectiveConfiguration(
+            color=instance.electives.color,
+            rotation_options=options,
+        ).model_dump(mode="json")
+    elif elective_configuration is not None:
         raw["electives"] = elective_configuration.model_dump(mode="json")
     raw["rotations"] = [
         replacement.model_dump(mode="json") if rotation["id"] == original_id else rotation
@@ -1180,7 +1430,67 @@ def _replace_required_rotation_rules(
         )
         curriculum["blocks"] = blocks
 
+    raw["locks"] = _release_orphaned_requirement_locks(
+        raw.get("locks", []),
+        original,
+        replacement,
+        original_id,
+        raw["requirements"],
+        instance.residents_by_id,
+    )
+
     return SchedulerInput.from_payload(raw)
+
+
+def _release_orphaned_requirement_locks(
+    locks: list[Draft],
+    original: Rotation,
+    replacement: Rotation,
+    original_id: str,
+    curricula: list[Draft],
+    residents_by_id: dict[str, Any],
+) -> list[Draft]:
+    """Release pinned placements the edited requirement can no longer honor.
+
+    A lock survives unless the edit took away the weeks it needs: the
+    resident's training level lost its rule entirely, the remaining
+    requirement is shorter than the locked weeks, or an exact-block lock's
+    duration is no longer configured. Locks on other rotations and locks the
+    new configuration still satisfies are kept untouched.
+    """
+    removed_pgys = {rule.pgy for rule in original.pgy_rules} - {
+        rule.pgy for rule in replacement.pgy_rules
+    }
+    weeks_by_pgy: dict[int, int] = {}
+    durations_by_pgy: dict[int, set[int]] = {}
+    for curriculum in curricula:
+        pgy = int(curriculum["pgy"])
+        blocks = [block for block in curriculum["blocks"] if block["rotation_id"] == original_id]
+        weeks_by_pgy[pgy] = sum(
+            int(block["duration_weeks"]) * int(block["count"]) for block in blocks
+        )
+        durations_by_pgy[pgy] = {int(block["duration_weeks"]) for block in blocks}
+    surviving = []
+    for lock in locks:
+        if lock.get("rotation_id") != original_id:
+            surviving.append(lock)
+            continue
+        resident = residents_by_id.get(str(lock.get("resident_id")))
+        if resident is None:
+            surviving.append(lock)
+            continue
+        if resident.pgy in removed_pgys:
+            continue
+        if not lock.get("elective"):
+            weeks = list(lock.get("weeks") or [])
+            if len(weeks) > weeks_by_pgy.get(resident.pgy, 0):
+                continue
+            if lock.get("exact_block") and len(weeks) not in durations_by_pgy.get(
+                resident.pgy, set()
+            ):
+                continue
+        surviving.append(lock)
+    return surviving
 
 
 def _require_unallocated_weeks(
@@ -1337,6 +1647,10 @@ def resident_missing_mandatory_rotations(
     for override in instance.resident_rotation_overrides:
         if override.resident_id == resident_id:
             required[override.rotation_id, override.duration_weeks] += 1
+    for waiver in instance.resident_rotation_waivers:
+        if waiver.resident_id == resident_id:
+            key = (waiver.rotation_id, waiver.duration_weeks)
+            required[key] = max(0, required.get(key, 0) - 1)
 
     missing_count = 0
     labels: list[str] = []
@@ -1382,6 +1696,11 @@ def resident_rotation_week_totals(
         if override.resident_id != resident_id:
             continue
         totals["mandatory"] += override.duration_weeks
-        totals["elective"] -= override.duration_weeks
+        if override.replaces_rotation_id is not None:
+            totals["elective"] -= override.duration_weeks
+    for waiver in instance.resident_rotation_waivers:
+        if waiver.resident_id != resident_id:
+            continue
+        totals["mandatory"] -= waiver.duration_weeks
 
     return totals

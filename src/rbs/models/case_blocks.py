@@ -56,13 +56,15 @@ class ResidentRotationOverride(StrictModel):
     """One additional resident-specific Mandatory block.
 
     The solver places the block normally and removes a same-length direct
-    Elective requirement for that resident.
+    Elective requirement for that resident. When ``replaces_rotation_id`` is
+    None the block is instead funded by the training level's unallocated
+    weeks, leaving every curriculum requirement in place.
     """
 
     resident_id: str
     rotation_id: str
     duration_weeks: int = Field(ge=1, le=5)
-    replaces_rotation_id: str
+    replaces_rotation_id: str | None = Field(default=None)
     group_instance_id: str | None = Field(
         default=None,
         description=(
@@ -80,3 +82,17 @@ class ResidentRotationOverride(StrictModel):
         if not normalized:
             raise ValueError("group_instance_id cannot be blank")
         return normalized
+
+
+class ResidentRotationWaiver(StrictModel):
+    """One resident-specific excusal from a direct curriculum block.
+
+    The solver simply does not place the waived block for that resident; the
+    freed weeks become unscheduled time. Waivers consume the same direct
+    inventory as Mandatory rotation overrides, so a block cannot be both
+    waived and replaced away.
+    """
+
+    resident_id: str
+    rotation_id: str
+    duration_weeks: int = Field(ge=1, le=5)
