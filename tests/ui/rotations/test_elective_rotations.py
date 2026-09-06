@@ -20,12 +20,16 @@ from rbs.ui.rotations.editor import (
     _rotation_editor,
     render_rotations_tab,
 )
+from rbs.ui.rotations.elective import _elective_rule_pgys
 from rbs.ui.rotations.ops import (
     add_elective_rotation,
     direct_elective_counts,
     remove_elective_rotation,
     replace_elective_color,
+    replace_elective_rotation,
     replace_standard_rotation,
+    rotation_editor_state,
+    rotation_from_editor_state,
     set_elective_allocation,
     set_elective_eligibility,
 )
@@ -992,3 +996,74 @@ def test_a_block_length_already_committed_is_not_offered_twice() -> None:
         "4 weeks",
         "5 weeks",
     ]
+
+
+def test_adding_a_year_to_a_standalone_elective_extends_its_eligible_years() -> None:
+    from nicegui import ui
+    from nicegui.events import ValueChangeEventArguments
+
+    instance = sample_instance()
+    saves: list = []
+    before = set(ui.context.client.elements)
+    _elective_rotation_editor(
+        instance,
+        instance.rotation("palliative_care"),
+        on_cancel=lambda: None,
+        on_save=lambda updated, rotation_id: saves.append((updated, rotation_id)),
+    )
+
+    box = next(
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+        and element.__class__.__name__ == "Checkbox"
+        and getattr(element, "_text", None) == "Available to PGY 3"
+    )
+    assert box.value is False
+    event = ValueChangeEventArguments(
+        sender=box, client=box.client, value=True, previous_value=False
+    )
+    for handler in list(box._change_handlers):
+        handler(event)
+
+    created = _created_since(before)
+    _click(_button(created, "Save elective"))
+
+    assert saves, "saving did not reach on_save"
+    updated, rotation_id = saves[-1]
+    assert rotation_id == "palliative_care"
+    assert [rule.pgy for rule in updated.rotation("palliative_care").pgy_rules] == [1, 2, 3]
+    option = updated.electives.option_for("palliative_care")
+    assert option.eligible_pgys == [1, 2, 3]
+    assert option.eligible_block_sizes == [2]
+    assert option.repeatable is True
+
+
+def test_newly_eligible_year_still_needs_elective_time_to_rank() -> None:
+    from types import SimpleNamespace
+
+    from rbs.ui.residents.electives import elective_preference_options
+    from rbs.ui.rotations.widgets import toggle_pgy_rule
+
+    instance = sample_instance()
+    draft = rotation_editor_state(instance.rotation("palliative_care"))
+    toggle_pgy_rule(
+        draft,
+        3,
+        instance.training_level_ids,
+        lambda: None,
+        SimpleNamespace(value=True),
+    )
+    replacement = rotation_from_editor_state(draft)
+    updated = replace_elective_rotation(
+        instance,
+        "palliative_care",
+        replacement,
+        eligible_pgys=_elective_rule_pgys(draft),
+        eligible_block_sizes=[2],
+    )
+    assert updated.electives.option_for("palliative_care").eligible_pgys == [1, 2, 3]
+
+    resident = next(item for item in updated.residents if item.pgy == 3)
+    assert updated.direct_elective_block_counts_for_pgy(3) == {}
+    assert "palliative_care|2" not in elective_preference_options(updated, resident)
