@@ -1027,6 +1027,93 @@ def test_fmed_pgy_rule_editor_exposes_required_block_controls() -> None:
     assert "Rotation name" not in labels
 
 
+def test_fmed_rules_dialog_owns_the_block_color() -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    before = set(ui.context.client.elements)
+
+    _open_fmed_pgy_rules_dialog(
+        instance,
+        "fmed",
+        selected_rotation_id=None,
+        on_save=lambda _instance, _rotation_id: None,
+    )
+    created = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+    swatches = [
+        element
+        for element in created
+        if element.__class__.__name__ == "Button"
+        and "rbs-rotation-color-choice" in element._classes
+    ]
+
+    assert len(swatches) == len(instance.color_scheme.palette)
+    assert sum("is-selected" in element._classes for element in swatches) == 1
+
+
+def test_recoloring_fmed_alone_keeps_the_solved_schedule() -> None:
+    """Rule edits invalidate a schedule; recoloring blocks does not."""
+    from nicegui import ui
+    from nicegui.events import ClickEventArguments
+
+    instance = sample_instance()
+    saves: list = []
+    colors: list = []
+    before = set(ui.context.client.elements)
+
+    _open_fmed_pgy_rules_dialog(
+        instance,
+        "fmed",
+        selected_rotation_id=None,
+        on_save=lambda updated, rotation_id: saves.append((updated, rotation_id)),
+        on_color_save=lambda updated, rotation_id: colors.append((updated, rotation_id)),
+    )
+    created = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+
+    def click(button) -> None:
+        for listener in list(button._event_listeners.values()):
+            if listener.type == "click":
+                listener.handler(ClickEventArguments(sender=button, client=button.client))
+                return
+
+    swatches = [
+        element
+        for element in created
+        if element.__class__.__name__ == "Button"
+        and "rbs-rotation-color-choice" in element._classes
+    ]
+    click(swatches[5])
+    click(
+        next(
+            element
+            for element in created
+            if element.__class__.__name__ == "Button"
+            and element._props.get("label") == "Save rules"
+        )
+    )
+
+    assert not saves
+    updated, _rotation_id = colors[-1]
+    assert updated.rotation("fmed").color == instance.color_scheme.palette[5]
+    # Requirements are untouched; replace_fmed_pgy_rules only reorders them.
+    assert sorted(
+        (block.rotation_id, block.duration_weeks, block.count)
+        for block in updated.curriculum_for(1).blocks
+    ) == sorted(
+        (block.rotation_id, block.duration_weeks, block.count)
+        for block in instance.curriculum_for(1).blocks
+    )
+    assert updated.rotation("fmed").pgy_rules == instance.rotation("fmed").pgy_rules
+
+
 def test_rotation_summary_is_the_first_and_default_workspace_tab() -> None:
     from nicegui import ui
 
@@ -1047,14 +1134,18 @@ def test_rotation_summary_is_the_first_and_default_workspace_tab() -> None:
     assert tabs[0]._props.get("label") == "Summary"
     panels = next(element for element in created if element.__class__.__name__ == "TabPanels")
     assert panels._props.get("model-value") == "rotation_summary"
+    # FMED and Elective block colors are chosen in their pop-out editors, so the
+    # tab itself reports the current color rather than offering a palette.
     dedicated_color_buttons = [
         element
         for element in created
         if element.__class__.__name__ == "Button"
         and "rbs-rotation-color-choice" in element._classes
     ]
-    assert len(dedicated_color_buttons) == 2 * len(sample_instance().color_scheme.palette)
-    assert sum("is-selected" in element._classes for element in dedicated_color_buttons) == 2
+    assert dedicated_color_buttons == []
+    assert {"Edit rules", "Edit shared properties"} <= {
+        element._props.get("label") for element in created
+    }
     assert (
         sum(getattr(element, "_text", None) == "Schedule color editable" for element in created)
         == 0

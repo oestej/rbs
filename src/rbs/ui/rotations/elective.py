@@ -17,6 +17,7 @@ from rbs.ui.buttons import (
     DESTRUCTIVE_ICON_BUTTON_PROPS,
     ICON_BUTTON_PROPS,
     PRIMARY_BUTTON_PROPS,
+    TERTIARY_BUTTON_PROPS,
     button_props,
 )
 from rbs.ui.clinic.ops import (
@@ -25,6 +26,7 @@ from rbs.ui.clinic.ops import (
 from rbs.ui.drafts import Draft
 from rbs.ui.editor_common import (
     _DEFAULT_BLOCK_DURATION_WEEKS,
+    _DURATION_OPTIONS,
     _validation_message,
     _weeks_label,
 )
@@ -39,6 +41,7 @@ from rbs.ui.rotations.forms import (
 )
 from rbs.ui.rotations.ops import (
     add_elective_rotation,
+    direct_elective_counts,
     elective_rotations,
     next_mandatory_rotation_id,
     remove_elective_rotation,
@@ -46,10 +49,12 @@ from rbs.ui.rotations.ops import (
     replace_elective_rotation,
     rotation_editor_state,
     rotation_from_editor_state,
+    set_elective_allocation,
 )
 from rbs.ui.rotations.summary import (
     _elective_block_size_options,
     _rotation_identity,
+    _rotation_overview_row,
 )
 from rbs.ui.rotations.types import (
     SaveRotation,
@@ -87,21 +92,18 @@ def _elective_configuration(
                 with ui.row().classes("w-full items-start justify-between gap-3"):
                     with ui.column().classes("gap-0"):
                         ui.label("Shared elective properties").classes("rbs-type-section-title")
-                color_draft: Draft = {"color": instance.electives.color}
-
-                def save_color(color: str) -> None:
-                    try:
-                        updated = replace_elective_color(instance, color)
-                        ui.notify("Elective schedule color updated", type="positive")
-                        on_color_save(updated, selected_rotation_id)
-                    except (ValidationError, ValueError) as exc:
-                        ui.notify(_validation_message(exc), type="negative", multi_line=True)
-
-                rotation_color_palette(
-                    color_draft,
-                    instance.color_scheme.palette,
-                    on_change=save_color,
-                )
+                    ui.button(
+                        "Edit shared properties",
+                        icon="edit",
+                        on_click=partial(
+                            _open_elective_properties_dialog,
+                            instance,
+                            selected_rotation_id=selected_rotation_id,
+                            on_save=on_save,
+                            on_color_save=on_color_save,
+                        ),
+                    ).props("outline dense no-caps")
+                _elective_shared_summary(instance)
 
         with master_detail.split(detail_selected=selected is not None):
             _elective_directory(
@@ -123,6 +125,344 @@ def _elective_configuration(
                 on_select=on_select,
                 on_save=on_save,
             )
+
+
+def _elective_shared_summary(instance: SchedulerInput) -> None:
+    """Report the shared Elective color and each level's committed Elective time.
+
+    Elective time is the one requirement a program allocates without naming a
+    service, so it has no rotation of its own to be edited from. Without this
+    surface a level's Elective blocks could only be created as a side effect of
+    adding a Mandatory requirement or enabling an option.
+    """
+    from nicegui import ui
+
+    with ui.column().classes("rbs-elective-shared-summary w-full gap-4"):
+        with ui.column().classes("gap-1"):
+            ui.label("Block schedule color").classes(
+                "rbs-type-caption rbs-font-semibold uppercase rbs-text-muted"
+            )
+            with ui.row().classes("items-center gap-2"):
+                ui.element("span").classes("rbs-rotation-color-swatch").style(
+                    f"--rbs-rotation-choice-color:{instance.electives.color}"
+                )
+                ui.label(instance.electives.color).classes("rbs-type-body")
+        with ui.column().classes("w-full gap-2"):
+            ui.label("Elective time").classes(
+                "rbs-type-caption rbs-font-semibold uppercase rbs-text-muted"
+            )
+            if not instance.requirements:
+                ui.label("No training levels are configured yet.").classes(
+                    "rbs-type-body rbs-text-muted"
+                )
+                return
+            with ui.element("div").classes("rbs-rotation-pgy-grid w-full"):
+                for curriculum in instance.requirements:
+                    _elective_time_level_summary(instance, curriculum.pgy)
+
+
+def _elective_time_level_summary(instance: SchedulerInput, pgy: int) -> None:
+    """One training level's committed Elective blocks and its unscheduled time."""
+    from nicegui import ui
+
+    committed = direct_elective_counts(instance, pgy)
+    with (
+        ui.card()
+        .props("flat bordered")
+        .classes("rbs-rotation-overview-card rbs-rotation-pgy-card gap-3 p-4")
+    ):
+        with ui.row().classes("w-full items-start justify-between gap-3"):
+            ui.label(instance.training_level_name(pgy)).classes("rbs-type-control-label")
+            ui.badge(
+                _weeks_label(sum(duration * count for duration, count in committed.items())),
+                color="secondary",
+            ).props("outline")
+        _rotation_overview_row(
+            "Elective blocks",
+            "; ".join(
+                f"{count} × {_weeks_label(duration)}" for duration, count in committed.items()
+            )
+            or "None committed",
+            icon="view_week",
+        )
+        _rotation_overview_row(
+            "Unscheduled",
+            _weeks_label(instance.unallocated_weeks(pgy)),
+            icon="event_available",
+        )
+
+
+def _open_elective_properties_dialog(
+    instance: SchedulerInput,
+    *,
+    selected_rotation_id: str | None,
+    on_save: SaveRotation,
+    on_color_save: SaveRotation | None = None,
+) -> None:
+    """Edit the shared Elective color and every level's Elective blocks."""
+    from nicegui import ui
+
+    color_draft: Draft = {"color": instance.electives.color}
+    drafts: dict[int, list[Draft]] = {
+        curriculum.pgy: [
+            {"duration_weeks": duration, "count": count}
+            for duration, count in direct_elective_counts(instance, curriculum.pgy).items()
+        ]
+        for curriculum in instance.requirements
+    }
+    # Elective time can always be re-spent on itself, so a level's budget is its
+    # unscheduled weeks plus whatever Elective time it already holds.
+    budgets = {
+        pgy: instance.unallocated_weeks(pgy)
+        + sum(int(row["duration_weeks"]) * int(row["count"]) for row in rows)
+        for pgy, rows in drafts.items()
+    }
+    overspent: dict[int, bool] = {}
+    footer: dict[str, object] = {"save": None}
+
+    def refresh_save() -> None:
+        save = footer["save"]
+        if save is not None:
+            save.set_enabled(not any(overspent.values()))
+
+    def save_properties() -> None:
+        try:
+            recolored = replace_elective_color(instance, str(color_draft["color"]))
+            updated = recolored
+            for pgy, rows in drafts.items():
+                desired = {
+                    int(row["duration_weeks"]): int(row["count"])
+                    for row in rows
+                    if int(row["count"])
+                }
+                # Reallocating an untouched level would reshape its curriculum
+                # blocks for nothing, and would hide a color-only edit.
+                if desired == direct_elective_counts(instance, pgy):
+                    continue
+                updated = set_elective_allocation(updated, pgy, desired)
+            dialog.close()
+            ui.notify("Shared elective properties updated", type="positive")
+            # A color-only edit leaves a solved schedule valid.
+            if updated == recolored and on_color_save is not None:
+                on_color_save(updated, selected_rotation_id)
+            else:
+                on_save(updated, selected_rotation_id)
+        except (ValidationError, ValueError) as exc:
+            ui.notify(_validation_message(exc), type="negative", multi_line=True)
+
+    with (
+        ui.dialog() as dialog,
+        ui.card()
+        .classes("rbs-elective-properties-dialog p-0 gap-0")
+        .style("width:calc(100vw - 64px);max-width:720px;max-height:calc(100vh - 64px)"),
+    ):
+        with ui.row().classes("w-full items-center justify-between gap-3 px-5 py-4"):
+            ui.label("Edit shared elective properties").classes("rbs-type-dialog-title")
+            ui.button(icon="close", on_click=dialog.close).props(
+                button_props(ICON_BUTTON_PROPS, "aria-label='Close shared elective properties'")
+            )
+        ui.separator()
+        # The card is sized by its content, so a flex-1 scroll area would have no
+        # height to resolve against. Cap and scroll the content column instead.
+        with (
+            ui.column()
+            .classes("w-full gap-4 p-5")
+            .style("overflow-y:auto;max-height:calc(100vh - 220px)")
+        ):
+            rotation_color_palette(
+                color_draft,
+                instance.color_scheme.palette,
+            )
+            with ui.column().classes("w-full gap-3"):
+                with ui.column().classes("gap-0"):
+                    ui.label("Elective time").classes("rbs-type-control-label")
+                    ui.label(
+                        "Adding blocks spends a training level's unscheduled weeks; "
+                        "removing them gives the time back."
+                    ).classes("rbs-type-caption rbs-text-muted")
+                if not drafts:
+                    ui.label("No training levels are configured yet.").classes(
+                        "rbs-type-body rbs-text-muted"
+                    )
+                for pgy, rows in drafts.items():
+                    _elective_time_level_editor(
+                        instance,
+                        pgy,
+                        rows,
+                        budget_weeks=budgets[pgy],
+                        overspent=overspent,
+                        on_change=refresh_save,
+                    )
+        ui.separator()
+        with ui.row().classes("w-full justify-end gap-3 p-4"):
+            ui.button("Cancel", on_click=dialog.close).props(TERTIARY_BUTTON_PROPS)
+            footer["save"] = ui.button(
+                "Save elective properties",
+                icon="save",
+                on_click=save_properties,
+            ).props(PRIMARY_BUTTON_PROPS)
+    refresh_save()
+    dialog.open()
+
+
+def _elective_time_level_editor(
+    instance: SchedulerInput,
+    pgy: int,
+    rows: list[Draft],
+    *,
+    budget_weeks: int,
+    overspent: dict[int, bool],
+    on_change: Callable[[], None],
+) -> None:
+    """Edit one training level's Elective slots against the weeks it can spend."""
+    from nicegui import ui
+
+    with (
+        ui.card()
+        .props("flat bordered")
+        .classes("rbs-rotation-nested-card rbs-elective-time-level w-full gap-3 p-4")
+    ):
+        with ui.row().classes("w-full items-center justify-between gap-3"):
+            ui.label(instance.training_level_name(pgy)).classes("rbs-font-semibold")
+            budget = ui.label().classes("rbs-type-caption rbs-text-muted")
+        body = ui.column().classes("w-full gap-3")
+
+        def planned_weeks() -> int:
+            return sum(int(row["duration_weeks"]) * int(row["count"]) for row in rows)
+
+        def unused_durations(keeping: int | None = None) -> dict[int, str]:
+            taken = {int(row["duration_weeks"]) for row in rows} - {keeping}
+            return {
+                duration: label
+                for duration, label in _DURATION_OPTIONS.items()
+                if duration not in taken
+            }
+
+        def update_budget() -> None:
+            planned = planned_weeks()
+            remaining = budget_weeks - planned
+            budget.set_text(f"{max(remaining, 0)} unscheduled · {planned} Elective")
+            overspend.set_text(
+                f"{_weeks_label(-remaining)} more than "
+                f"{instance.training_level_label(pgy, compact=True)} has left to spend"
+                if remaining < 0
+                else ""
+            )
+            overspend.set_visibility(remaining < 0)
+            add_button.set_enabled(bool(unused_durations()))
+            overspent[pgy] = remaining < 0
+            on_change()
+
+        def render_rows() -> None:
+            body.clear()
+            with body:
+                if not rows:
+                    ui.label("No Elective time committed for this training level.").classes(
+                        "rbs-type-caption rbs-text-muted"
+                    )
+                for index, row in enumerate(rows):
+                    _elective_time_row(
+                        rows,
+                        row,
+                        index,
+                        unused_durations(int(row["duration_weeks"])),
+                        on_duration_change=render_rows,
+                        on_count_change=update_budget,
+                    )
+            update_budget()
+
+        def add_row() -> None:
+            available = unused_durations()
+            if not available:
+                return
+            rows.append(
+                {
+                    "duration_weeks": (
+                        _DEFAULT_BLOCK_DURATION_WEEKS
+                        if _DEFAULT_BLOCK_DURATION_WEEKS in available
+                        else next(iter(available))
+                    ),
+                    "count": 1,
+                }
+            )
+            render_rows()
+
+        with ui.row().classes("w-full items-center gap-2"):
+            add_button = ui.button(
+                "Add block length",
+                icon="add",
+                on_click=add_row,
+            ).props(TERTIARY_BUTTON_PROPS)
+        overspend = ui.label().classes("rbs-type-caption rbs-text-danger")
+
+        render_rows()
+
+
+def _elective_time_row(
+    rows: list[Draft],
+    row: Draft,
+    index: int,
+    duration_options: dict[int, str],
+    *,
+    on_duration_change: Callable[[], None],
+    on_count_change: Callable[[], None],
+) -> None:
+    """One Elective block length and the number of those blocks per resident."""
+    from nicegui import ui
+
+    with ui.row().classes("rbs-elective-time-row w-full items-center gap-3"):
+        duration = (
+            ui.select(
+                duration_options,
+                value=int(row["duration_weeks"]),
+                label="Elective block length",
+            )
+            .props("outlined dense options-dense")
+            .classes("w-full sm:w-48")
+        )
+        count = (
+            ui.number(
+                "Blocks per resident",
+                value=int(row["count"]),
+                min=0,
+                precision=0,
+                step=1,
+            )
+            .props("outlined dense")
+            .classes("w-full sm:w-48")
+        )
+        ui.button(
+            icon="delete_outline",
+            on_click=partial(_remove_elective_time_row, rows, index, on_duration_change),
+        ).props(
+            button_props(
+                DESTRUCTIVE_ICON_BUTTON_PROPS,
+                "aria-label='Remove Elective block length'",
+            )
+        )
+    # A changed block length re-keys the allocation, so every other row has to
+    # re-render to drop the length this one now holds. A changed count does not.
+    duration.on_value_change(partial(_set_elective_time_duration, row, on_duration_change))
+    count.on_value_change(partial(_set_elective_time_count, row, on_count_change))
+
+
+def _set_elective_time_duration(row: Draft, refresh: Callable[[], None], event) -> None:
+    row["duration_weeks"] = int(event.value)
+    refresh()
+
+
+def _set_elective_time_count(row: Draft, refresh: Callable[[], None], event) -> None:
+    row["count"] = max(0, int(event.value) if event.value is not None else 0)
+    refresh()
+
+
+def _remove_elective_time_row(
+    rows: list[Draft],
+    index: int,
+    refresh: Callable[[], None],
+) -> None:
+    del rows[index]
+    refresh()
 
 
 def _elective_directory(
