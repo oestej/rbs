@@ -3,12 +3,89 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from math import ceil, floor
 
 from rbs.models.clinic import clinic_slot_date
 from rbs.models.enums import RotationKind, Session, Weekday
 from rbs.models.instance import SolverProblem
 from rbs.models.schedule import Schedule
+
+
+@dataclass(frozen=True)
+class ClinicCapacityViolation:
+    """One clinic half-day whose final assigned headcount exceeds coverage."""
+
+    clinic_id: str
+    clinic_name: str
+    week: int
+    weekday: Weekday
+    session: Session
+    resident_count: int
+    maximum: int
+
+    @property
+    def message(self) -> str:
+        if self.maximum <= 0:
+            return (
+                f"{self.clinic_name} clinic has no attending coverage: week {self.week} "
+                f"{self.weekday.value} {self.session.value}"
+            )
+        return (
+            f"{self.clinic_name} capacity exceeded: week {self.week} "
+            f"{self.weekday.value} {self.session.value} "
+            f"({self.resident_count} residents; max {self.maximum})"
+        )
+
+
+def clinic_capacity_violations(
+    instance: SolverProblem,
+    schedule: Schedule,
+) -> tuple[ClinicCapacityViolation, ...]:
+    """Return final per-slot clinic capacity failures without incremental duplicates."""
+    policy = instance.clinic_policy
+    filled: dict[tuple[str, int, Weekday, Session], int] = defaultdict(int)
+    for assignment in schedule.assignments:
+        for slot in assignment.clinic_slots:
+            if slot.admin or slot.site is None or slot.site not in policy.site_ids:
+                continue
+            weeks = [slot.week] if slot.week is not None else assignment.weeks
+            for week in weeks:
+                filled[slot.site, week, slot.weekday, slot.session] += 1
+
+    site_order = {site_id: index for index, site_id in enumerate(policy.site_ids)}
+    weekday_order = {weekday: index for index, weekday in enumerate(Weekday)}
+    session_order = {session: index for index, session in enumerate(Session)}
+    violations: list[ClinicCapacityViolation] = []
+    for (clinic_id, week, weekday, session), count in sorted(
+        filled.items(),
+        key=lambda item: (
+            site_order[item[0][0]],
+            item[0][1],
+            weekday_order[item[0][2]],
+            session_order[item[0][3]],
+        ),
+    ):
+        calendar_day = clinic_slot_date(
+            instance.calendar.first_week_start,
+            week,
+            weekday,
+        )
+        maximum = policy.max_capacity_on(clinic_id, calendar_day, session)
+        if maximum > 0 and count <= maximum:
+            continue
+        violations.append(
+            ClinicCapacityViolation(
+                clinic_id=clinic_id,
+                clinic_name=policy.site_name(clinic_id),
+                week=week,
+                weekday=weekday,
+                session=session,
+                resident_count=count,
+                maximum=maximum,
+            )
+        )
+    return tuple(violations)
 
 
 def _validate_placement_rules(
@@ -169,31 +246,13 @@ def _validate_clinics(
             if slot.admin or slot.site is None or slot.site not in policy.site_ids:
                 continue
             for week in weeks:
-                clinic_name = policy.site_name(slot.site)
-                calendar_day = clinic_slot_date(
-                    instance.calendar.first_week_start,
-                    week,
-                    slot.weekday,
-                )
-                maximum = policy.max_capacity_on(
-                    slot.site,
-                    calendar_day,
-                    slot.session,
-                )
-                if maximum <= 0:
-                    errors.append(
-                        f"{clinic_name} clinic has no attending coverage: week {week} "
-                        f"{slot.weekday.value} {slot.session.value}"
-                    )
                 key = (slot.site, week, slot.weekday, slot.session)
                 filled[key] += 1
                 by_resident[assignment.resident_id][slot.site] += 1
-                if maximum > 0 and filled[key] > maximum:
-                    errors.append(
-                        f"{clinic_name} capacity exceeded: week {week} "
-                        f"{slot.weekday.value} {slot.session.value} "
-                        f"({filled[key]} residents; max {maximum})"
-                    )
+
+    errors.extend(
+        violation.message for violation in clinic_capacity_violations(instance, schedule)
+    )
 
     for (rotation_id, week, weekday, session), resident_ids in inpatient_concurrent.items():
         rotation = instance.rotations_by_id[rotation_id]

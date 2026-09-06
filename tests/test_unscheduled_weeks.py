@@ -307,3 +307,68 @@ def test_a_level_with_no_residents_never_blocks_a_solve() -> None:
     result = check_solve_readiness(SolverProblem.from_instance(instance))
 
     assert result.ready
+
+
+def test_missing_elective_fallback_is_reported_before_solving() -> None:
+    raw = sample_instance().model_dump(mode="json")
+    clinic = next(rotation for rotation in raw["rotations"] if rotation["id"] == "clinic")
+    pgy1_rule = next(rule for rule in clinic["pgy_rules"] if rule["pgy"] == 1)
+    pgy1_rule["block_configs"] = [
+        {
+            "duration_weeks": 4,
+            "vacation": {"allowed": True, "max_weeks_per_block": 1},
+        }
+    ]
+    pgy1 = next(curriculum for curriculum in raw["requirements"] if curriculum["pgy"] == 1)
+    pgy1["blocks"] = [
+        block
+        for block in pgy1["blocks"]
+        if not (block["rotation_id"] == "clinic" and block["duration_weeks"] == 2)
+    ]
+    pgy1["blocks"].append({"rotation_id": "clinic", "duration_weeks": 4, "count": 1})
+    instance = SchedulerInput.model_validate(raw)
+
+    result = check_solve_readiness(SolverProblem.from_instance(instance))
+
+    issue = next(issue for issue in result.issues if issue.code == "missing_elective_fallback")
+    assert "Clinic · PGY1" in issue.message
+    assert "2-week Elective" in issue.message
+    assert "2-week Clinic block configuration" in issue.suggestions[0]
+    assert issue.pgy == 1
+
+
+def test_impossible_weekly_minimum_explains_bounds_and_available_weeks() -> None:
+    raw = sample_instance().model_dump(mode="json")
+    rotation = next(
+        rotation for rotation in raw["rotations"] if rotation["id"] == "inpatient_ld"
+    )
+    rotation["capacity"]["max_concurrent"] = 1
+    pgy2_rule = next(rule for rule in rotation["pgy_rules"] if rule["pgy"] == 2)
+    pgy2_rule["min_concurrent"] = 2
+    pgy2_rule["max_concurrent"] = None
+    instance = SchedulerInput.model_validate(raw)
+
+    result = check_solve_readiness(SolverProblem.from_instance(instance))
+
+    issue = next(issue for issue in result.issues if issue.rotation_id == "inpatient_ld")
+    assert issue.code == "rotation_capacity_conflict"
+    assert "minimums total 2 residents every week" in issue.message
+    assert "overall maximum of 1" in issue.message
+    assert "needs 104 resident-weeks" in issue.message
+    assert "at most 16 are available" in issue.message
+
+
+def test_required_block_longer_than_consecutive_limit_is_reported() -> None:
+    raw = sample_instance().model_dump(mode="json")
+    rotation = next(rotation for rotation in raw["rotations"] if rotation["id"] == "icu")
+    rotation["max_consecutive_weeks"] = 2
+    instance = SchedulerInput.model_validate(raw)
+
+    result = check_solve_readiness(SolverProblem.from_instance(instance))
+
+    issue = next(issue for issue in result.issues if issue.rotation_id == "icu")
+    assert issue.code == "block_exceeds_consecutive_limit"
+    assert "ICU · PGY1" in issue.message
+    assert "required 4-week block" in issue.message
+    assert "2-week maximum consecutive limit" in issue.message
+    assert issue.pgy == 1

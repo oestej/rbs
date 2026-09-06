@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Clinic:** Closure days can now be copied from one clinic to another without
+  replacing destination-only dates.
+
+### Changed
+
+- **Rotations and Clinic:** Minimum concurrent staffing fields and guidance now
+  make clear that a configured minimum applies in every academic week, including
+  weeks when no block would otherwise be placed.
+
+### Fixed
+
+- **Scheduling:** Solve now stops before search for provable configuration conflicts,
+  marks the workspace as `Cannot solve`, and links each issue to its editor. Checks
+  identify missing Clinic fallbacks for Elective block shapes, impossible weekly
+  staffing minimums, and required blocks longer than their consecutive-week limit.
+- **Scheduling:** Solve results now distinguish block infeasibility, search timeouts,
+  model-build failures, and a feasible block schedule whose clinic placement failed;
+  diagnostic actions can open the relevant Clinic, resident, rotation, or Special
+  event configuration.
+- **Scheduling:** Invalid post-solve clinic placements are no longer saved. Existing
+  drafts are retained, and the result explicitly says when a generated schedule was
+  rejected.
+- **Clinic:** Capacity validation now reports each affected half-day once using its
+  final headcount, then groups failures by clinic with the peak overflow and suggested
+  resolutions instead of repeating an error as every resident is assigned.
+- **Scheduling:** Exact compile-time configuration errors remain consolidated instead
+  of expanding into a misleading error for every resident, while genuine resident
+  vacation-coverage failures retain their focused explanation.
+- **Scheduling:** Solver diagnostics that are taller than the screen now scroll
+  inside their dialog so every conflict and suggested resolution remains reachable.
+- **Rotations:** Changing a mandatory block configuration's length now persists
+  when the rotation is saved instead of silently reverting to its previous length.
+
 ## [0.1.4] - 2026-09-06
 
 ### Added

@@ -168,6 +168,35 @@ def test_rotate_domain_permutes_stably() -> None:
     assert rotate_domain([], "x") == []
 
 
+def test_model_build_error_is_preserved_instead_of_expanding_per_resident(
+    monkeypatch,
+) -> None:
+    from rbs.solver.core import cp_sat
+    from rbs.solver.core.context import ModelBuildError
+
+    instance = sample_instance()
+    options = instance.solver.model_copy(update={"solve_attempts": 1})
+
+    def fail_compile(*_args, **_kwargs):
+        raise ModelBuildError("Clinic · PGY1 has no compatible 2-week fallback")
+
+    monkeypatch.setattr(cp_sat, "compile_problem", fail_compile)
+
+    schedule = get_engine("cp_sat").solve(instance, options=options)
+
+    assert schedule.meta.status is SolverStatus.INFEASIBLE
+    assert [diagnostic.code for diagnostic in schedule.meta.diagnostics] == [
+        "model_build_error"
+    ]
+    assert schedule.meta.diagnostics[0].message == (
+        "Clinic · PGY1 has no compatible 2-week fallback"
+    )
+    assert not any(
+        diagnostic.code == "resident_curriculum_coverage"
+        for diagnostic in schedule.meta.diagnostics
+    )
+
+
 def test_four_week_boundary_spans_are_opt_in() -> None:
     instance = sample_instance()
     resident = instance.residents[0]

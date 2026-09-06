@@ -18,6 +18,7 @@ from rbs.ui.clinic.ops import (
     _default_clinic_rule,
     _new_clinic_draft,
     add_clinic,
+    copy_clinic_closure_days,
     remove_clinic,
     replace_clinic,
     replace_primary_clinic,
@@ -302,7 +303,7 @@ def _open_clinic_block_rules_dialog(
                         with ui.row().classes("w-full items-end gap-4 flex-wrap"):
                             minimum = (
                                 ui.number(
-                                    "Minimum total residents",
+                                    "Minimum total residents each week",
                                     value=_optional_float(capacity.get("min_concurrent")),
                                     min=0,
                                     precision=0,
@@ -481,16 +482,17 @@ def _clinic_pgy_rule_panel(
             ).classes("rbs-clinic-advanced-limits w-full"):
                 with ui.column().classes("w-full gap-4 px-4 pb-4"):
                     ui.label(
-                        "These are optional solver guardrails. Overall staffing, "
-                        "Clinic session capacity, and other placement rules may be "
-                        "more restrictive."
+                        "These are optional solver guardrails. A minimum applies in every "
+                        "academic week, including weeks when no Clinic block would otherwise "
+                        "be placed. Overall staffing, Clinic session capacity, and other "
+                        "placement rules may be more restrictive."
                     ).classes("rbs-type-caption rbs-text-muted")
                     with ui.column().classes("w-full gap-2"):
                         ui.label("Concurrent staffing").classes("rbs-type-control-label")
                         with ui.row().classes("w-full gap-3 flex-wrap"):
                             minimum = (
                                 ui.number(
-                                    "Minimum concurrent residents",
+                                    "Minimum residents each week",
                                     value=_optional_float(rule.get("min_concurrent")),
                                     min=0,
                                     precision=0,
@@ -1162,6 +1164,23 @@ def _clinic_directory_configuration(
                         )
 
                 primary.on_value_change(change_primary)
+                copy_closures = ui.button(
+                    "Copy closure days",
+                    icon="content_copy",
+                    on_click=partial(
+                        _open_copy_clinic_closure_days_dialog,
+                        instance,
+                        selected_rotation_id=selected_rotation_id,
+                        on_save=on_save,
+                    ),
+                ).props(SECONDARY_BUTTON_PROPS)
+                copy_closures.set_enabled(
+                    len(policy.sites) > 1 and any(site.closure_days for site in policy.sites)
+                )
+                if not copy_closures.enabled:
+                    copy_closures.tooltip(
+                        "Configure a closure day and at least two clinics before copying"
+                    )
                 ui.button(
                     "Add clinic",
                     icon="add",
@@ -1276,6 +1295,86 @@ def _clinic_metric(label: str, value: str) -> None:
     with ui.column().classes("rbs-clinic-metric min-w-0 gap-0 px-4 py-3"):
         ui.label(value).classes("rbs-type-section-title")
         ui.label(label).classes("rbs-type-caption rbs-text-muted")
+
+
+def _open_copy_clinic_closure_days_dialog(
+    instance: SchedulerInput,
+    *,
+    selected_rotation_id: str | None,
+    on_save: SaveRotation,
+) -> None:
+    from nicegui import ui
+
+    policy = instance.clinic_policy
+    source_options = {
+        site.id: (
+            f"{site.name} · {len(site.closure_days)} closure "
+            f"{'day' if len(site.closure_days) == 1 else 'days'}"
+        )
+        for site in policy.sites
+        if site.closure_days
+    }
+    destination_options = {site.id: site.name for site in policy.sites}
+    with ui.dialog() as dialog, ui.card().classes("w-[min(92vw,560px)] gap-4 p-5"):
+        ui.label("Copy closure days").classes("rbs-type-dialog-title")
+        ui.label(
+            "Add every closure date from the source clinic to the destination. "
+            "Existing destination dates are kept, and matching dates are skipped."
+        ).classes("rbs-type-body rbs-text-muted")
+        with ui.row().classes("w-full items-start gap-3 flex-wrap sm:flex-nowrap"):
+            source = (
+                ui.select(source_options, value=None, label="Source clinic")
+                .props("outlined options-dense")
+                .classes("w-full sm:flex-1")
+            )
+            destination = (
+                ui.select(destination_options, value=None, label="Destination clinic")
+                .props("outlined options-dense")
+                .classes("w-full sm:flex-1")
+            )
+        status = ui.label().props("role=alert").classes("rbs-type-caption rbs-text-danger")
+
+        def copy_closures() -> None:
+            try:
+                if source.value is None:
+                    raise ValueError("select a source clinic")
+                if destination.value is None:
+                    raise ValueError("select a destination clinic")
+                source_site = policy.site(str(source.value))
+                destination_site = policy.site(str(destination.value))
+                updated = copy_clinic_closure_days(
+                    instance,
+                    source_site.id,
+                    destination_site.id,
+                )
+                copied = len(updated.clinic_policy.site(destination_site.id).closure_days) - len(
+                    destination_site.closure_days
+                )
+                if copied == 0:
+                    status.set_text(
+                        f"{destination_site.name} already has every closure date from "
+                        f"{source_site.name}."
+                    )
+                    return
+                dialog.close()
+                noun = "closure day" if copied == 1 else "closure days"
+                ui.notify(
+                    f"Copied {copied} {noun} from {source_site.name} to "
+                    f"{destination_site.name}",
+                    type="positive",
+                )
+                on_save(updated, selected_rotation_id)
+            except (ValidationError, ValueError) as exc:
+                status.set_text(_validation_message(exc))
+
+        with ui.row().classes("w-full justify-end gap-3 pt-2"):
+            ui.button("Cancel", on_click=dialog.close).props("flat no-caps")
+            ui.button(
+                "Copy closure days",
+                icon="content_copy",
+                on_click=copy_closures,
+            ).props("unelevated no-caps")
+    dialog.open()
 
 
 def _open_clinic_editor_dialog(

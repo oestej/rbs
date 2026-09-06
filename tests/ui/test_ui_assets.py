@@ -164,6 +164,12 @@ def test_schedule_styles_live_in_packaged_css_assets() -> None:
     assert ".rbs-spinner-status" in app_css
     assert ".rbs-reconnect-spinner" in app_css
     assert ".rbs-solver-elapsed" in app_css
+    solver_diagnostics = _css_rule(
+        app_css,
+        ".rbs-overlay-card.rbs-solver-diagnostics",
+    )
+    assert "overflow-x: hidden" in solver_diagnostics
+    assert "overflow-y: auto" in solver_diagnostics
     assert ".rbs-loading-elapsed" in app_css
     assert ".rbs-reconnect-elapsed" in app_css
     assert "font-variant-numeric: tabular-nums" in app_css
