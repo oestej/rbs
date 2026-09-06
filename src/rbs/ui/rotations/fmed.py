@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from functools import partial
 
 from pydantic import ValidationError
@@ -74,26 +75,6 @@ def _dedicated_rotation_cards(
                             kind_label = _rotation_kind_label(rotation)
                             if kind_label is not None:
                                 ui.label(kind_label).classes("rbs-text-muted")
-                with ui.column().classes("w-full gap-3 px-5 pb-5"):
-                    color_draft: Draft = {"color": rotation.color}
-
-                    def save_color(color: str, rotation_id: str = rotation.id) -> None:
-                        try:
-                            updated = replace_rotation_color(instance, rotation_id, color)
-                            ui.notify("Block schedule color updated", type="positive")
-                            (on_color_save or on_save)(updated, selected_rotation_id)
-                        except (ValidationError, ValueError) as exc:
-                            ui.notify(
-                                _validation_message(exc),
-                                type="negative",
-                                multi_line=True,
-                            )
-
-                    rotation_color_palette(
-                        color_draft,
-                        instance.color_scheme.palette,
-                        on_change=save_color,
-                    )
                 ui.separator()
                 _rotation_detail_contents(
                     instance,
@@ -105,6 +86,7 @@ def _dedicated_rotation_cards(
                             rotation.id,
                             selected_rotation_id=selected_rotation_id,
                             on_save=on_save,
+                            on_color_save=on_color_save,
                         )
                         if kind is RotationKind.FMED
                         else None
@@ -118,11 +100,13 @@ def _open_fmed_pgy_rules_dialog(
     *,
     selected_rotation_id: str | None,
     on_save: SaveRotation,
+    on_color_save: SaveRotation | None = None,
 ) -> None:
     from nicegui import ui
 
     rotation = instance.rotation(rotation_id)
     draft = rotation_editor_state(rotation)
+    color_draft: Draft = {"color": rotation.color}
     elective_option = instance.electives.option_for(rotation.id)
     elective_draft: Draft = {
         "eligible": elective_option is not None,
@@ -143,6 +127,11 @@ def _open_fmed_pgy_rules_dialog(
         if rule.pgy in instance.training_level_ids
         for config in rule.block_configs
     }
+    # The palette owns color_draft, so these drafts answer "did anything but the
+    # color change?" directly. replace_fmed_pgy_rules rewrites requirements and
+    # elective options whether or not they moved, so comparing the resulting
+    # instances could not tell a color-only edit from any other.
+    baseline = deepcopy((draft, elective_draft, counts))
 
     with (
         ui.dialog() as dialog,
@@ -160,6 +149,10 @@ def _open_fmed_pgy_rules_dialog(
         ui.separator()
         with ui.scroll_area().classes("w-full flex-1 min-h-0"):
             with ui.column().classes("w-full gap-4 p-5"):
+                rotation_color_palette(
+                    color_draft,
+                    instance.color_scheme.palette,
+                )
                 _mandatory_elective_availability(
                     elective_draft,
                     instance,
@@ -178,8 +171,15 @@ def _open_fmed_pgy_rules_dialog(
             def save_rules() -> None:
                 try:
                     replacement = rotation_from_editor_state(draft)
-                    updated = replace_fmed_pgy_rules(
+                    # replace_fmed_pgy_rules deliberately leaves identity and color
+                    # alone, so the chosen color is applied on its own first.
+                    recolored = replace_rotation_color(
                         instance,
+                        rotation_id,
+                        str(color_draft["color"]),
+                    )
+                    updated = replace_fmed_pgy_rules(
+                        recolored,
                         rotation_id,
                         replacement,
                         counts,
@@ -198,7 +198,12 @@ def _open_fmed_pgy_rules_dialog(
                     )
                     dialog.close()
                     ui.notify("FMED rules updated", type="positive")
-                    on_save(updated, selected_rotation_id)
+                    # A color-only edit leaves a solved schedule valid.
+                    rules_changed = (draft, elective_draft, counts) != baseline
+                    if not rules_changed and on_color_save is not None:
+                        on_color_save(updated, selected_rotation_id)
+                    else:
+                        on_save(updated, selected_rotation_id)
                 except (ValidationError, ValueError) as exc:
                     ui.notify(
                         _validation_message(exc),

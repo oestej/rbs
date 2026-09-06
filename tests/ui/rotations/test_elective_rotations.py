@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from rbs.catalog import sample_instance
+from rbs.catalog import blank_instance, sample_instance
 from rbs.models.elective import ElectiveConfiguration
 from rbs.models.enums import RotationKind, SolverEngineName, SolverStatus
 from rbs.models.instance import SchedulerInput
@@ -13,6 +13,8 @@ from rbs.ui.grid import render_grid_html
 from rbs.ui.residents.ops import resident_schedule_report_rows
 from rbs.ui.rotations.editor import (
     _elective_rotation_editor,
+    _elective_shared_summary,
+    _open_elective_properties_dialog,
     _open_elective_rotation_dialog,
     _open_fmed_pgy_rules_dialog,
     _rotation_detail_contents,
@@ -21,9 +23,11 @@ from rbs.ui.rotations.editor import (
 )
 from rbs.ui.rotations.ops import (
     add_elective_rotation,
+    direct_elective_counts,
     remove_elective_rotation,
     replace_elective_color,
     replace_standard_rotation,
+    set_elective_allocation,
     set_elective_eligibility,
 )
 
@@ -734,3 +738,199 @@ def test_empty_elective_directory_explains_how_to_add_an_option() -> None:
     assert "No electives configured" in text
     assert "Add an elective or enable one from its Mandatory rotation." in text
     assert "Elective" not in text
+
+
+# ---- shared elective properties ----------------------------------------
+
+
+def _click(button) -> None:
+    """Fire one click. The handler may rebuild the button, so snapshot first."""
+    from nicegui.events import ClickEventArguments
+
+    for listener in list(button._event_listeners.values()):
+        if listener.type == "click":
+            listener.handler(ClickEventArguments(sender=button, client=button.client))
+            return
+
+
+def _created_since(before: set) -> list:
+    from nicegui import ui
+
+    return [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+
+
+def _button(created: list, label: str):
+    return next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Button" and element._props.get("label") == label
+    )
+
+
+def _fields(created: list, class_name: str, label: str) -> list:
+    return [
+        element
+        for element in created
+        if element.__class__.__name__ == class_name and element._props.get("label") == label
+    ]
+
+
+def _open_properties(instance: SchedulerInput, saves: list, colors: list) -> set:
+    """Open the shared-properties dialog and return the snapshot taken before it."""
+    from nicegui import ui
+
+    before = set(ui.context.client.elements)
+    _open_elective_properties_dialog(
+        instance,
+        selected_rotation_id=None,
+        on_save=lambda updated, rotation_id: saves.append((updated, rotation_id)),
+        on_color_save=lambda updated, rotation_id: colors.append((updated, rotation_id)),
+    )
+    return before
+
+
+def test_shared_elective_properties_summarize_color_and_elective_time() -> None:
+    from nicegui import ui
+
+    before = set(ui.context.client.elements)
+    _elective_shared_summary(sample_instance())
+    created = _created_since(before)
+    text = {getattr(element, "_text", None) for element in created}
+
+    assert "Block schedule color" in text
+    assert "Elective time" in text
+    assert {"PGY 1", "PGY 2", "PGY 3"} <= text
+    # PGY 1 holds one 2-week Elective block, PGY 2 holds four, PGY 3 holds none.
+    assert "1 × 2 weeks" in text
+    assert "4 × 2 weeks" in text
+    assert "None committed" in text
+    # The summary reads; it never edits.
+    assert not [
+        element
+        for element in created
+        if element.__class__.__name__ in {"Select", "Number", "Button"}
+    ]
+
+
+def test_the_elective_properties_dialog_edits_color_and_elective_time() -> None:
+    created = _created_since(_open_properties(sample_instance(), [], []))
+
+    assert any(element.__class__.__name__ == "Dialog" for element in created)
+    assert "Edit shared elective properties" in {
+        getattr(element, "_text", None) for element in created
+    }
+    assert any(
+        "rbs-rotation-color-palette" in getattr(element, "_classes", []) for element in created
+    )
+    # One editable row per level that has committed Elective time.
+    assert len(_fields(created, "Select", "Elective block length")) == 2
+    assert len(_fields(created, "Number", "Blocks per resident")) == 2
+    assert (
+        len([element for element in created if element._props.get("label") == "Add block length"])
+        == 3
+    )
+
+
+def test_elective_time_can_be_added_to_a_level_that_has_none() -> None:
+    saves: list = []
+    before = _open_properties(blank_instance(), saves, [])
+    created = _created_since(before)
+    assert not _fields(created, "Number", "Blocks per resident")
+
+    _click(_button(created, "Add block length"))
+    created = _created_since(before)
+    _fields(created, "Number", "Blocks per resident")[0].set_value(3)
+    _click(_button(created, "Save elective properties"))
+
+    updated, rotation_id = saves[-1]
+    assert rotation_id is None
+    assert direct_elective_counts(updated, 1) == {2: 3}
+    assert updated.unallocated_weeks(1) == 46
+
+
+def test_elective_time_can_be_reduced_and_returns_the_weeks() -> None:
+    saves: list = []
+    created = _created_since(_open_properties(sample_instance(), saves, []))
+
+    count = _fields(created, "Number", "Blocks per resident")[1]
+    assert count.value == 4
+    count.set_value(2)
+    _click(_button(created, "Save elective properties"))
+
+    updated, _rotation_id = saves[-1]
+    assert direct_elective_counts(updated, 2) == {2: 2}
+    assert updated.unallocated_weeks(2) == 4
+
+
+def test_a_color_only_edit_keeps_the_solved_schedule() -> None:
+    """Curriculum edits invalidate a schedule; recoloring blocks does not."""
+    instance = sample_instance()
+    saves: list = []
+    colors: list = []
+    created = _created_since(_open_properties(instance, saves, colors))
+
+    swatches = [
+        element
+        for element in created
+        if element.__class__.__name__ == "Button"
+        and "rbs-rotation-color-choice" in getattr(element, "_classes", [])
+    ]
+    _click(swatches[3])
+    _click(_button(created, "Save elective properties"))
+
+    assert not saves
+    updated, _rotation_id = colors[-1]
+    assert updated.electives.color == instance.color_scheme.palette[3]
+    assert direct_elective_counts(updated, 2) == direct_elective_counts(instance, 2)
+
+
+def test_elective_time_beyond_a_levels_budget_cannot_be_saved() -> None:
+    saves: list = []
+    before = _open_properties(blank_instance(), saves, [])
+
+    _click(_button(_created_since(before), "Add block length"))
+    created = _created_since(before)
+    _fields(created, "Number", "Blocks per resident")[0].set_value(30)
+
+    assert _button(created, "Save elective properties").enabled is False
+    assert "8 weeks more than PGY1 has left to spend" in {
+        getattr(element, "_text", None) for element in created
+    }
+    assert not saves
+
+
+def test_a_block_length_already_committed_is_not_offered_twice() -> None:
+    # One training level keeps the two rows unambiguous.
+    instance = set_elective_allocation(blank_instance(), 1, {2: 1})
+    before = _open_properties(instance, [], [])
+    created = _created_since(before)
+
+    # PGY 1 already spends its Elective time in 2-week blocks.
+    lengths = _fields(created, "Select", "Elective block length")[0]
+    assert [option["label"] for option in lengths._props["options"]] == [
+        "1 week",
+        "2 weeks",
+        "3 weeks",
+        "4 weeks",
+        "5 weeks",
+    ]
+
+    _click(_button(created, "Add block length"))
+    created = _created_since(before)
+    kept, added = _fields(created, "Select", "Elective block length")
+    assert [option["label"] for option in kept._props["options"]] == [
+        "2 weeks",
+        "3 weeks",
+        "4 weeks",
+        "5 weeks",
+    ]
+    assert [option["label"] for option in added._props["options"]] == [
+        "1 week",
+        "3 weeks",
+        "4 weeks",
+        "5 weeks",
+    ]

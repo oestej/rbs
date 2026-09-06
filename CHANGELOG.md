@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Rotations:** Elective time is authored directly from Shared elective
+  properties: each training level's Elective block lengths and block counts are
+  set against that level's unscheduled-week budget, which an over-allocation
+  blocks until it is corrected. Elective blocks previously appeared only as a
+  side effect of adding a Mandatory requirement or enabling an elective option.
+
+### Changed
+
+- **Rotations:** Shared elective properties and the FMED/Inpatient card report
+  their block schedule color instead of offering a palette inline; the color is
+  chosen in the same pop-out editor as the rest of those rules. Changing only a
+  color still leaves a solved schedule in place.
+
 ## [0.1.2] - 2026-09-05
 
 ### Added
