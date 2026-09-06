@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-09-06
+
 ### Added
 
 - **Clinic:** Closure days can now be copied from one clinic to another without
@@ -148,7 +150,8 @@
 - **Releases:** Download a macOS disk image built from the tagged commit, with
   that release's changelog section as its published description.
 
-[Unreleased]: https://github.com/oestej/rbs/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/oestej/rbs/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/oestej/rbs/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/oestej/rbs/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/oestej/rbs/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/oestej/rbs/compare/v0.1.1...v0.1.2
