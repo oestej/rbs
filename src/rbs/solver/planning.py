@@ -94,16 +94,27 @@ def expand_occurrences(
         for manual in manual_blocks:
             replacements[manual.replaces_rotation_id, manual.duration_weeks] += 1
         for override in resident_overrides:
+            # Unallocated-funded extras remove no curriculum block.
+            if override.replaces_rotation_id is None:
+                continue
             replacements[
                 override.replaces_rotation_id,
                 override.duration_weeks,
             ] += 1
+        waived: dict[tuple[str, int], int] = defaultdict(int)
+        for waiver in instance.resident_rotation_waivers:
+            if waiver.resident_id == resident.id:
+                waived[waiver.rotation_id, waiver.duration_weeks] += 1
         for block in curriculum.blocks:
             replacement_count = replacements.get(
                 (block.rotation_id, block.duration_weeks),
                 0,
             )
-            for _ in range(block.count - replacement_count):
+            waived_count = waived.get(
+                (block.rotation_id, block.duration_weeks),
+                0,
+            )
+            for _ in range(block.count - replacement_count - waived_count):
                 index = seen[(block.rotation_id, block.duration_weeks)]
                 seen[(block.rotation_id, block.duration_weeks)] = index + 1
                 base_key = f"{resident.id}:{block.rotation_id}:{block.duration_weeks}:{index}"

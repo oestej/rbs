@@ -11,6 +11,7 @@ from rbs.models.case_blocks import (
     AcademicHalfDayOverride,
     ManualClinicBlock,
     ResidentRotationOverride,
+    ResidentRotationWaiver,
 )
 from rbs.models.catalog import ConstraintCatalog, validate_catalog_integrity
 from rbs.models.clinic import ClinicPolicy, ClinicSiteConfig
@@ -42,6 +43,7 @@ __all__ = [
     "ManualClinicBlock",
     "ObjectiveWeights",
     "ResidentRotationOverride",
+    "ResidentRotationWaiver",
     "SchedulingCase",
     "SchedulerInput",
     "SolverCase",
@@ -69,6 +71,7 @@ class SolverCase(StrictModel):
     locks: list[LockedPlacement] = Field(default_factory=list)
     manual_clinic_blocks: list[ManualClinicBlock] = Field(default_factory=list)
     resident_rotation_overrides: list[ResidentRotationOverride] = Field(default_factory=list)
+    resident_rotation_waivers: list[ResidentRotationWaiver] = Field(default_factory=list)
     special_rotations: list[SpecialRotation] = Field(
         default_factory=list,
         description=(
@@ -144,6 +147,7 @@ class SchedulingCase(SolverCase):
             locks=instance.locks,
             manual_clinic_blocks=instance.manual_clinic_blocks,
             resident_rotation_overrides=instance.resident_rotation_overrides,
+            resident_rotation_waivers=instance.resident_rotation_waivers,
             special_rotations=instance.special_rotations,
             lock_through_today=instance.lock_through_today,
             solver=instance.solver,
@@ -363,6 +367,7 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
         self._check_manual_clinic_blocks(known)
         self._check_resident_rotation_overrides(known)
         self._check_resident_rotation_override_groups()
+        self._check_resident_rotation_waivers(known)
         self._check_resident_replacement_inventory()
         return self
 

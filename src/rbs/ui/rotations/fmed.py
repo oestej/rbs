@@ -17,11 +17,12 @@ from rbs.ui.editor_common import (
     _validation_message,
 )
 from rbs.ui.rotations.forms import (
-    _mandatory_elective_availability,
+    _elective_repeatable_header,
     _rotation_detail_contents,
     _staffing_and_blocks,
 )
 from rbs.ui.rotations.ops import (
+    elective_shapes_for_rotation,
     replace_fmed_pgy_rules,
     replace_rotation_color,
     rotation_editor_state,
@@ -32,6 +33,7 @@ from rbs.ui.rotations.types import (
     SaveRotation,
 )
 from rbs.ui.rotations.widgets import (
+    clinic_week_editor,
     rotation_code_style,
     rotation_color_palette,
 )
@@ -109,13 +111,8 @@ def _open_fmed_pgy_rules_dialog(
     color_draft: Draft = {"color": rotation.color}
     elective_option = instance.electives.option_for(rotation.id)
     elective_draft: Draft = {
-        "eligible": elective_option is not None,
-        "eligible_pgys": list(elective_option.eligible_pgys if elective_option is not None else []),
-        "eligible_block_sizes": list(
-            instance.eligible_elective_block_sizes(rotation.id)
-            or instance.available_elective_block_sizes(rotation.id)
-        ),
         "repeatable": bool(elective_option and elective_option.repeatable),
+        "shapes": elective_shapes_for_rotation(instance, rotation.id),
     }
     counts = {
         (rule.pgy, config.duration_weeks): sum(
@@ -153,16 +150,16 @@ def _open_fmed_pgy_rules_dialog(
                     color_draft,
                     instance.color_scheme.palette,
                 )
-                _mandatory_elective_availability(
-                    elective_draft,
-                    instance,
-                )
+                refresh_repeatable = _elective_repeatable_header(elective_draft)
                 _fmed_clinic_concurrency_editor(instance, draft)
+                _fmed_clinic_days_editor(instance, draft)
                 _staffing_and_blocks(
                     instance,
                     draft,
                     rotation_id,
                     requirement_counts=counts,
+                    elective_draft=elective_draft,
+                    on_elective_change=refresh_repeatable,
                 )
         ui.separator()
         with ui.row().classes("w-full justify-end gap-3 p-4"):
@@ -183,17 +180,7 @@ def _open_fmed_pgy_rules_dialog(
                         rotation_id,
                         replacement,
                         counts,
-                        eligible_as_elective=bool(elective_draft["eligible"]),
-                        eligible_elective_pgys=[
-                            int(pgy) for pgy in elective_draft.get("eligible_pgys", [])
-                        ],
-                        eligible_elective_block_sizes=[
-                            int(size)
-                            for size in elective_draft.get(
-                                "eligible_block_sizes",
-                                [],
-                            )
-                        ],
+                        elective_shapes=set(elective_draft.get("shapes", set())),
                         elective_repeatable=bool(elective_draft.get("repeatable")),
                     )
                     dialog.close()
@@ -276,3 +263,32 @@ def _set_fmed_pgy_clinic_limit(limits: Draft, pgy: int, event) -> None:
     maximum = _as_int(event.value)
     if maximum is not None:
         limits[str(pgy)] = maximum
+
+
+def _fmed_clinic_days_editor(
+    instance: SchedulerInput,
+    draft: Draft,
+) -> None:
+    """Edit which half-days residents on this service may attend clinic."""
+    from nicegui import ui
+
+    clinic = draft.get("clinic")
+    with ui.column().classes("rbs-rotation-editor-subsection w-full gap-3 rounded p-4"):
+        with ui.column().classes("gap-0"):
+            ui.label("Eligible clinic days").classes("rbs-type-control-label")
+            ui.label(
+                "Choose the half-days residents on this service may attend "
+                "clinic. Allowed days apply together with the concurrency "
+                "limits above."
+            ).classes("rbs-type-caption rbs-text-muted")
+        if not isinstance(clinic, dict):
+            ui.label("This inpatient rotation has no clinic rule.").classes(
+                "rbs-type-body rbs-text-muted"
+            )
+            return
+        clinic_week_editor(
+            clinic,
+            academic_half_day=instance.clinic_policy.recurring_academic_half_day,
+            site_options={site.id: site.name for site in instance.clinic_policy.sites},
+            default_site_ids=list(instance.clinic_policy.site_ids),
+        )

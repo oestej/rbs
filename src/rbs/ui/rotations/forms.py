@@ -28,6 +28,7 @@ from rbs.ui.drafts import Draft
 from rbs.ui.editor_common import (
     _CLINIC_WEEK,
     _CONSECUTIVE_OPTIONS,
+    _DEFAULT_BLOCK_DURATION_WEEKS,
     _DURATION_OPTIONS,
     _academic_block_start_for_week,
     _academic_block_start_options,
@@ -43,6 +44,9 @@ from rbs.ui.editor_common import (
     _weeks_label,
 )
 from rbs.ui.rotations.ops import (
+    add_mandatory_rotation,
+    elective_shapes_for_rotation,
+    next_mandatory_rotation_id,
     replace_standard_rotation,
     rotation_editor_state,
     rotation_from_editor_state,
@@ -55,7 +59,6 @@ from rbs.ui.rotations.overrides import (
 )
 from rbs.ui.rotations.summary import (
     _configured_duration_label,
-    _elective_block_size_options,
     _elective_policy_summary_chips,
     _rotation_clinic_overview,
     _rotation_identity,
@@ -78,35 +81,91 @@ from rbs.ui.rotations.widgets import (
 )
 
 
+def _new_mandatory_rotation_draft(instance: SchedulerInput) -> Draft:
+    """Blank Standard draft: no rules yet, no clinic, neutral color."""
+    return {
+        "id": "new_mandatory_rotation",
+        "code": "",
+        "name": "",
+        "color": instance.color_scheme.neutral.color,
+        "kind": RotationKind.STANDARD.value,
+        "pgy_rules": [],
+        "clinic": _default_clinic_rule(),
+        "capacity": {"min_concurrent": None, "max_concurrent": None},
+        "away": False,
+        "no_clinic_hours": True,
+        "no_weekend_call": False,
+        "max_consecutive_weeks": 4,
+        "max_total_weeks": None,
+    }
+
+
 def _rotation_editor(
     instance: SchedulerInput,
-    rotation: Rotation,
+    rotation: Rotation | None,
     *,
     on_cancel: Callable[[], None],
     on_save: SaveRotation,
 ) -> None:
+    """Edit a Mandatory rotation in the master-detail workspace.
+
+    A None rotation creates a new one with the same full-screen editor, so
+    adding and editing share every option and component.
+    """
     from nicegui import ui
 
-    draft = rotation_editor_state(rotation)
-    elective_option = instance.electives.option_for(rotation.id)
+    creating = rotation is None
+    draft = (
+        rotation_editor_state(rotation)
+        if rotation is not None
+        else _new_mandatory_rotation_draft(instance)
+    )
+    elective_option = instance.electives.option_for(rotation.id) if rotation is not None else None
     elective_draft: Draft = {
-        "eligible": elective_option is not None,
-        "eligible_pgys": list(elective_option.eligible_pgys if elective_option is not None else []),
-        "eligible_block_sizes": list(
-            instance.eligible_elective_block_sizes(rotation.id)
-            or instance.available_elective_block_sizes(rotation.id)
-        ),
         "repeatable": bool(elective_option and elective_option.repeatable),
+        "shapes": (
+            elective_shapes_for_rotation(instance, rotation.id) if rotation is not None else set()
+        ),
     }
     academic_half_day = instance.clinic_policy.recurring_academic_half_day
     site_options = {site.id: site.name for site in instance.clinic_policy.sites}
     default_site_ids = list(instance.clinic_policy.site_ids)
-    resident_override_drafts = [
-        override.model_dump(mode="json")
-        for override in instance.resident_rotation_overrides
-        if _editor_manages_resident_override(instance, override, rotation.id)
-    ]
-    group_draft = rotation_group_members_by_pgy(instance, rotation.id)
+    resident_override_drafts = (
+        [
+            override.model_dump(mode="json")
+            for override in instance.resident_rotation_overrides
+            if _editor_manages_resident_override(instance, override, rotation.id)
+        ]
+        if rotation is not None
+        else []
+    )
+    resident_waiver_drafts = (
+        [
+            waiver.model_dump(mode="json")
+            for waiver in instance.resident_rotation_waivers
+            if waiver.rotation_id == rotation.id
+        ]
+        if rotation is not None
+        else []
+    )
+    group_draft = (
+        rotation_group_members_by_pgy(instance, rotation.id) if rotation is not None else None
+    )
+    counts: dict[tuple[int, int], int] = (
+        {
+            (rule.pgy, config.duration_weeks): sum(
+                block.count
+                for block in instance.curriculum_for(rule.pgy).blocks
+                if block.rotation_id == rotation.id
+                and block.duration_weeks == config.duration_weeks
+            )
+            for rule in rotation.pgy_rules
+            if rule.pgy in instance.training_level_ids
+            for config in rule.block_configs
+        }
+        if rotation is not None
+        else {}
+    )
     clinic_editor = None
 
     def render_clinic_editor() -> None:
@@ -129,25 +188,41 @@ def _rotation_editor(
 
     def save() -> None:
         try:
+            if creating:
+                draft["id"] = next_mandatory_rotation_id(
+                    instance,
+                    str(draft.get("name") or draft.get("code") or ""),
+                )
             replacement = rotation_from_editor_state(draft)
-            updated = replace_standard_rotation(
-                instance,
-                rotation.id,
-                replacement,
-                resident_overrides=resident_override_drafts,
-                eligible_as_elective=bool(elective_draft["eligible"]),
-                eligible_elective_pgys=[
-                    int(pgy) for pgy in elective_draft.get("eligible_pgys", [])
-                ],
-                eligible_elective_block_sizes=[
-                    int(size) for size in elective_draft.get("eligible_block_sizes", [])
-                ],
-                elective_repeatable=bool(elective_draft.get("repeatable")),
-                group_members_by_pgy=group_draft,
-            )
+            # Shapes derive into PGYs and sizes inside the ops call, after
+            # funding, so growing requirements cannot leave stale sizes.
+            elective_shapes = set(elective_draft.get("shapes", set()))
+            if creating:
+                updated = add_mandatory_rotation(
+                    instance,
+                    replacement,
+                    counts,
+                    elective_shapes=elective_shapes,
+                    elective_repeatable=bool(elective_draft.get("repeatable")),
+                )
+            else:
+                updated = replace_standard_rotation(
+                    instance,
+                    rotation.id,
+                    replacement,
+                    resident_overrides=resident_override_drafts,
+                    resident_waivers=resident_waiver_drafts,
+                    elective_shapes=elective_shapes,
+                    elective_repeatable=bool(elective_draft.get("repeatable")),
+                    group_members_by_pgy=group_draft,
+                    counts=counts,
+                )
             if save_error is not None:
                 save_error.set_text("")
-            ui.notify(f"Saved {replacement.code} — {replacement.name}", type="positive")
+            ui.notify(
+                f"{'Added' if creating else 'Saved'} {replacement.code} — {replacement.name}",
+                type="positive",
+            )
             on_save(updated, replacement.id)
         except (ValidationError, ValueError) as exc:
             message = _validation_message(exc)
@@ -159,7 +234,13 @@ def _rotation_editor(
         with ui.row().classes(
             "rbs-rotation-detail-header w-full items-center justify-between gap-3 p-5"
         ):
-            _rotation_identity(rotation, instance=instance, editing=True)
+            if creating:
+                with ui.column().classes("min-w-0 gap-1"):
+                    with ui.row().classes("items-center gap-2"):
+                        ui.label("New mandatory rotation").classes("rbs-type-page-title")
+                        ui.badge("Creating", color="secondary").props("outline")
+            else:
+                _rotation_identity(rotation, instance=instance, editing=True)
             with ui.button(icon="close", on_click=on_cancel).props(
                 button_props(
                     ICON_BUTTON_PROPS,
@@ -180,7 +261,11 @@ def _rotation_editor(
                 icon="groups",
             )
             clinic_tab = ui.tab("rotation_clinic", label="Clinic", icon="event_available")
-            advanced_tab = ui.tab("rotation_advanced", label="Advanced", icon="settings")
+            # Exceptions reference a saved rotation, so a rotation being
+            # created has no Advanced tab yet.
+            advanced_tab = (
+                None if creating else ui.tab("rotation_advanced", label="Advanced", icon="settings")
+            )
 
         with (
             ui.tab_panels(editor_tabs, value=general_tab)
@@ -194,19 +279,23 @@ def _rotation_editor(
                         palette=instance.color_scheme.palette,
                         on_clinic_availability_change=render_clinic_editor,
                     )
-                    _mandatory_elective_availability(
-                        elective_draft,
-                        instance,
-                    )
 
             with ui.tab_panel(pgy_tab).classes("p-0"):
                 with ui.column().classes("w-full gap-4 p-5"):
                     ui.label("Training-level rules").classes("rbs-type-section-title")
+                    ui.label(
+                        "Set each block shape to Mandatory, Elective, or Both, "
+                        "then set how many mandatory blocks each resident takes."
+                    ).classes("rbs-type-caption rbs-text-muted")
+                    refresh_repeatable = _elective_repeatable_header(elective_draft)
                     _staffing_and_blocks(
                         instance,
                         draft,
-                        rotation.id,
+                        rotation.id if rotation is not None else str(draft["id"]),
+                        requirement_counts=counts,
                         group_members_by_pgy=group_draft,
+                        elective_draft=elective_draft,
+                        on_elective_change=refresh_repeatable,
                     )
 
             with ui.tab_panel(clinic_tab).classes("p-0"):
@@ -220,25 +309,28 @@ def _rotation_editor(
                     clinic_editor = ui.column().classes("w-full")
                     render_clinic_editor()
 
-            with ui.tab_panel(advanced_tab).classes("p-0"):
-                with ui.column().classes("w-full gap-4 p-5"):
-                    with ui.column().classes("gap-0"):
-                        ui.label("Advanced rules").classes("rbs-type-section-title")
-                        ui.label(
-                            "Configure resident-specific exceptions without changing the "
-                            "training-level curriculum."
-                        ).classes("rbs-type-caption rbs-text-muted")
-                    with ui.expansion(
-                        "Individual exceptions",
-                        caption=f"{len(resident_override_drafts)} configured",
-                        icon="person_add",
-                        value=bool(resident_override_drafts),
-                    ).classes("rbs-rotation-section w-full"):
-                        _resident_rotation_overrides_editor(
-                            instance,
-                            rotation,
-                            resident_override_drafts,
-                        )
+            if advanced_tab is not None and rotation is not None:
+                with ui.tab_panel(advanced_tab).classes("p-0"):
+                    with ui.column().classes("w-full gap-4 p-5"):
+                        with ui.column().classes("gap-0"):
+                            ui.label("Advanced rules").classes("rbs-type-section-title")
+                            ui.label(
+                                "Configure resident-specific exceptions without changing the "
+                                "training-level curriculum."
+                            ).classes("rbs-type-caption rbs-text-muted")
+                        exceptions = len(resident_override_drafts) + len(resident_waiver_drafts)
+                        with ui.expansion(
+                            "Individual exceptions",
+                            caption=f"{exceptions} configured",
+                            icon="person_add",
+                            value=bool(resident_override_drafts or resident_waiver_drafts),
+                        ).classes("rbs-rotation-section w-full"):
+                            _resident_rotation_overrides_editor(
+                                instance,
+                                rotation,
+                                resident_override_drafts,
+                                resident_waiver_drafts,
+                            )
 
         with ui.row().classes(
             "rbs-rotation-editor-actions w-full items-center justify-end gap-2 px-5 py-3"
@@ -247,7 +339,11 @@ def _rotation_editor(
                 "rbs-rotation-save-error min-w-0 flex-1 rbs-type-caption rbs-text-danger"
             )
             ui.button("Cancel", on_click=on_cancel).props("flat no-caps")
-            ui.button("Save rotation", icon="save", on_click=save).props("unelevated no-caps")
+            ui.button(
+                "Add rotation" if creating else "Save rotation",
+                icon="save" if not creating else "add",
+                on_click=save,
+            ).props("unelevated no-caps")
 
 
 def _core_settings(
@@ -353,6 +449,8 @@ def _staffing_and_blocks(
     *,
     requirement_counts: dict[tuple[int, int], int] | None = None,
     group_members_by_pgy: dict[int, list[str]] | None = None,
+    elective_draft: Draft | None = None,
+    on_elective_change: Callable[[], None] | None = None,
 ) -> None:
     from nicegui import ui
 
@@ -412,6 +510,8 @@ def _staffing_and_blocks(
                         render_rules,
                         requirement_counts=requirement_counts,
                         group_members_by_pgy=group_members_by_pgy,
+                        elective_draft=elective_draft,
+                        on_elective_change=on_elective_change,
                     )
 
         render_rules()
@@ -426,8 +526,18 @@ def _pgy_rule_editor(
     *,
     requirement_counts: dict[tuple[int, int], int] | None = None,
     group_members_by_pgy: dict[int, list[str]] | None = None,
+    elective_draft: Draft | None = None,
+    on_elective_change: Callable[[], None] | None = None,
 ) -> None:
     from nicegui import ui
+
+    def notify_elective_change() -> None:
+        if on_elective_change is not None:
+            on_elective_change()
+
+    shapes: set[tuple[int, int]] | None = (
+        elective_draft.setdefault("shapes", set()) if elective_draft is not None else None
+    )
 
     level_name = instance.training_level_name(pgy)
     rule = next((item for item in draft["pgy_rules"] if int(item["pgy"]) == pgy), None)
@@ -461,6 +571,10 @@ def _pgy_rule_editor(
         def toggle_rule(event) -> None:
             if not event.value and group_members_by_pgy is not None:
                 group_members_by_pgy[pgy] = []
+            if not event.value and shapes is not None:
+                for key in {key for key in shapes if key[0] == pgy}:
+                    shapes.discard(key)
+                notify_elective_change()
             toggle_pgy_rule(
                 draft,
                 pgy,
@@ -468,6 +582,10 @@ def _pgy_rule_editor(
                 refresh,
                 event,
             )
+            if event.value and requirement_counts is not None:
+                # Added years start with a mandatory shape, matching new
+                # block configurations.
+                requirement_counts.setdefault((pgy, _DEFAULT_BLOCK_DURATION_WEEKS), 1)
 
         enabled.on_value_change(toggle_rule)
         if rule is None:
@@ -498,25 +616,25 @@ def _pgy_rule_editor(
                 .props("outlined clearable")
                 .classes("w-full sm:flex-1")
             )
-            total_weeks = None
-            if draft.get("kind") == RotationKind.ELECTIVE.value:
-                total_weeks = (
-                    ui.number(
-                        "Maximum total weeks",
-                        value=_optional_float(rule.get("max_total_weeks")),
-                        min=1,
-                        max=52,
-                        precision=0,
-                        step=1,
-                        placeholder="No maximum",
-                    )
-                    .props("outlined clearable")
-                    .classes("w-full sm:flex-1")
+            # The cap covers combined mandatory and elective takes for the year,
+            # so it bounds total exposure no matter how takes are split across
+            # block shapes. It must stay at or above the mandatory weeks below.
+            total_weeks = (
+                ui.number(
+                    "Maximum total weeks",
+                    value=_optional_float(rule.get("max_total_weeks")),
+                    min=1,
+                    max=52,
+                    precision=0,
+                    step=1,
+                    placeholder="No maximum",
                 )
+                .props("outlined clearable")
+                .classes("w-full sm:flex-1")
+            )
         minimum.bind_value(rule, "min_concurrent", forward=_as_int)
         maximum.bind_value(rule, "max_concurrent", forward=_as_int)
-        if total_weeks is not None:
-            total_weeks.bind_value(rule, "max_total_weeks", forward=_as_int)
+        total_weeks.bind_value(rule, "max_total_weeks", forward=_as_int)
 
         with ui.column().classes("rbs-rotation-editor-subsection w-full gap-3 rounded p-4"):
             with ui.column().classes("gap-0"):
@@ -569,7 +687,13 @@ def _pgy_rule_editor(
             add_button = ui.button(
                 "Add block configuration",
                 icon="add",
-                on_click=partial(add_block_config, rule, refresh),
+                on_click=partial(
+                    add_block_config,
+                    rule,
+                    refresh,
+                    pgy=pgy,
+                    requirement_counts=requirement_counts,
+                ),
             ).props("flat dense")
             add_button.set_enabled(len(rule["block_configs"]) < len(_DURATION_OPTIONS))
 
@@ -581,6 +705,8 @@ def _pgy_rule_editor(
                 refresh,
                 pgy=pgy,
                 requirement_counts=requirement_counts,
+                elective_draft=elective_draft,
+                on_elective_change=notify_elective_change,
             )
 
 
@@ -676,52 +802,95 @@ def _block_config_editor(
     *,
     pgy: int | None = None,
     requirement_counts: dict[tuple[int, int], int] | None = None,
+    elective_draft: Draft | None = None,
+    on_elective_change: Callable[[], None] | None = None,
 ) -> None:
     from nicegui import ui
 
     duration_weeks = int(config["duration_weeks"])
     vacation = config["vacation"]
-    with ui.card().props("flat bordered").classes("rbs-block-config w-full p-3 gap-3"):
-        with ui.row().classes("w-full items-center gap-3"):
+    key = (pgy, duration_weeks) if pgy is not None else None
+    shapes: set[tuple[int, int]] | None = (
+        elective_draft.setdefault("shapes", set())
+        if elective_draft is not None and key is not None
+        else None
+    )
+    # One duration per row: the model requires unique block durations per
+    # training-level rule, and one shape covers both mandatory and elective
+    # takes. Sibling durations are not offered so a duplicate cannot be saved.
+    sibling_durations = {
+        int(other["duration_weeks"])
+        for other_index, other in enumerate(rule["block_configs"])
+        if other_index != index
+    }
+    duration_options = {
+        weeks: label for weeks, label in _DURATION_OPTIONS.items() if weeks not in sibling_durations
+    }
+    with ui.card().props("flat bordered").classes("rbs-block-config w-full p-2 gap-2"):
+        with ui.row().classes("rbs-block-config-row w-full items-center gap-2 flex-nowrap"):
             count = None
-            if requirement_counts is not None and pgy is not None:
+            mode_toggle = None
+            if requirement_counts is not None and shapes is not None and key is not None:
+                has_count = requirement_counts.get(key, 0) > 0
+                is_elective = key in shapes
+                mode = (
+                    "Both"
+                    if has_count and is_elective
+                    else "Mandatory"
+                    if has_count
+                    else "Elective"
+                )
+                mode_toggle = ui.toggle(
+                    ["Mandatory", "Elective", "Both"],
+                    value=mode,
+                ).classes("rbs-block-mode-toggle shrink-0")
+                mode_toggle.tooltip(
+                    "Mandatory: required blocks only. Elective: fills Elective "
+                    "time only. Both: required and available as an elective."
+                )
                 count = (
                     ui.number(
                         "Blocks per resident",
-                        value=requirement_counts.get((pgy, duration_weeks), 0),
+                        value=requirement_counts.get(key, 0),
                         min=0,
                         precision=0,
                         step=1,
                     )
                     .props("outlined dense")
-                    .classes("w-full sm:w-48")
+                    .classes("w-36 shrink-0")
                 )
+                count.set_enabled(has_count)
             duration = (
                 ui.select(
-                    _DURATION_OPTIONS,
+                    duration_options,
                     value=duration_weeks,
                     label="Block length",
                 )
                 .props("outlined dense options-dense")
-                .classes("w-full sm:w-48")
+                .classes("w-28 shrink-0")
             )
-            allowed = ui.checkbox(
-                "Vacation may overlap this block",
-                value=bool(vacation.get("allowed")),
+            allowed = (
+                ui.checkbox(
+                    "Vacation",
+                    value=bool(vacation.get("allowed")),
+                )
+                .props("dense")
+                .classes("shrink-0")
             )
+            allowed.tooltip("Vacation may overlap this block")
             maximum = None
             if vacation.get("allowed"):
                 maximum = (
                     ui.number(
-                        "Maximum vacation weeks",
+                        "Max vacation weeks",
                         value=int(vacation.get("max_weeks_per_block") or 1),
                         min=1,
                         max=duration_weeks,
                         precision=0,
                         step=1,
                     )
-                    .props("outlined")
-                    .classes("w-full sm:w-56")
+                    .props("outlined dense")
+                    .classes("w-32 shrink-0")
                 )
             remove = ui.button(
                 icon="delete_outline",
@@ -734,21 +903,65 @@ def _block_config_editor(
                         duration_weeks,
                         requirement_counts,
                         refresh,
+                        shapes,
                     )
                     if requirement_counts is not None and pgy is not None
                     else partial(_remove_block_config, rule, index, refresh)
                 ),
             ).props("flat round dense color=negative aria-label='Remove block configuration'")
             remove.set_enabled(len(rule["block_configs"]) > 1)
-        if count is not None and requirement_counts is not None and pgy is not None:
-            count.on_value_change(
-                partial(
-                    _set_required_block_count,
-                    requirement_counts,
-                    pgy,
-                    duration_weeks,
+        if (
+            count is not None
+            and mode_toggle is not None
+            and requirement_counts is not None
+            and shapes is not None
+            and key is not None
+        ):
+
+            def notify_shapes() -> None:
+                if on_elective_change is not None:
+                    on_elective_change()
+
+            def apply_mode(value: str) -> None:
+                if value == "Elective":
+                    requirement_counts[key] = 0
+                    shapes.add(key)
+                    if (count.value or 0) != 0:
+                        count.set_value(0)
+                    count.set_enabled(False)
+                else:
+                    if requirement_counts.get(key, 0) <= 0:
+                        requirement_counts[key] = 1
+                    if value == "Both":
+                        shapes.add(key)
+                    else:
+                        shapes.discard(key)
+                    if (count.value or 0) <= 0:
+                        count.set_value(1)
+                    count.set_enabled(True)
+                notify_shapes()
+
+            def sync_count(event) -> None:
+                _set_required_block_count(requirement_counts, pgy, duration_weeks, event)
+                has_count = requirement_counts.get(key, 0) > 0
+                if not has_count:
+                    # Zeroing the count keeps the shape elective-leaning; the
+                    # save validates it against Elective curriculum time.
+                    shapes.add(key)
+                expected = (
+                    "Both"
+                    if has_count and key in shapes
+                    else "Mandatory"
+                    if has_count
+                    else "Elective"
                 )
-            )
+                if str(mode_toggle.value) != expected:
+                    mode_toggle.set_value(expected)
+                count.set_enabled(has_count)
+                notify_shapes()
+
+            count.on_value_change(sync_count)
+            mode_toggle.on_value_change(lambda event: apply_mode(str(event.value)))
             duration.on_value_change(
                 partial(
                     _change_required_block_duration,
@@ -757,6 +970,7 @@ def _block_config_editor(
                     duration_weeks,
                     requirement_counts,
                     refresh,
+                    shapes,
                 )
             )
         else:
@@ -1045,10 +1259,14 @@ def _change_required_block_duration(
     requirement_counts: dict[tuple[int, int], int],
     refresh: Callable[[], None],
     event,
+    elective_shapes: set[tuple[int, int]] | None = None,
 ) -> None:
     new_duration = int(event.value)
     count = requirement_counts.pop((pgy, previous_duration), 0)
     requirement_counts[pgy, new_duration] = count
+    if elective_shapes is not None and (pgy, previous_duration) in elective_shapes:
+        elective_shapes.discard((pgy, previous_duration))
+        elective_shapes.add((pgy, new_duration))
     config["duration_weeks"] = new_duration
     refresh()
 
@@ -1060,80 +1278,44 @@ def _remove_required_block_config(
     duration_weeks: int,
     requirement_counts: dict[tuple[int, int], int],
     refresh: Callable[[], None],
+    elective_shapes: set[tuple[int, int]] | None = None,
 ) -> None:
     if len(rule["block_configs"]) <= 1:
         return
     requirement_counts.pop((pgy, duration_weeks), None)
+    if elective_shapes is not None:
+        elective_shapes.discard((pgy, duration_weeks))
     _remove_index(rule["block_configs"], index, refresh)
 
 
-def _mandatory_elective_availability(
-    draft: Draft,
-    instance: SchedulerInput,
-) -> None:
-    """Render explicit per-level eligibility and repeatability controls."""
-    from nicegui import ui
+def _elective_repeatable_header(elective_draft: Draft) -> Callable[[], None]:
+    """Render the shared repeat-takes checkbox; return its refresher.
 
-    available_block_sizes = instance.elective_block_sizes
-    draft["eligible_pgys"] = sorted(int(pgy) for pgy in draft.get("eligible_pgys", []))
-    draft["eligible"] = bool(draft["eligible_pgys"])
+    Per-shape toggles own elective eligibility, so this header only owns the
+    service-wide repeat flag. The refresher disables it when no shape is
+    marked Elective or Both.
+    """
+    from nicegui import ui
 
     with ui.column().classes(
         "rbs-rotation-flags rbs-mandatory-elective-availability w-full gap-3 rounded p-3"
     ):
         ui.label("Elective availability").classes("rbs-type-control-label")
         ui.label(
-            "Choose each training level that may use this service for direct Elective time."
+            "Repeat takes apply to every block shape marked Elective "
+            "or Both below. Elective block sizes follow those shapes."
         ).classes("rbs-type-caption rbs-text-muted")
-        pgy_controls: dict[int, object] = {}
-        with ui.row().classes("w-full items-center gap-x-5 gap-y-1 flex-wrap"):
-            for pgy in instance.training_level_ids:
-                control = ui.checkbox(
-                    f"Available to {instance.training_level_name(pgy)} as an elective",
-                    value=pgy in draft["eligible_pgys"],
-                )
-                control.set_enabled(bool(available_block_sizes))
-                pgy_controls[pgy] = control
-        block_sizes = (
-            ui.select(
-                _elective_block_size_options(available_block_sizes),
-                value=list(draft.get("eligible_block_sizes") or []),
-                label="Eligible elective block sizes",
-                multiple=True,
-            )
-            .props("outlined options-dense use-chips")
-            .classes("w-full")
-        )
-        block_sizes.bind_value(draft, "eligible_block_sizes")
         repeatable = ui.checkbox(
             "Can be taken more than once as an elective",
-            value=bool(draft.get("repeatable")),
+            value=bool(elective_draft.get("repeatable")),
         )
-        repeatable.bind_value(draft, "repeatable")
+        repeatable.bind_value(elective_draft, "repeatable")
 
-        def refresh_enabled() -> None:
-            enabled = bool(draft.get("eligible_pgys"))
-            draft["eligible"] = enabled
-            block_sizes.set_enabled(enabled and bool(available_block_sizes))
-            repeatable.set_enabled(enabled)
+    def refresh() -> None:
+        repeatable.set_enabled(bool(elective_draft.get("shapes", set())))
 
-        def toggle_pgy(pgy: int, enabled: bool) -> None:
-            selected = {int(value) for value in draft.get("eligible_pgys", [])}
-            if enabled:
-                selected.add(pgy)
-            else:
-                selected.discard(pgy)
-            draft["eligible_pgys"] = sorted(selected)
-            refresh_enabled()
-
-        for pgy, control in pgy_controls.items():
-            control.on_value_change(
-                lambda event, selected_pgy=pgy: toggle_pgy(
-                    selected_pgy,
-                    bool(event.value),
-                )
-            )
-        refresh_enabled()
+    refresh()
+    return refresh
 
 
 def _direct_elective_weeks(instance: SchedulerInput, pgy: int) -> int:
@@ -1175,10 +1357,17 @@ def _rotation_detail_contents(
             )
             if combined_capacity != "No minimum or maximum":
                 _rotation_summary_chip(combined_capacity)
+            required_anywhere = any(
+                block.rotation_id == rotation.id
+                for curriculum in instance.requirements
+                for block in curriculum.blocks
+            )
             if rotation.kind is RotationKind.STANDARD:
+                if not required_anywhere:
+                    _rotation_summary_chip("Not required anywhere")
                 if instance.is_elective_option(rotation.id):
                     _elective_policy_summary_chips(instance, rotation.id)
-                else:
+                elif required_anywhere:
                     _rotation_summary_chip("Mandatory only")
             elif rotation.kind is RotationKind.FMED:
                 if instance.is_elective_option(rotation.id):

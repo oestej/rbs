@@ -15,18 +15,21 @@ from rbs.ui.rotations.editor import (
     _elective_rotation_editor,
     _elective_shared_summary,
     _open_elective_properties_dialog,
-    _open_elective_rotation_dialog,
     _open_fmed_pgy_rules_dialog,
     _rotation_detail_contents,
     _rotation_editor,
     render_rotations_tab,
 )
+from rbs.ui.rotations.elective import _elective_rule_pgys
 from rbs.ui.rotations.ops import (
     add_elective_rotation,
     direct_elective_counts,
     remove_elective_rotation,
     replace_elective_color,
+    replace_elective_rotation,
     replace_standard_rotation,
+    rotation_editor_state,
+    rotation_from_editor_state,
     set_elective_allocation,
     set_elective_eligibility,
 )
@@ -162,6 +165,55 @@ def test_mandatory_elective_policy_filters_by_training_level_and_repeatability()
     assert "night_float" in {rotation.id for rotation in instance.elective_options_for(2, 2)}
 
 
+def test_mandatory_elective_sizes_derive_from_training_level_rules() -> None:
+    instance = _instance_with_two_elective_block_sizes()
+
+    # Fixture narrows night_float to 4-week fills via raw JSON (still honored).
+    assert instance.eligible_elective_block_sizes("night_float") == (4,)
+
+    # Omitting sizes derives from PGY1 Training-level rules (2+4) and the
+    # PGY1 Elective curriculum (2+4) instead of a second manual setting.
+    derived = set_elective_eligibility(
+        instance,
+        "night_float",
+        eligible=True,
+        eligible_pgys=[1],
+        eligible_block_sizes=None,
+    )
+    assert derived.eligible_elective_block_sizes("night_float") == (2, 4)
+
+    # Explicit sizes remain honored for backward-compatible raw imports.
+    narrowed = set_elective_eligibility(
+        instance,
+        "night_float",
+        eligible=True,
+        eligible_pgys=[1],
+        eligible_block_sizes=[4],
+    )
+    assert narrowed.eligible_elective_block_sizes("night_float") == (4,)
+
+
+def test_toggle_shapes_derive_exact_elective_sizes() -> None:
+    from rbs.ui.rotations.ops import elective_pgys_sizes_for_shapes
+
+    instance = _instance_with_two_elective_block_sizes()
+    rotation = instance.rotation("night_float")
+
+    # Both shapes marked: every fillable combination is eligible.
+    assert elective_pgys_sizes_for_shapes(instance, rotation, {(1, 2), (1, 4)}) == (
+        [1],
+        [2, 4],
+    )
+    # One shape marked: sizes narrow to it (the per-shape Both/Elective flag).
+    assert elective_pgys_sizes_for_shapes(instance, rotation, {(1, 4)}) == ([1], [4])
+    # No shapes marked: not an elective option at all.
+    assert elective_pgys_sizes_for_shapes(instance, rotation, set()) == ([], [])
+
+    # Shapes with no matching Elective curriculum time fail clearly.
+    with pytest.raises(ValueError, match="do not match any Elective curriculum time"):
+        elective_pgys_sizes_for_shapes(instance, rotation, {(3, 2)})
+
+
 def test_fmed_as_elective_keeps_custom_kind_and_shared_capacity_identity() -> None:
     instance = sample_instance()
     resident = instance.residents_by_id["resident-009"].model_copy(
@@ -205,30 +257,35 @@ def test_fmed_rules_dialog_owns_elective_availability() -> None:
         for element_id, element in ui.context.client.elements.items()
         if element_id not in before
     ]
-    elective_toggles = {
+    checkboxes = {
         getattr(element, "_text", None): element
         for element in created
         if element.__class__.__name__ == "Checkbox"
-        and str(getattr(element, "_text", "")).endswith("as an elective")
     }
-    repeatable = next(
-        element
-        for element in created
-        if element.__class__.__name__ == "Checkbox"
-        and getattr(element, "_text", None) == "Can be taken more than once as an elective"
-    )
-    block_sizes = next(
+    toggles = [element for element in created if element.__class__.__name__ == "Toggle"]
+    size_controls = [
         element
         for element in created
         if element.__class__.__name__ == "Select"
         and element._props.get("label") == "Eligible elective block sizes"
-    )
+    ]
 
-    assert elective_toggles["Available to PGY 1 as an elective"].value is False
-    assert elective_toggles["Available to PGY 2 as an elective"].value is True
-    assert elective_toggles["Available to PGY 3 as an elective"].value is False
-    assert repeatable.value is True
-    assert block_sizes.value == [2]
+    # One three-way toggle per block shape; only the PGY 2 2-week shape is
+    # elective-marked. No per-year elective checkbox remains.
+    assert {toggle.value for toggle in toggles} == {"Mandatory", "Both"}
+    assert all(
+        [option["label"] for option in toggle._props["options"]]
+        == ["Mandatory", "Elective", "Both"]
+        for toggle in toggles
+    )
+    assert not any(
+        str(text).startswith("Available to") and str(text).endswith("as an elective")
+        for text in checkboxes
+    )
+    assert checkboxes["Can be taken more than once as an elective"].value is True
+    # Sizes follow Training-level rules; no manual size control remains.
+    assert size_controls == []
+    assert instance.eligible_elective_block_sizes("fmed") == (2,)
 
 
 def test_elective_marker_and_inherited_color_appear_on_calendars() -> None:
@@ -407,18 +464,29 @@ def test_mandatory_rotation_owns_its_elective_availability() -> None:
         for element in created
         if element.__class__.__name__ == "Checkbox"
     }
-    block_size_select = next(
+    toggles = [element for element in created if element.__class__.__name__ == "Toggle"]
+    size_controls = [
         element
         for element in created
         if element.__class__.__name__ == "Select"
         and element._props.get("label") == "Eligible elective block sizes"
-    )
+    ]
 
-    assert checkboxes["Available to PGY 1 as an elective"].value is True
-    assert checkboxes["Available to PGY 2 as an elective"].value is True
-    assert checkboxes["Available to PGY 3 as an elective"].value is False
+    # One three-way toggle per block shape: PGY 1 is required and elective
+    # (Both), PGY 2 is elective-only. No per-year elective checkbox remains.
+    assert {toggle.value for toggle in toggles} == {"Both", "Elective"}
+    assert all(
+        [option["label"] for option in toggle._props["options"]]
+        == ["Mandatory", "Elective", "Both"]
+        for toggle in toggles
+    )
+    assert not any(
+        str(text).startswith("Available to") and str(text).endswith("as an elective")
+        for text in checkboxes
+    )
     assert checkboxes["Can be taken more than once as an elective"].value is True
-    assert block_size_select.value == [2]
+    assert size_controls == []
+    assert instance.eligible_elective_block_sizes("night_float") == (2,)
     assert any(getattr(element, "_text", None) == "Elective availability" for element in created)
 
     disabled = replace_standard_rotation(
@@ -430,13 +498,15 @@ def test_mandatory_rotation_owns_its_elective_availability() -> None:
     assert not disabled.is_elective_option(rotation.id)
 
 
-def test_elective_editor_uses_wide_responsive_dialog_layout() -> None:
+def test_new_elective_uses_the_full_screen_editor() -> None:
     from nicegui import ui
 
+    instance = sample_instance()
     before = set(ui.context.client.elements)
-    _open_elective_rotation_dialog(
-        sample_instance(),
-        selected_rotation_id=None,
+    _elective_rotation_editor(
+        instance,
+        None,
+        on_cancel=lambda: None,
         on_save=lambda _instance, _rotation_id: None,
     )
     created = [
@@ -444,21 +514,6 @@ def test_elective_editor_uses_wide_responsive_dialog_layout() -> None:
         for element_id, element in ui.context.client.elements.items()
         if element_id not in before
     ]
-    dialog_card = next(
-        element
-        for element in created
-        if "rbs-elective-editor-dialog" in getattr(element, "_classes", [])
-    )
-    editor_scroll = next(
-        element
-        for element in created
-        if "rbs-elective-editor-scroll" in getattr(element, "_classes", [])
-    )
-    editor_panels = next(
-        element
-        for element in created
-        if "rbs-elective-editor-panels" in getattr(element, "_classes", [])
-    )
     block_size_select = next(
         element
         for element in created
@@ -469,12 +524,6 @@ def test_elective_editor_uses_wide_responsive_dialog_layout() -> None:
         element._props.get("label") for element in created if element.__class__.__name__ == "Tab"
     }
     text = {getattr(element, "_text", None) for element in created}
-    total_weeks = next(
-        element
-        for element in created
-        if element.__class__.__name__ == "Number"
-        and element._props.get("label") == "Maximum total weeks"
-    )
     total_week_fields = [
         element
         for element in created
@@ -487,17 +536,6 @@ def test_elective_editor_uses_wide_responsive_dialog_layout() -> None:
         if element.__class__.__name__ == "Select"
         and element._props.get("label") == "Max consecutive weeks"
     )
-    header = next(
-        element
-        for element in created
-        if "rbs-clinic-editor-header" in getattr(element, "_classes", [])
-    )
-    tab_bar = next(
-        element
-        for element in created
-        if element.__class__.__name__ == "Tabs"
-        and "rbs-clinic-editor-tabs" in getattr(element, "_classes", [])
-    )
     no_clinic = next(
         element
         for element in created
@@ -508,29 +546,53 @@ def test_elective_editor_uses_wide_responsive_dialog_layout() -> None:
         element._props.get("label") for element in created if element.__class__.__name__ == "Button"
     }
 
-    assert dialog_card._style["width"] == "calc(100vw - 32px)"
-    assert dialog_card._style["max-width"] == "1200px"
-    assert "w-full" in editor_scroll._classes
-    assert {"w-full", "min-w-0", "max-w-full"} <= set(editor_panels._classes)
+    # No separate add dialog: creation shares the master-detail editor.
+    assert not any(element.__class__.__name__ == "Dialog" for element in created)
+    assert any("rbs-master-detail" in getattr(element, "_classes", []) for element in created)
     assert tabs == {"General", "Training-level rules", "Clinic"}
-    assert tab_bar.parent_slot.parent is header
-    assert tab_bar._props.get("inline-label") is True
+    assert "Save elective" in button_labels
     assert "Cancel" not in button_labels
+    assert "New elective" in text
+    assert "Creating" in text
     assert no_clinic.value is False
     assert "Elective Rules" in text
-    assert "Uses the shared Elective color. Configure service rules without grouping." not in text
     assert "Not required program-wide" not in text
-    assert total_weeks.value is None
     # Rotation-level plus one per PGY rule cloned from the first configured
     # standalone elective (Geriatrics ships PGY1/PGY2 rules in the sample data).
     assert len(total_week_fields) == 3
     assert not consecutive._props.get("dense")
-    assert not total_weeks._props.get("dense")
+    # A new elective starts eligible for every configured Elective block size.
     assert block_size_select.value == [2]
     assert not any(
         str(getattr(element, "_text", "")).startswith("Shared Elective color ·")
         for element in created
     )
+
+
+def test_new_elective_detail_panel_renders_the_full_screen_editor() -> None:
+    from nicegui import ui
+
+    from rbs.ui.rotations.elective import _elective_detail_panel
+
+    instance = sample_instance()
+    before = set(ui.context.client.elements)
+    _elective_detail_panel(
+        instance,
+        rotation=None,
+        creating=True,
+        missing_id=None,
+        on_select=lambda _rotation_id: None,
+        on_save=lambda _instance, _rotation_id: None,
+    )
+    created = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+    text = {getattr(element, "_text", None) for element in created}
+
+    assert not any(element.__class__.__name__ == "Dialog" for element in created)
+    assert "New elective" in text
 
 
 def test_existing_elective_uses_the_master_detail_editor() -> None:
@@ -934,3 +996,74 @@ def test_a_block_length_already_committed_is_not_offered_twice() -> None:
         "4 weeks",
         "5 weeks",
     ]
+
+
+def test_adding_a_year_to_a_standalone_elective_extends_its_eligible_years() -> None:
+    from nicegui import ui
+    from nicegui.events import ValueChangeEventArguments
+
+    instance = sample_instance()
+    saves: list = []
+    before = set(ui.context.client.elements)
+    _elective_rotation_editor(
+        instance,
+        instance.rotation("palliative_care"),
+        on_cancel=lambda: None,
+        on_save=lambda updated, rotation_id: saves.append((updated, rotation_id)),
+    )
+
+    box = next(
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+        and element.__class__.__name__ == "Checkbox"
+        and getattr(element, "_text", None) == "Available to PGY 3"
+    )
+    assert box.value is False
+    event = ValueChangeEventArguments(
+        sender=box, client=box.client, value=True, previous_value=False
+    )
+    for handler in list(box._change_handlers):
+        handler(event)
+
+    created = _created_since(before)
+    _click(_button(created, "Save elective"))
+
+    assert saves, "saving did not reach on_save"
+    updated, rotation_id = saves[-1]
+    assert rotation_id == "palliative_care"
+    assert [rule.pgy for rule in updated.rotation("palliative_care").pgy_rules] == [1, 2, 3]
+    option = updated.electives.option_for("palliative_care")
+    assert option.eligible_pgys == [1, 2, 3]
+    assert option.eligible_block_sizes == [2]
+    assert option.repeatable is True
+
+
+def test_newly_eligible_year_still_needs_elective_time_to_rank() -> None:
+    from types import SimpleNamespace
+
+    from rbs.ui.residents.electives import elective_preference_options
+    from rbs.ui.rotations.widgets import toggle_pgy_rule
+
+    instance = sample_instance()
+    draft = rotation_editor_state(instance.rotation("palliative_care"))
+    toggle_pgy_rule(
+        draft,
+        3,
+        instance.training_level_ids,
+        lambda: None,
+        SimpleNamespace(value=True),
+    )
+    replacement = rotation_from_editor_state(draft)
+    updated = replace_elective_rotation(
+        instance,
+        "palliative_care",
+        replacement,
+        eligible_pgys=_elective_rule_pgys(draft),
+        eligible_block_sizes=[2],
+    )
+    assert updated.electives.option_for("palliative_care").eligible_pgys == [1, 2, 3]
+
+    resident = next(item for item in updated.residents if item.pgy == 3)
+    assert updated.direct_elective_block_counts_for_pgy(3) == {}
+    assert "palliative_care|2" not in elective_preference_options(updated, resident)

@@ -11,3 +11,5 @@ SelectRotation = Callable[[str | None], None]
 SaveRotation = Callable[[SchedulerInput, str | None], None]
 
 NEW_MANDATORY_ROTATION_ID = "__new_mandatory_rotation__"
+
+NEW_ELECTIVE_ROTATION_ID = "__new_elective_rotation__"

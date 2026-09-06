@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Rotations:** Each block shape in a mandatory rotation's training-level
+  rules now has its own Mandatory / Elective / Both switch, so one service
+  can be required in some shapes and offered as an elective in others. New
+  shapes start as Mandatory.
+- **Rotations:** Resident exceptions can now waive a resident out of a
+  mandatory block, freeing those weeks as unscheduled time, and an extra
+  mandatory placement can be funded from a training level's unallocated
+  weeks instead of replacing an elective block.
+- **Rotations:** Adding a mandatory or standalone elective rotation now uses
+  the same full-screen editor as editing, with every option available up
+  front.
+
+### Changed
+
+- **Rotations:** Elective availability for a mandatory service is derived
+  from its per-shape switches and the Elective curriculum when saving,
+  replacing the separate "available as elective" checkboxes and block-size
+  picker. Repeatable-as-elective is still configurable per service.
+- **Rotations:** Growing a mandatory requirement spends a training level's
+  unscheduled weeks first and Elective time second, and saving is rejected
+  when the requirement would exceed that level's maximum total weeks.
+- **Clinic:** Updating clinic block rules now reports how many locked
+  placements were released.
+- **Data compatibility:** Existing workspaces open unchanged with no
+  migration. Workspaces that use waivers or unallocated-funded overrides
+  cannot be opened by older builds.
+
+### Fixed
+
+- **Rotations:** Adding a training year to a standalone elective after it
+  was created now extends that elective's eligible years instead of leaving
+  it on the previous set.
+
 ## [0.1.3] - 2026-09-06
 
 ### Added

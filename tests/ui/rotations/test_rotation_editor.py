@@ -235,7 +235,7 @@ def test_next_mandatory_rotation_id_is_readable_and_unique() -> None:
     assert next_mandatory_rotation_id(instance, "Behavioral Health") == "behavioral_health_2"
 
 
-def test_mandatory_directory_exposes_new_rotation_form() -> None:
+def test_mandatory_directory_exposes_new_rotation_editor() -> None:
     from nicegui import ui
 
     instance = sample_instance()
@@ -261,18 +261,30 @@ def test_mandatory_directory_exposes_new_rotation_form() -> None:
         for element in created
         if element.__class__.__name__ in {"Input", "Number"}
     }
+    editor_tabs = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Tabs"
+        and "rbs-rotation-editor-tabs" in getattr(element, "_classes", [])
+    )
+    tabs = {
+        element._props.get("label")
+        for element in created
+        if element.__class__.__name__ == "Tab"
+        and element.parent_slot is not None
+        and element.parent_slot.parent is editor_tabs
+    }
 
+    # No separate add screen: creation shares the full-screen editor.
+    assert not any(element.__class__.__name__ == "Dialog" for element in created)
     assert "New mandatory rotation" in text
-    assert "Required for PGY 1" in text
+    assert "Creating" in text
+    assert "Available to PGY 1" in text
+    assert "Required for PGY 1" not in text
     assert "New rotation" in button_labels
     assert "Add rotation" in button_labels
-    assert {"Rotation code", "Rotation name", "Blocks per resident"} <= input_labels
-    block_lengths = [
-        element.value
-        for element in created
-        if element.__class__.__name__ == "Select" and element._props.get("label") == "Block length"
-    ]
-    assert block_lengths == [2] * len(instance.training_level_ids)
+    assert {"Rotation code", "Rotation name"} <= input_labels
+    assert tabs == {"General", "Training-level rules", "Clinic"}
 
 
 def test_new_rotation_block_configurations_default_to_two_weeks() -> None:
@@ -2034,6 +2046,69 @@ def test_clinic_count_changes_spend_and_release_unscheduled_weeks() -> None:
     assert not any(block.rotation_id == "elective" for block in restored.curriculum_for(1).blocks)
 
 
+def _clinic_counts(instance, rotation_id: str) -> dict:
+    rotation = instance.rotation(rotation_id)
+    return {
+        (rule.pgy, config.duration_weeks): sum(
+            block.count
+            for block in instance.curriculum_for(rule.pgy).blocks
+            if block.rotation_id == rotation_id and block.duration_weeks == config.duration_weeks
+        )
+        for rule in rotation.pgy_rules
+        for config in rule.block_configs
+    }
+
+
+def test_clinic_rule_removal_releases_orphaned_locks() -> None:
+    instance = sample_instance()
+    clinic = instance.rotation("clinic")
+    assert any(
+        lock.resident_id == "resident-001" and lock.rotation_id == "clinic"
+        for lock in instance.locks
+    )
+    raw = clinic.model_dump(mode="json")
+    raw["pgy_rules"] = [rule for rule in raw["pgy_rules"] if rule["pgy"] != 1]
+    replacement = Rotation.model_validate(raw)
+    counts = _clinic_counts(instance, clinic.id)
+
+    updated = replace_clinic_block_rules(instance, clinic.id, replacement, counts)
+
+    assert [rule.pgy for rule in updated.rotation("clinic").pgy_rules] == [2, 3]
+    assert not any(block.rotation_id == "clinic" for block in updated.curriculum_for(1).blocks)
+    assert not any(lock.rotation_id == "clinic" for lock in updated.locks)
+    assert any(lock.rotation_id == "fmed" for lock in updated.locks)
+
+
+def test_clinic_zeroed_blocks_release_unsatisfiable_lock() -> None:
+    instance = sample_instance()
+    clinic = instance.rotation("clinic")
+    counts = _clinic_counts(instance, clinic.id)
+    for key in [key for key in counts if key[0] == 1]:
+        counts[key] = 0
+
+    updated = replace_clinic_block_rules(instance, clinic.id, clinic, counts)
+
+    assert [rule.pgy for rule in updated.rotation("clinic").pgy_rules] == [1, 2, 3]
+    assert not any(block.rotation_id == "clinic" for block in updated.curriculum_for(1).blocks)
+    assert not any(lock.rotation_id == "clinic" for lock in updated.locks)
+    assert any(lock.rotation_id == "fmed" for lock in updated.locks)
+
+
+def test_clinic_reduction_keeps_satisfiable_lock() -> None:
+    instance = sample_instance()
+    clinic = instance.rotation("clinic")
+    counts = _clinic_counts(instance, clinic.id)
+    assert counts[1, 2] == 2
+    counts[1, 2] = 1
+
+    updated = replace_clinic_block_rules(instance, clinic.id, clinic, counts)
+
+    assert any(
+        lock.resident_id == "resident-001" and lock.rotation_id == "clinic"
+        for lock in updated.locks
+    )
+
+
 def test_fmed_pgy_rule_changes_spend_weeks_and_preserve_service_identity() -> None:
     instance = sample_instance()
     original = instance.rotation("fmed")
@@ -2104,6 +2179,73 @@ def test_fmed_pgy_rule_changes_spend_weeks_and_preserve_service_identity() -> No
     assert not any(block.rotation_id == "elective" for block in restored.curriculum_for(1).blocks)
 
 
+def test_fmed_day_edits_save_through_dedicated_editor() -> None:
+    instance = sample_instance()
+    original = instance.rotation("fmed")
+    assert original.clinic is not None
+    raw = original.model_dump(mode="json")
+    raw["clinic"]["slots"] = [
+        slot for slot in raw["clinic"]["slots"] if slot["weekday"] != "friday"
+    ]
+    assert len(raw["clinic"]["slots"]) < len(original.clinic.slots)
+    replacement = Rotation.model_validate(raw)
+    counts = {
+        (pgy, config.duration_weeks): sum(
+            block.count
+            for block in instance.curriculum_for(pgy).blocks
+            if block.rotation_id == original.id and block.duration_weeks == config.duration_weeks
+        )
+        for pgy in range(1, 4)
+        for rule in replacement.pgy_rules
+        if rule.pgy == pgy
+        for config in rule.block_configs
+    }
+
+    updated = replace_fmed_pgy_rules(instance, original.id, replacement, counts)
+    saved = updated.rotation(original.id)
+
+    assert saved.clinic is not None
+    assert all(slot.weekday.value != "friday" for slot in saved.clinic.slots)
+    assert len(saved.clinic.slots) == len(raw["clinic"]["slots"])
+    assert saved.clinic.max_concurrent == original.clinic.max_concurrent
+    assert saved.clinic.half_days_per_week == original.clinic.half_days_per_week
+    assert any(
+        lock.resident_id == "resident-009" and lock.rotation_id == "fmed" for lock in updated.locks
+    )
+
+
+def test_fmed_rules_dialog_shows_eligible_clinic_days() -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    before = set(ui.context.client.elements)
+
+    _open_fmed_pgy_rules_dialog(
+        instance,
+        "fmed",
+        selected_rotation_id=None,
+        on_save=lambda _instance, _rotation_id: None,
+    )
+
+    created = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+    text = {getattr(element, "_text", None) for element in created}
+    day_boxes = [
+        element
+        for element in created
+        if element.__class__.__name__ == "Checkbox"
+        and getattr(element, "_text", None) in {"Morning", "Afternoon"}
+    ]
+
+    assert "Eligible clinic days" in text
+    assert day_boxes
+    assert any(box.value is True for box in day_boxes)
+    assert any(box.value is False for box in day_boxes)
+
+
 def test_manual_clinic_block_rejects_non_elective_replacement() -> None:
     with pytest.raises(ValueError, match="must replace Elective"):
         add_manual_clinic_block(
@@ -2144,6 +2286,166 @@ def test_resident_mandatory_override_replaces_elective_and_updates_summary() -> 
     after = resident_rotation_week_totals(updated, "resident-001")
     assert after["mandatory"] == before["mandatory"] + 2
     assert after["elective"] == before["elective"] - 2
+
+
+def _free_night_float_pgy1_weeks(instance):
+    rotation = instance.rotation("night_float")
+    freed = replace_standard_rotation(
+        instance,
+        rotation.id,
+        rotation,
+        counts={(1, 2): 0, (2, 2): 0},
+    )
+    assert freed.unallocated_weeks(1) == 2
+    return freed, rotation
+
+
+def test_resident_override_can_replace_unallocated_time() -> None:
+    freed, rotation = _free_night_float_pgy1_weeks(sample_instance())
+    before = resident_rotation_week_totals(freed, "resident-001")
+
+    updated = replace_standard_rotation(
+        freed,
+        rotation.id,
+        rotation,
+        resident_overrides=[
+            {
+                "resident_id": "resident-001",
+                "rotation_id": rotation.id,
+                "duration_weeks": 2,
+                "replaces_rotation_id": None,
+            }
+        ],
+    )
+
+    override = updated.resident_rotation_overrides[0]
+    assert override.replaces_rotation_id is None
+    assert updated.scheduling_case().resident_rotation_overrides == [override]
+    after = resident_rotation_week_totals(updated, "resident-001")
+    assert after["mandatory"] == before["mandatory"] + 2
+    assert after["elective"] == before["elective"]
+    extras = [
+        occurrence
+        for occurrence in expand_occurrences(updated, require_configured_electives=False)
+        if "resident-override" in occurrence.key and occurrence.resident_id == "resident-001"
+    ]
+    assert len(extras) == 1
+
+    spent = [
+        {
+            "resident_id": "resident-001",
+            "rotation_id": rotation.id,
+            "duration_weeks": 2,
+            "replaces_rotation_id": None,
+        }
+    ]
+    with pytest.raises(ValidationError, match="unallocated weeks"):
+        replace_standard_rotation(
+            freed,
+            rotation.id,
+            rotation,
+            resident_overrides=[
+                *spent,
+                {
+                    "resident_id": "resident-001",
+                    "rotation_id": rotation.id,
+                    "duration_weeks": 2,
+                    "replaces_rotation_id": None,
+                },
+            ],
+        )
+
+
+def test_resident_waiver_skips_a_mandatory_block() -> None:
+    instance = sample_instance()
+    rotation = instance.rotation("night_float")
+    before = resident_rotation_week_totals(instance, "resident-001")
+    before_occurrences = [
+        occurrence
+        for occurrence in expand_occurrences(instance, require_configured_electives=False)
+        if occurrence.resident_id == "resident-001"
+        and occurrence.rotation_id == "night_float"
+        and occurrence.duration_weeks == 2
+        and not occurrence.elective
+    ]
+    assert len(before_occurrences) == 1
+
+    updated = replace_standard_rotation(
+        instance,
+        rotation.id,
+        rotation,
+        resident_waivers=[
+            {
+                "resident_id": "resident-001",
+                "rotation_id": rotation.id,
+                "duration_weeks": 2,
+            }
+        ],
+    )
+
+    waiver = updated.resident_rotation_waivers[0]
+    assert waiver.rotation_id == "night_float"
+    assert updated.scheduling_case().resident_rotation_waivers == [waiver]
+    after = resident_rotation_week_totals(updated, "resident-001")
+    assert after["mandatory"] == before["mandatory"] - 2
+    assert after["elective"] == before["elective"]
+    after_occurrences = [
+        occurrence
+        for occurrence in expand_occurrences(updated, require_configured_electives=False)
+        if occurrence.resident_id == "resident-001"
+        and occurrence.rotation_id == "night_float"
+        and occurrence.duration_weeks == 2
+        and not occurrence.elective
+    ]
+    assert after_occurrences == []
+
+    with pytest.raises(ValidationError, match="are available"):
+        replace_standard_rotation(
+            instance,
+            rotation.id,
+            rotation,
+            resident_waivers=[
+                {
+                    "resident_id": "resident-001",
+                    "rotation_id": rotation.id,
+                    "duration_weeks": 2,
+                },
+                {
+                    "resident_id": "resident-001",
+                    "rotation_id": rotation.id,
+                    "duration_weeks": 2,
+                },
+            ],
+        )
+
+    with pytest.raises(ValidationError, match="does not allow"):
+        replace_standard_rotation(
+            instance,
+            rotation.id,
+            rotation,
+            resident_waivers=[
+                {
+                    "resident_id": "resident-001",
+                    "rotation_id": rotation.id,
+                    "duration_weeks": 4,
+                }
+            ],
+        )
+
+    freed, _rotation = _free_night_float_pgy1_weeks(instance)
+    with pytest.raises(ValidationError, match="no direct .* block to waive"):
+        replace_standard_rotation(
+            freed,
+            rotation.id,
+            rotation,
+            resident_waivers=[
+                {
+                    "resident_id": "resident-001",
+                    "rotation_id": rotation.id,
+                    "duration_weeks": 2,
+                }
+            ],
+        )
 
 
 def test_grouped_resident_override_requires_a_complete_linked_bundle() -> None:
@@ -2213,6 +2515,114 @@ def test_grouped_resident_override_requires_a_complete_linked_bundle() -> None:
     assert unmatched_extra.rotation_group_instance_id is None
 
 
+def test_override_funding_options_include_unallocated_time() -> None:
+    from rbs.ui.rotations.overrides import _resident_override_funding_options
+
+    freed, rotation = _free_night_float_pgy1_weeks(sample_instance())
+    funding = _resident_override_funding_options(freed, rotation, [], "resident-001", 2)
+
+    assert funding[0][0] == "elective"
+    assert (None, "Unallocated time (2 weeks available)") in funding
+
+    spent = [
+        {
+            "resident_id": "resident-001",
+            "rotation_id": rotation.id,
+            "duration_weeks": 2,
+            "replaces_rotation_id": None,
+            "group_instance_id": None,
+        }
+    ]
+    assert _resident_override_funding_options(freed, rotation, spent, "resident-001", 2) == [
+        (funding[0][0], funding[0][1])
+    ]
+
+
+def test_override_dialog_offers_a_funded_by_choice() -> None:
+    from nicegui import ui
+
+    freed, rotation = _free_night_float_pgy1_weeks(sample_instance())
+    before = set(ui.context.client.elements)
+
+    _open_resident_rotation_override_dialog(
+        freed,
+        rotation,
+        [],
+        lambda: None,
+    )
+
+    created = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+    funding = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Select" and element._props.get("label") == "Funded by"
+    )
+
+    assert funding._props["options"]
+
+
+def test_waiver_dialog_and_editor_round_trip_a_draft() -> None:
+    from nicegui import ui
+
+    from rbs.ui.rotations.overrides import (
+        _open_resident_rotation_waiver_dialog,
+        _resident_rotation_overrides_editor,
+        _resident_waiver_duration_options,
+    )
+
+    instance = sample_instance()
+    rotation = instance.rotation("night_float")
+    assert set(_resident_waiver_duration_options(instance, rotation, [], "resident-001")) == {2}
+    assert (
+        _resident_waiver_duration_options(
+            instance,
+            rotation,
+            [{"resident_id": "resident-001", "duration_weeks": 2}],
+            "resident-001",
+        )
+        == {}
+    )
+
+    before = set(ui.context.client.elements)
+    _open_resident_rotation_waiver_dialog(instance, rotation, [], lambda: None)
+    dialog_elements = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+    text = {getattr(element, "_text", None) for element in dialog_elements}
+    assert f"Waive requirement · {rotation.name}" in text
+    assert {
+        element._props.get("label")
+        for element in dialog_elements
+        if element.__class__.__name__ == "Select"
+    } >= {"Resident", "Block length"}
+
+    waiver_drafts: list = [
+        {"resident_id": "resident-001", "rotation_id": rotation.id, "duration_weeks": 2}
+    ]
+    before_editor = set(ui.context.client.elements)
+    _resident_rotation_overrides_editor(instance, rotation, [], waiver_drafts)
+    editor_elements = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before_editor
+    ]
+    editor_text = {getattr(element, "_text", None) for element in editor_elements}
+    editor_buttons = {
+        element._props.get("label")
+        for element in editor_elements
+        if element.__class__.__name__ == "Button"
+    }
+    assert "Waive requirement" in editor_buttons
+    assert "Add resident override" in editor_buttons
+    assert any(isinstance(label, str) and "excused" in label for label in editor_text)
+
+
 def test_grouped_resident_override_dialog_prompts_for_group_or_unmatched_extra() -> None:
     from nicegui import ui
 
@@ -2268,3 +2678,372 @@ def test_removing_group_member_removes_complete_linked_override_bundle() -> None
     assert not removed.resident_rotation_overrides
     assert removed.rotation_group_for(1, "outpatient_gyn") is None
     assert removed.rotation_group_for(2, "outpatient_gyn") is None
+
+
+def test_standard_rotation_mandatory_counts_are_editable_per_block() -> None:
+    instance = sample_instance()
+    rotation = instance.rotation("night_float")
+    assert [
+        (block.duration_weeks, block.count)
+        for block in instance.curriculum_for(1).blocks
+        if block.rotation_id == "night_float"
+    ] == [(2, 1)]
+
+    elective_only = replace_standard_rotation(
+        instance,
+        rotation.id,
+        rotation,
+        counts={(1, 2): 0, (2, 2): 0},
+    )
+    assert [
+        block
+        for block in elective_only.curriculum_for(1).blocks
+        if block.rotation_id == "night_float"
+    ] == []
+    assert elective_only.unallocated_weeks(1) == instance.unallocated_weeks(1) + 2
+
+    restored = replace_standard_rotation(
+        elective_only,
+        rotation.id,
+        rotation,
+        counts={(1, 2): 1, (2, 2): 0},
+    )
+    assert [
+        (block.duration_weeks, block.count)
+        for block in restored.curriculum_for(1).blocks
+        if block.rotation_id == "night_float"
+    ] == [(2, 1)]
+
+    untouched = replace_standard_rotation(instance, rotation.id, rotation)
+    assert [
+        (block.duration_weeks, block.count)
+        for block in untouched.curriculum_for(1).blocks
+        if block.rotation_id == "night_float"
+    ] == [(2, 1)]
+
+
+def test_block_length_options_exclude_sibling_durations() -> None:
+    """Duplicate durations cannot be saved, so they are not offered."""
+    from nicegui import ui
+
+    instance = sample_instance()
+    assert sorted(
+        config.duration_weeks
+        for rule in instance.rotation("fmed").pgy_rules
+        if rule.pgy == 2
+        for config in rule.block_configs
+    ) == [2, 4]
+    before = set(ui.context.client.elements)
+    _open_fmed_pgy_rules_dialog(
+        instance,
+        "fmed",
+        selected_rotation_id=None,
+        on_save=lambda _instance, _rotation_id: None,
+    )
+    created = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+    length_selects = [
+        element
+        for element in created
+        if element.__class__.__name__ == "Select" and element._props.get("label") == "Block length"
+    ]
+    by_value: dict[int, list[list[str]]] = {}
+    for select in length_selects:
+        labels = [option["label"] for option in select._props["options"]]
+        by_value.setdefault(int(select.value), []).append(labels)
+
+    # PGY 2's 2-week row cannot switch to the sibling 4-week duration.
+    assert len(by_value[2]) == 1
+    assert "2 weeks" in by_value[2][0]
+    assert "4 weeks" not in by_value[2][0]
+    # PGY 2's 4-week row cannot switch to the sibling 2-week duration.
+    assert any("2 weeks" not in labels for labels in by_value[4])
+
+
+def test_block_config_rows_stay_on_one_line() -> None:
+    from nicegui import ui
+
+    from rbs.ui.rotations.editor import _rotation_editor
+
+    instance = sample_instance()
+    before = set(ui.context.client.elements)
+    _rotation_editor(
+        instance,
+        instance.rotation("night_float"),
+        on_cancel=lambda: None,
+        on_save=lambda _instance, _rotation_id: None,
+    )
+    rows = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+        and element.__class__.__name__ == "Row"
+        and "rbs-block-config-row" in getattr(element, "_classes", [])
+    ]
+
+    assert rows
+    assert all("flex-nowrap" in getattr(element, "_classes", []) for element in rows)
+
+
+def test_block_length_options_exclude_sibling_durations() -> None:
+    """Duplicate durations cannot be saved, so they are not offered."""
+    from nicegui import ui
+
+    instance = sample_instance()
+    assert sorted(
+        config.duration_weeks
+        for rule in instance.rotation("fmed").pgy_rules
+        if rule.pgy == 2
+        for config in rule.block_configs
+    ) == [2, 4]
+    before = set(ui.context.client.elements)
+    _open_fmed_pgy_rules_dialog(
+        instance,
+        "fmed",
+        selected_rotation_id=None,
+        on_save=lambda _instance, _rotation_id: None,
+    )
+    created = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+    length_selects = [
+        element
+        for element in created
+        if element.__class__.__name__ == "Select" and element._props.get("label") == "Block length"
+    ]
+    by_value: dict[int, list[list[str]]] = {}
+    for select in length_selects:
+        labels = [option["label"] for option in select._props["options"]]
+        by_value.setdefault(int(select.value), []).append(labels)
+
+    # PGY 2's 2-week row cannot switch to the sibling 4-week duration.
+    assert len(by_value[2]) == 1
+    assert "2 weeks" in by_value[2][0]
+    assert "4 weeks" not in by_value[2][0]
+    # PGY 2's 4-week row cannot switch to the sibling 2-week duration.
+    assert any("2 weeks" not in labels for labels in by_value[4])
+
+
+def test_block_config_rows_stay_on_one_line() -> None:
+    from nicegui import ui
+
+    from rbs.ui.rotations.editor import _rotation_editor
+
+    instance = sample_instance()
+    before = set(ui.context.client.elements)
+    _rotation_editor(
+        instance,
+        instance.rotation("night_float"),
+        on_cancel=lambda: None,
+        on_save=lambda _instance, _rotation_id: None,
+    )
+    rows = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+        and element.__class__.__name__ == "Row"
+        and "rbs-block-config-row" in getattr(element, "_classes", [])
+    ]
+
+    assert rows
+    assert all("flex-nowrap" in getattr(element, "_classes", []) for element in rows)
+
+
+def test_standard_rotation_editor_offers_a_per_year_weeks_cap() -> None:
+    from nicegui import ui
+
+    from rbs.ui.rotations.editor import _rotation_editor
+
+    instance = sample_instance()
+    before = set(ui.context.client.elements)
+    _rotation_editor(
+        instance,
+        instance.rotation("night_float"),
+        on_cancel=lambda: None,
+        on_save=lambda _instance, _rotation_id: None,
+    )
+    caps = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+        and element.__class__.__name__ == "Number"
+        and element._props.get("label") == "Maximum total weeks"
+    ]
+
+    assert len(caps) == len(instance.rotation("night_float").pgy_rules)
+
+
+def test_per_year_cap_cannot_undercut_mandatory_weeks() -> None:
+    instance = sample_instance()
+    rotation = instance.rotation("night_float")
+    assert [
+        (b.duration_weeks, b.count)
+        for b in instance.curriculum_for(1).blocks
+        if b.rotation_id == "night_float"
+    ] == [(2, 1)]
+
+    capped = rotation.model_copy(
+        update={
+            "pgy_rules": [
+                rule.model_copy(update={"max_total_weeks": 4}) if rule.pgy == 1 else rule
+                for rule in rotation.pgy_rules
+            ]
+        }
+    )
+    updated = replace_standard_rotation(
+        instance,
+        rotation.id,
+        capped,
+        counts={(1, 2): 1, (2, 2): 0},
+    )
+    assert updated.rotation("night_float").max_total_weeks_for_pgy(1) == 4
+
+    too_tight = rotation.model_copy(
+        update={
+            "pgy_rules": [
+                rule.model_copy(update={"max_total_weeks": 1}) if rule.pgy == 1 else rule
+                for rule in rotation.pgy_rules
+            ]
+        }
+    )
+    with pytest.raises(ValueError, match="exceeding its 1-week maximum"):
+        replace_standard_rotation(
+            instance,
+            rotation.id,
+            too_tight,
+            counts={(1, 2): 1, (2, 2): 0},
+        )
+
+
+def test_rotation_required_nowhere_shows_a_soft_hint() -> None:
+    from nicegui import ui
+
+    from rbs.ui.rotations.editor import _rotation_detail_contents
+
+    instance = sample_instance()
+    rotation = instance.rotation("night_float")
+    elective_only = replace_standard_rotation(
+        instance,
+        rotation.id,
+        rotation,
+        counts={(1, 2): 0, (2, 2): 0},
+    )
+    before = set(ui.context.client.elements)
+    _rotation_detail_contents(elective_only, elective_only.rotation("night_float"))
+    text = {
+        getattr(element, "_text", None)
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    }
+
+    assert "Not required anywhere" in text
+    assert "Mandatory only" not in text
+
+
+def _new_test_rotation(instance, code="TEST", name="Test Rotation"):
+    from rbs.ui.rotations.forms import _new_mandatory_rotation_draft
+
+    draft = _new_mandatory_rotation_draft(instance)
+    draft.update(
+        {
+            "code": code,
+            "name": name,
+            "id": next_mandatory_rotation_id(instance, name),
+        }
+    )
+    draft["pgy_rules"] = [
+        {
+            "pgy": 1,
+            "min_concurrent": None,
+            "max_concurrent": None,
+            "max_total_weeks": None,
+            "prerequisite_rotation_ids": [],
+            "earliest_start_week": None,
+            "block_configs": [
+                {
+                    "duration_weeks": 2,
+                    "vacation": {"allowed": False, "max_weeks_per_block": None},
+                }
+            ],
+        }
+    ]
+    return rotation_from_editor_state(draft)
+
+
+def test_elective_shapes_derive_after_funding() -> None:
+    from rbs.ui.rotations.ops import add_mandatory_rotation
+
+    freed, _rotation = _free_night_float_pgy1_weeks(sample_instance())
+    replacement = _new_test_rotation(freed)
+    updated = add_mandatory_rotation(
+        freed,
+        replacement,
+        {(1, 2): 1},
+        elective_shapes={(1, 2)},
+        elective_repeatable=False,
+    )
+    assert updated.eligible_elective_pgys(replacement.id) == (1,)
+    assert updated.eligible_elective_block_sizes(replacement.id) == (2,)
+
+    # Growing the requirement consumes PGY 1's last Elective slot, so the
+    # marked shape no longer fills anything: a clear error, not stale sizes.
+    doomed = _new_test_rotation(sample_instance())
+    with pytest.raises(ValueError, match="do not match any Elective curriculum time"):
+        add_mandatory_rotation(
+            sample_instance(),
+            doomed,
+            {(1, 2): 1},
+            elective_shapes={(1, 2)},
+            elective_repeatable=False,
+        )
+
+
+def test_standard_rotation_editor_shows_blocks_per_resident() -> None:
+    from nicegui import ui
+
+    from rbs.ui.rotations.editor import _rotation_editor
+
+    instance = sample_instance()
+    before = set(ui.context.client.elements)
+    _rotation_editor(
+        instance,
+        instance.rotation("night_float"),
+        on_cancel=lambda: None,
+        on_save=lambda _instance, _rotation_id: None,
+    )
+    created = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+    block_counts = [
+        element
+        for element in created
+        if element.__class__.__name__ == "Number"
+        and element._props.get("label") == "Blocks per resident"
+    ]
+
+    assert block_counts
+    toggles = [element for element in created if element.__class__.__name__ == "Toggle"]
+    assert {toggle.value for toggle in toggles} == {"Both", "Elective"}
+    assert all(
+        [option["label"] for option in toggle._props["options"]]
+        == ["Mandatory", "Elective", "Both"]
+        for toggle in toggles
+    )
+    assert any(
+        getattr(element, "_text", None) == "Set each block shape to Mandatory, Elective, or Both, "
+        "then set how many mandatory blocks each resident takes."
+        for element in created
+    )
+    assert not any(
+        str(getattr(element, "_text", None)).startswith("Available to")
+        and str(getattr(element, "_text", None)).endswith("as an elective")
+        for element in created
+        if element.__class__.__name__ == "Checkbox"
+    )
