@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from rbs.models.instance import SolverProblem
 from rbs.models.workspace import DownloadState, Workspace
-from rbs.solver.readiness import check_solve_readiness
+from rbs.solver.readiness import ReadinessResult, check_solve_readiness
 from rbs.ui.app_documents import (
     _document_io,
     _notify_recovery_error,
@@ -27,8 +27,13 @@ def solve_summary(workspace: Workspace) -> tuple[str, str] | None:
     ``None`` where there is nothing worth saying - a solved, complete schedule
     needs no pill, and a header that is always full of badges stops being read.
     """
-    if _workspace_unallocated_weeks(workspace):
-        return "Needs allocation", PILL_ALERT
+    readiness = _workspace_readiness(workspace)
+    if not readiness.ready:
+        if readiness.issues and all(
+            issue.code == "unallocated_weeks" for issue in readiness.issues
+        ):
+            return "Needs allocation", PILL_ALERT
+        return "Cannot solve", PILL_ALERT
     if workspace.solution_is_out_of_date:
         return "Solver out of date", PILL_WARN
     if workspace.schedule is None:
@@ -160,9 +165,9 @@ def _should_warn_before_leave(
 
 
 def _workspace_status(workspace: Workspace) -> str:
-    unallocated = _workspace_unallocated_weeks(workspace)
-    if unallocated:
-        return "Cannot solve · " + "; ".join(unallocated)
+    readiness = _workspace_readiness(workspace)
+    if not readiness.ready:
+        return "Cannot solve · " + "; ".join(readiness.errors)
     if workspace.solution_is_out_of_date:
         return "Solution out of date"
     schedule = workspace.schedule
@@ -185,7 +190,15 @@ def _workspace_status(workspace: Workspace) -> str:
 
 def _workspace_unallocated_weeks(workspace: Workspace) -> tuple[str, ...]:
     """Training levels still holding unscheduled weeks, in the program's words."""
-    return check_solve_readiness(SolverProblem.from_instance(workspace.instance)).errors
+    return tuple(
+        issue.message
+        for issue in _workspace_readiness(workspace).issues
+        if issue.code == "unallocated_weeks"
+    )
+
+
+def _workspace_readiness(workspace: Workspace) -> ReadinessResult:
+    return check_solve_readiness(SolverProblem.from_instance(workspace.instance))
 
 
 def _workspace_open_week_count(workspace: Workspace) -> int:

@@ -913,6 +913,28 @@ def test_an_unsolved_workspace_says_so(tmp_path) -> None:
     assert solve_summary(store.list()[0]) == ("Not solved", PILL_MUTED)
 
 
+def test_a_semantic_configuration_conflict_is_labeled_cannot_solve(tmp_path) -> None:
+    from rbs.ui.app_status import _workspace_status, solve_summary
+
+    _session_obj, store = _session(tmp_path)
+    workspace = store.list()[0]
+    rotations = [
+        rotation.model_copy(update={"max_consecutive_weeks": 2})
+        if rotation.id == "icu"
+        else rotation
+        for rotation in workspace.instance.rotations
+    ]
+    WorkspaceController(store).save_instance(
+        workspace,
+        workspace.instance.revised(rotations=rotations),
+    )
+    workspace = store.get(workspace.id)
+
+    assert solve_summary(workspace) == ("Cannot solve", PILL_ALERT)
+    assert "ICU · PGY1" in _workspace_status(workspace)
+    assert "required 4-week block" in _workspace_status(workspace)
+
+
 def test_a_schedule_left_behind_by_an_edit_reads_as_out_of_date(tmp_path) -> None:
     from rbs.ui.app_status import solve_summary
 

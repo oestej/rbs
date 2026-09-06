@@ -19,6 +19,7 @@ from rbs.solver.core.clinic_allocation import (
     clinic_weekly_sessions,
 )
 from rbs.solver.core.context import CompiledProblem
+from rbs.solver.diagnostic_summaries import validation_failure_diagnostics
 from rbs.solver.planning import Occurrence, weeks_covered
 from rbs.solver.reference import changed_resident_weeks
 from rbs.solver.validation import validate_schedule
@@ -188,6 +189,11 @@ def decode_solution(
             f"resident-week placements; {changed_weeks} changed"
         )
     validation = validate_schedule(instance, schedule)
+    diagnostics = validation_failure_diagnostics(
+        instance,
+        schedule,
+        validation.errors,
+    )
     final_status = final_status_for(
         solver_status,
         postprocessed=allocation_result.postprocessed,
@@ -204,6 +210,7 @@ def decode_solution(
         update={
             "status": final_status,
             "validation_errors": list(validation.errors),
+            "diagnostics": diagnostics,
             "validation_warnings": [
                 *validation.warnings,
                 *allocation_shortfalls,

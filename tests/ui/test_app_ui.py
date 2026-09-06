@@ -1,3 +1,4 @@
+import asyncio
 from datetime import date
 from types import SimpleNamespace
 
@@ -330,25 +331,32 @@ def test_solver_elapsed_time_uses_minutes_seconds_and_tenths() -> None:
 def test_infeasible_solver_diagnostic_stays_open_with_resolution_options() -> None:
     from nicegui import ui
 
+    from rbs.catalog import sample_instance
     from rbs.models.schedule import SolverDiagnostic
     from rbs.ui.app_solve import _open_solver_diagnostics
 
+    instance = sample_instance()
     before = set(ui.context.client.elements)
     diagnostic = SolverDiagnostic(
         code="resident_vacation_coverage",
         message="A resident cannot cover the year around weeks 9–10.",
         resident_ids=["resident-001"],
+        special_rotation_ids=["conference"],
         weeks=[9, 10],
         suggestions=["Move a vacation week.", "Shorten the conference."],
     )
 
-    _open_solver_diagnostics([diagnostic], draft_kept=True)
+    _open_solver_diagnostics(
+        [diagnostic],
+        draft_kept=True,
+        session=SimpleNamespace(workspace=lambda: SimpleNamespace(instance=instance)),
+    )
 
     created = _created_elements(before)
     text = {getattr(element, "_text", None) for element in created}
     dialog = next(element for element in created if element.__class__.__name__ == "Dialog")
     assert dialog.value is True
-    assert "No feasible schedule" in text
+    assert "No feasible block schedule" in text
     kept_message = (
         "Your current draft was kept. Resolve one of the conflicts below and solve again."
     )
@@ -357,10 +365,297 @@ def test_infeasible_solver_diagnostic_stays_open_with_resolution_options() -> No
     assert "Ways to resolve it" in text
     assert "• Move a vacation week." in text
     assert "• Shorten the conference." in text
+    button_labels = {
+        element._props.get("label")
+        for element in created
+        if element.__class__.__name__ == "Button"
+    }
+    assert f"Open {instance.residents_by_id['resident-001'].name}" in button_labels
+    assert "Open Special events" in button_labels
     wordmark = next(element for element in created if element.__class__.__name__ == "Image")
     assert "wordmark.svg?v=" in wordmark._props["src"]
     assert "rbs-dialog-wordmark" in wordmark._classes
     assert any("rbs-branded-dialog" in element._classes for element in created)
+
+
+def test_readiness_dialog_names_each_configuration_conflict_and_links_its_editor() -> None:
+    from nicegui import ui
+
+    from rbs.catalog import sample_instance
+    from rbs.solver.readiness import ReadinessIssue, ReadinessResult
+    from rbs.ui.app_solve import _open_readiness_diagnostics
+
+    instance = sample_instance()
+    session = SimpleNamespace(workspace=lambda: SimpleNamespace(instance=instance))
+    issues = (
+        ReadinessIssue(
+            code="missing_elective_fallback",
+            message=(
+                "Clinic · PGY1: a 2-week Elective requires a compatible Clinic fallback, "
+                "but none is configured."
+            ),
+            suggestions=("Add a 2-week Clinic block configuration for PGY1.",),
+            pgy=1,
+        ),
+        ReadinessIssue(
+            code="rotation_capacity_conflict",
+            message="ICU: a weekly minimum cannot be met.",
+            rotation_id="icu",
+        ),
+    )
+    readiness = ReadinessResult(
+        errors=tuple(issue.message for issue in issues),
+        issues=issues,
+    )
+    before = set(ui.context.client.elements)
+
+    _open_readiness_diagnostics(session, readiness)
+
+    created = _created_elements(before)
+    text = {getattr(element, "_text", None) for element in created}
+    buttons = {
+        element._props.get("label")
+        for element in created
+        if element.__class__.__name__ == "Button"
+    }
+    dialog = next(element for element in created if element.__class__.__name__ == "Dialog")
+    assert dialog.value is True
+    assert "Cannot solve · 2 configuration conflicts" in text
+    assert "Solve did not start. Fix these settings, then run Solve again." in text
+    assert {issue.message for issue in issues} <= text
+    assert {"Open Clinic block rules", "Open ICU"} <= buttons
+
+
+def test_solve_does_not_start_search_when_configuration_is_provably_blocked(
+    monkeypatch,
+) -> None:
+    from nicegui import ui
+
+    from rbs.catalog import sample_instance
+    from rbs.ui import app_solve
+
+    instance = sample_instance()
+    rotations = [
+        rotation.model_copy(update={"max_consecutive_weeks": 2})
+        if rotation.id == "icu"
+        else rotation
+        for rotation in instance.rotations
+    ]
+    blocked = instance.revised(rotations=rotations)
+    # Deliberately omit workspace_host: reaching search would fail this test.
+    session = SimpleNamespace(
+        solving=False,
+        workspace=lambda: SimpleNamespace(instance=blocked),
+    )
+    opened: list = []
+    notifications: list[str] = []
+    monkeypatch.setattr(
+        app_solve,
+        "_open_readiness_diagnostics",
+        lambda _session, readiness: opened.extend(readiness.issues),
+    )
+    monkeypatch.setattr(
+        ui,
+        "notify",
+        lambda message, **_kwargs: notifications.append(message),
+    )
+
+    asyncio.run(app_solve._solve(session))
+
+    assert session.solving is False
+    assert [issue.code for issue in opened] == ["block_exceeds_consecutive_limit"]
+    assert "ICU · PGY1" in opened[0].message
+    assert notifications == ["Solve did not start · 1 configuration conflict"]
+
+
+def test_readiness_action_opens_the_exact_configuration_surface() -> None:
+    from rbs.catalog import sample_instance
+    from rbs.solver.readiness import ReadinessIssue
+    from rbs.ui.app_solve import _navigate_to_readiness_issue
+
+    instance = sample_instance()
+    rebuilt: list[bool] = []
+    closed: list[bool] = []
+    session = SimpleNamespace(
+        active_tab="block_schedule",
+        clinic_section="clinic_sites",
+        rotation_section="rotation_summary",
+        rotation_id=None,
+        workspace=lambda: SimpleNamespace(instance=instance),
+        rebuild=lambda: rebuilt.append(True),
+    )
+    dialog = SimpleNamespace(close=lambda: closed.append(True))
+
+    _navigate_to_readiness_issue(
+        session,
+        ReadinessIssue(
+            code="block_exceeds_consecutive_limit",
+            message="ICU block is too long.",
+            rotation_id="icu",
+        ),
+        dialog,
+    )
+
+    assert closed == [True]
+    assert rebuilt == [True]
+    assert session.active_tab == "rotations"
+    assert session.rotation_section == "standard_rotations"
+    assert session.rotation_id == "icu"
+
+    _navigate_to_readiness_issue(
+        session,
+        ReadinessIssue(
+            code="missing_elective_fallback",
+            message="Clinic fallback is missing.",
+        ),
+        dialog,
+    )
+
+    assert session.active_tab == "clinic"
+    assert session.clinic_section == "clinic_block_rules"
+    assert session.rotation_id is None
+
+
+def test_solver_outcomes_distinguish_timeout_infeasibility_and_clinic_failure() -> None:
+    from rbs.models.enums import SolverEngineName, SolverStatus
+    from rbs.models.schedule import Schedule, ScheduleMeta, SolverDiagnostic
+    from rbs.ui.app_solve import _solver_outcome
+
+    def schedule(
+        status: SolverStatus,
+        *,
+        solver_status: SolverStatus | None = None,
+        notes: list[str] | None = None,
+        validation_errors: list[str] | None = None,
+        diagnostics: list[SolverDiagnostic] | None = None,
+    ) -> Schedule:
+        return Schedule(
+            meta=ScheduleMeta(
+                academic_year="2026-2027",
+                engine=SolverEngineName.CP_SAT,
+                status=status,
+                solver_status=solver_status,
+                notes=notes or [],
+                validation_errors=validation_errors or [],
+                diagnostics=diagnostics or [],
+            )
+        )
+
+    infeasible = _solver_outcome(schedule(SolverStatus.INFEASIBLE))
+    timeout = _solver_outcome(
+        schedule(
+            SolverStatus.UNKNOWN,
+            solver_status=SolverStatus.UNKNOWN,
+            notes=["no feasible schedule within 60s"],
+        )
+    )
+    clinic = _solver_outcome(
+        schedule(
+            SolverStatus.UNKNOWN,
+            solver_status=SolverStatus.FEASIBLE,
+            validation_errors=["Maple capacity exceeded"],
+            diagnostics=[
+                SolverDiagnostic(
+                    code="clinic_allocation_capacity",
+                    message="Maple: 3 clinic half-days exceed capacity.",
+                )
+            ],
+        )
+    )
+    model_build = _solver_outcome(
+        schedule(
+            SolverStatus.INFEASIBLE,
+            diagnostics=[
+                SolverDiagnostic(
+                    code="model_build_error",
+                    message="Clinic · PGY1 has no compatible 2-week fallback.",
+                )
+            ],
+        )
+    )
+
+    assert infeasible.title == "No feasible block schedule"
+    assert timeout.title == "No schedule found in time"
+    assert "does not prove" in timeout.detail
+    assert clinic.title == "Block schedule found, but clinic placement failed"
+    assert "not accepted" in clinic.detail
+    assert model_build.title == "Cannot build schedule model"
+
+
+def test_invalid_clinic_placement_is_explained_without_saving_it(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from nicegui import ui
+
+    from rbs.catalog import sample_instance
+    from rbs.models.enums import SolverEngineName, SolverStatus
+    from rbs.models.schedule import Schedule, ScheduleMeta, SolverDiagnostic
+    from rbs.store import Store
+    from rbs.ui import app_solve
+    from rbs.ui.session import WorkspaceSession
+
+    invalid = Schedule(
+        meta=ScheduleMeta(
+            academic_year="2026-2027",
+            engine=SolverEngineName.CP_SAT,
+            status=SolverStatus.UNKNOWN,
+            solver_status=SolverStatus.FEASIBLE,
+            validation_errors=["Maple capacity exceeded"],
+            diagnostics=[
+                SolverDiagnostic(
+                    code="clinic_allocation_capacity",
+                    message="Maple: 3 clinic half-days exceed capacity.",
+                )
+            ],
+        )
+    )
+
+    class Host:
+        document_io = None
+
+        def principal(self, _request):
+            return "local"
+
+        async def solve(self, _principal, _instance, *, reference_schedule=None):
+            assert reference_schedule is None
+            return invalid
+
+    store = Store(tmp_path / "invalid-clinic.sqlite")
+    store.init()
+    workspace = store.create("Clinic test", sample_instance())
+    session = WorkspaceSession(
+        store=store,
+        workspace_host=Host(),
+        workspace_id=workspace.id,
+    )
+    closed: list[bool] = []
+    opened: list[dict] = []
+    notifications: list[str] = []
+    monkeypatch.setattr(
+        app_solve,
+        "_open_solver_progress",
+        lambda: SimpleNamespace(close=lambda: closed.append(True)),
+    )
+    monkeypatch.setattr(
+        app_solve,
+        "_open_solver_diagnostics",
+        lambda _diagnostics, **kwargs: opened.append(kwargs),
+    )
+    monkeypatch.setattr(
+        ui,
+        "notify",
+        lambda message, **_kwargs: notifications.append(message),
+    )
+
+    asyncio.run(app_solve._solve(session))
+
+    assert store.get(workspace.id).schedule is None
+    assert closed == [True]
+    assert opened[0]["title"] == "Block schedule found, but clinic placement failed"
+    assert notifications == [
+        "Clinic placement failed · result not saved · explanation opened"
+    ]
 
 
 def test_settings_keeps_scheduling_behaviour_and_gives_up_the_workspace(tmp_path) -> None:

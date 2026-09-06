@@ -11,6 +11,7 @@ from rbs.solver.planning import expand_occurrences
 from rbs.ui.clinic.ops import (
     add_clinic,
     cancel_academic_half_day_for_week,
+    copy_clinic_closure_days,
     disable_academic_half_day,
     remove_academic_half_day_override,
     remove_clinic,
@@ -422,6 +423,11 @@ def test_rotation_editor_uses_task_focused_tabs_and_sticky_actions() -> None:
         element._props.get("label") for element in created if element.__class__.__name__ == "Tab"
     }
     text = {getattr(element, "_text", None) for element in created}
+    field_labels = {
+        element._props.get("label")
+        for element in created
+        if element.__class__.__name__ == "Number"
+    }
 
     assert tabs == {"General", "Training-level rules", "Clinic", "Advanced"}
     assert (
@@ -429,9 +435,16 @@ def test_rotation_editor_uses_task_focused_tabs_and_sticky_actions() -> None:
         not in text
     )
     assert (
-        "Year limits do not replace the overall rotation limits above. If a training year has "
-        "no maximum, Maximum total residents still applies. Vacation allowance is set per "
-        "block format." in text
+        "A training-level minimum applies in every academic week. Year limits do not replace "
+        "the overall rotation limits above. If a training year has no maximum, Maximum total "
+        "residents still applies. Vacation allowance is set per block format." in text
+    )
+    assert "Minimum total residents each week" in field_labels
+    assert any(
+        isinstance(label, str)
+        and label.startswith("Minimum ")
+        and label.endswith(" residents each week")
+        for label in field_labels
     )
     assert any(
         "rbs-rotation-editor-actions" in getattr(element, "_classes", []) for element in created
@@ -1444,6 +1457,128 @@ def test_clinic_tab_edits_site_specific_holidays_and_closure_days() -> None:
     )
 
 
+def test_copy_clinic_closure_days_merges_without_replacing_destination_dates() -> None:
+    instance = replace_clinic_closure_days(
+        sample_instance(),
+        [
+            {
+                "date": "2026-12-25",
+                "name": "Christmas",
+                "sites": ["maple", "cedar"],
+            },
+            {
+                "date": "2027-01-01",
+                "name": "New Year",
+                "sites": ["maple"],
+            },
+            {
+                "date": "2027-02-01",
+                "name": "Cedar only",
+                "sites": ["cedar"],
+            },
+        ],
+    )
+
+    updated = copy_clinic_closure_days(instance, "maple", "cedar")
+
+    assert [
+        (closure.date.isoformat(), closure.name)
+        for closure in updated.clinic_policy.site("cedar").closure_days
+    ] == [
+        ("2026-12-25", "Christmas"),
+        ("2027-01-01", "New Year"),
+        ("2027-02-01", "Cedar only"),
+    ]
+    assert updated.clinic_policy.site("maple").closure_days == (
+        instance.clinic_policy.site("maple").closure_days
+    )
+    assert updated.clinic_policy.closure_on(date(2027, 1, 1)).sites == ["maple", "cedar"]
+
+    with pytest.raises(ValueError, match="different clinics"):
+        copy_clinic_closure_days(instance, "maple", "maple")
+
+
+def test_clinic_tab_copies_closure_days_between_clinics() -> None:
+    from nicegui import ui
+    from nicegui.events import ClickEventArguments
+
+    instance = replace_clinic_closure_days(
+        sample_instance(),
+        [
+            {
+                "date": "2026-12-25",
+                "name": "Christmas",
+                "sites": ["maple", "cedar"],
+            },
+            {
+                "date": "2027-01-01",
+                "name": "New Year",
+                "sites": ["maple"],
+            },
+        ],
+    )
+    saved: list = []
+    before = set(ui.context.client.elements)
+    render_clinic_tab(
+        instance,
+        on_save=lambda updated, rotation_id: saved.append((updated, rotation_id)),
+    )
+
+    def click(button) -> None:
+        listener = next(
+            listener
+            for listener in button._event_listeners.values()
+            if listener.type == "click"
+        )
+        listener.handler(ClickEventArguments(sender=button, client=button.client))
+
+    copy_button = next(
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+        and element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Copy closure days"
+    )
+    assert copy_button.enabled
+
+    dialog_before = set(ui.context.client.elements)
+    click(copy_button)
+    dialog_elements = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in dialog_before
+    ]
+    source = next(
+        element
+        for element in dialog_elements
+        if element.__class__.__name__ == "Select"
+        and element._props.get("label") == "Source clinic"
+    )
+    destination = next(
+        element
+        for element in dialog_elements
+        if element.__class__.__name__ == "Select"
+        and element._props.get("label") == "Destination clinic"
+    )
+    source.set_value("maple")
+    destination.set_value("cedar")
+    click(
+        next(
+            element
+            for element in dialog_elements
+            if element.__class__.__name__ == "Button"
+            and element._props.get("label") == "Copy closure days"
+        )
+    )
+
+    updated, selected_rotation_id = saved[-1]
+    assert selected_rotation_id is None
+    assert [
+        closure.date.isoformat()
+        for closure in updated.clinic_policy.site("cedar").closure_days
+    ] == ["2026-12-25", "2027-01-01"]
+
+
 def test_clinic_crud_round_trips_weekend_capacity_color_and_closures() -> None:
     instance = sample_instance()
     added = add_clinic(
@@ -1833,9 +1968,14 @@ def test_clinic_block_rules_dialog_uses_clinic_name_and_compact_pgy_controls() -
     staffing_position = next(
         index
         for index, element in enumerate(created)
-        if element._props.get("label") == "Minimum concurrent residents"
+        if element._props.get("label") == "Minimum residents each week"
     )
     assert count_position < staffing_position
+    assert any(
+        isinstance(label, str)
+        and "A minimum applies in every academic week" in label
+        for label in text
+    )
     assert all(
         "Constrained by clinic capacity only" in str(element._props.get("caption") or "")
         for element in advanced
@@ -2761,6 +2901,68 @@ def test_block_length_options_exclude_sibling_durations() -> None:
     assert "4 weeks" not in by_value[2][0]
     # PGY 2's 4-week row cannot switch to the sibling 2-week duration.
     assert any("2 weeks" not in labels for labels in by_value[4])
+
+
+def test_standard_rotation_editor_saves_a_changed_block_length() -> None:
+    from nicegui import ui
+    from nicegui.events import ClickEventArguments
+
+    instance = sample_instance()
+    rotation = instance.rotation("icu")
+    saved: list = []
+    before = set(ui.context.client.elements)
+    _rotation_editor(
+        instance,
+        rotation,
+        on_cancel=lambda: None,
+        on_save=lambda updated, rotation_id: saved.append((updated, rotation_id)),
+    )
+
+    def current_elements() -> list:
+        return [
+            element
+            for element_id, element in ui.context.client.elements.items()
+            if element_id not in before
+        ]
+
+    block_length = next(
+        element
+        for element in current_elements()
+        if element.__class__.__name__ == "Select"
+        and element._props.get("label") == "Block length"
+    )
+    assert block_length.value == 4
+
+    block_length.set_value(2)
+
+    refreshed_length = next(
+        element
+        for element in current_elements()
+        if element.__class__.__name__ == "Select"
+        and element._props.get("label") == "Block length"
+    )
+    assert refreshed_length.value == 2
+    save = next(
+        element
+        for element in current_elements()
+        if element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Save rotation"
+    )
+    listener = next(
+        listener for listener in save._event_listeners.values() if listener.type == "click"
+    )
+    listener.handler(ClickEventArguments(sender=save, client=save.client))
+
+    updated, rotation_id = saved[-1]
+    assert rotation_id == rotation.id
+    assert [
+        config.duration_weeks for config in updated.rotation(rotation.id).pgy_rule(1).block_configs
+    ] == [2]
+    assert [
+        (block.duration_weeks, block.count)
+        for block in updated.curriculum_for(1).blocks
+        if block.rotation_id == rotation.id
+    ] == [(2, 1)]
 
 
 def test_block_config_rows_stay_on_one_line() -> None:

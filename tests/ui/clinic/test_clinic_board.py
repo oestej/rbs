@@ -229,6 +229,61 @@ def test_schedule_validation_uses_specific_date_capacity_override() -> None:
     )
 
 
+def test_clinic_capacity_failure_is_reported_once_with_the_final_headcount() -> None:
+    from rbs.solver.diagnostic_summaries import validation_failure_diagnostics
+
+    instance = sample_instance()
+    site = instance.clinic_policy.site(instance.clinic_policy.primary_site_id)
+    half_day = site.half_days[0]
+    maximum = half_day.max_residents(site.residents_per_attending)
+    assignments = [
+        Assignment(
+            resident_id=resident.id,
+            rotation_id="elective",
+            kind=RotationKind.ELECTIVE,
+            start_week=1,
+            end_week=1,
+            weeks=[1],
+            clinic_slots=[
+                AssignedClinic(
+                    weekday=half_day.weekday,
+                    session=half_day.session,
+                    site=site.id,
+                    week=1,
+                )
+            ],
+        )
+        for resident in instance.residents[: maximum + 2]
+    ]
+    schedule = _schedule(*assignments)
+
+    validation = validate_schedule(instance, schedule)
+
+    capacity_errors = [
+        error
+        for error in validation.errors
+        if error.startswith(f"{site.name} capacity exceeded")
+    ]
+    assert capacity_errors == [
+        f"{site.name} capacity exceeded: week 1 {half_day.weekday.value} "
+        f"{half_day.session.value} ({maximum + 2} residents; max {maximum})"
+    ]
+
+    diagnostics = validation_failure_diagnostics(instance, schedule, validation.errors)
+    clinic = [
+        diagnostic
+        for diagnostic in diagnostics
+        if diagnostic.code == "clinic_allocation_capacity"
+    ]
+    assert len(clinic) == 1
+    assert clinic[0].message == (
+        f"{site.name}: 1 clinic half-day exceeds capacity; the largest overflow is "
+        f"week 1 {half_day.weekday.value} {half_day.session.value} "
+        f"({maximum + 2} residents; max {maximum})."
+    )
+    assert clinic[0].weeks == [1]
+
+
 def test_christmas_is_a_full_closure_for_both_configured_clinics() -> None:
     instance = sample_instance()
     christmas = date(2026, 12, 25)

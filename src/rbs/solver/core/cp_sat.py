@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from rbs.models.enums import SolverEngineName, SolverStatus
 from rbs.models.instance import SolverConfig, SolverProblem
-from rbs.models.schedule import Schedule
+from rbs.models.schedule import Schedule, SolverDiagnostic
 from rbs.solver.core.base import SchedulerEngine, empty_schedule
 from rbs.solver.core.compile import compile_problem
 from rbs.solver.core.context import ModelBuildError
@@ -129,11 +129,21 @@ class CpSatEngine:
                 reference_schedule=reference_schedule,
             )
         except ModelBuildError as exc:
+            message = str(exc)
             return empty_schedule(
                 instance,
                 engine=self.name,
                 status=SolverStatus.INFEASIBLE,
-                notes=[str(exc)],
+                notes=[message],
+                diagnostics=[
+                    SolverDiagnostic(
+                        code="model_build_error",
+                        message=message,
+                        suggestions=[
+                            "Review the named rotation, block, or lock configuration."
+                        ],
+                    )
+                ],
                 wall_time_seconds=time.perf_counter() - started,
             )
 
@@ -306,6 +316,12 @@ def _with_infeasibility_diagnostics(
 ) -> Schedule:
     if schedule.meta.status is not SolverStatus.INFEASIBLE:
         return schedule
+    # A compile-time configuration error already names the exact problem. Do
+    # not replace it with resident-level probes that will all fail for the same
+    # shared reason. Coverage-build errors are the exception: the focused
+    # probes can tell whether vacation-like weeks are the actual cause.
+    if schedule.meta.diagnostics and not _needs_coverage_diagnosis(schedule):
+        return schedule
     diagnostics = explain_infeasibility(instance, options)
     if not diagnostics:
         return schedule
@@ -315,6 +331,21 @@ def _with_infeasibility_diagnostics(
         *(diagnostic.message for diagnostic in diagnostics),
     ]
     return schedule
+
+
+def _needs_coverage_diagnosis(schedule: Schedule) -> bool:
+    if len(schedule.meta.diagnostics) != 1:
+        return False
+    diagnostic = schedule.meta.diagnostics[0]
+    if diagnostic.code != "model_build_error":
+        return False
+    return any(
+        marker in diagnostic.message
+        for marker in (
+            " has no covering block",
+            " has no legal start weeks for ",
+        )
+    )
 
 
 def _compatible_reference(

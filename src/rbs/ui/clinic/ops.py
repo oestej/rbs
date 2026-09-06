@@ -23,6 +23,7 @@ __all__ = [
     "replace_primary_clinic",
     "add_clinic",
     "remove_clinic",
+    "copy_clinic_closure_days",
     "replace_clinic_allocation_rules",
     "replace_clinic_closure_days",
     "replace_academic_half_day",
@@ -254,6 +255,38 @@ def replace_clinic_closure_days(
         for closure in closure_days
     ]
     return SchedulerInput.from_payload(raw)
+
+
+def copy_clinic_closure_days(
+    instance: SchedulerInput,
+    source_id: str,
+    destination_id: str,
+) -> SchedulerInput:
+    """Add closure dates from one clinic to another without replacing existing dates."""
+
+    try:
+        source = instance.clinic_policy.site(source_id)
+    except (KeyError, ValueError) as exc:
+        raise ValueError(f"unknown source clinic {source_id!r}") from exc
+    try:
+        destination = instance.clinic_policy.site(destination_id)
+    except (KeyError, ValueError) as exc:
+        raise ValueError(f"unknown destination clinic {destination_id!r}") from exc
+    if source.id == destination.id:
+        raise ValueError("choose two different clinics")
+
+    existing_dates = {closure.date for closure in destination.closure_days}
+    additions = [
+        closure.model_dump(mode="json")
+        for closure in source.closure_days
+        if closure.date not in existing_dates
+    ]
+    if not additions:
+        return instance
+
+    replacement = destination.model_dump(mode="json")
+    replacement["closure_days"] = [*replacement["closure_days"], *additions]
+    return replace_clinic(instance, destination.id, replacement)
 
 
 def replace_academic_half_day(

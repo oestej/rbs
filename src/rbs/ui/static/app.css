@@ -153,9 +153,13 @@
   color: var(--rbs-text-muted);
 }
 
-.rbs-solver-diagnostics {
+/* Quasar caps dialog cards at the viewport height. Override the branded
+   dialog's clipping so longer solve explanations can scroll within that cap. */
+.rbs-overlay-card.rbs-solver-diagnostics {
   width: min(680px, calc(100vw - 32px));
   align-items: stretch;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .rbs-solver-diagnostics > .rbs-dialog-wordmark,

@@ -460,12 +460,13 @@ def _staffing_and_blocks(
             with ui.column().classes("gap-0"):
                 ui.label("Total concurrent staffing").classes("rbs-type-control-label")
                 ui.label(
-                    "Minimum and maximum residents across all training levels in each week."
+                    "Minimums apply in every academic week, including weeks when no block "
+                    "would otherwise be placed. Maximums also apply week by week."
                 ).classes("rbs-type-caption rbs-text-muted")
             with ui.row().classes("w-full gap-3"):
                 minimum = (
                     ui.number(
-                        "Minimum total residents",
+                        "Minimum total residents each week",
                         value=_optional_float(capacity.get("min_concurrent")),
                         min=0,
                         precision=0,
@@ -497,9 +498,10 @@ def _staffing_and_blocks(
                 with ui.column().classes("gap-0"):
                     ui.label("Rules by training level").classes("rbs-type-control-label")
                     ui.label(
-                        "Year limits do not replace the overall rotation limits above. If a "
-                        "training year has no maximum, Maximum total residents still applies. "
-                        "Vacation allowance is set per block format."
+                        "A training-level minimum applies in every academic week. Year limits "
+                        "do not replace the overall rotation limits above. If a training year "
+                        "has no maximum, Maximum total residents still applies. Vacation "
+                        "allowance is set per block format."
                     ).classes("rbs-type-caption rbs-text-muted")
                 for pgy in instance.training_level_ids:
                     _pgy_rule_editor(
@@ -594,7 +596,7 @@ def _pgy_rule_editor(
         with ui.row().classes("w-full gap-3 pt-2"):
             minimum = (
                 ui.number(
-                    f"Minimum {level_name} residents",
+                    f"Minimum {level_name} residents each week",
                     value=_optional_float(rule.get("min_concurrent")),
                     min=0,
                     precision=0,
@@ -970,7 +972,7 @@ def _block_config_editor(
                     duration_weeks,
                     requirement_counts,
                     refresh,
-                    shapes,
+                    elective_shapes=shapes,
                 )
             )
         else:
