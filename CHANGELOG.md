@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-09-06
+
 ### Added
 
 - **Rotations:** Each block shape in a mandatory rotation's training-level
@@ -111,7 +113,8 @@
 - **Releases:** Download a macOS disk image built from the tagged commit, with
   that release's changelog section as its published description.
 
-[Unreleased]: https://github.com/oestej/rbs/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/oestej/rbs/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/oestej/rbs/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/oestej/rbs/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/oestej/rbs/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/oestej/rbs/compare/v0.1.0...v0.1.1
