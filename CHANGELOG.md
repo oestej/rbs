@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-09-06
+
 ### Added
 
 - **Rotations:** Elective time is authored directly from Shared elective
@@ -74,7 +76,8 @@
 - **Releases:** Download a macOS disk image built from the tagged commit, with
   that release's changelog section as its published description.
 
-[Unreleased]: https://github.com/oestej/rbs/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/oestej/rbs/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/oestej/rbs/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/oestej/rbs/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/oestej/rbs/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/oestej/rbs/releases/tag/v0.1.0
