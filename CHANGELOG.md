@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- **Rotations:** Mandatory and Elective selection menus, including eligible
+  rotation choices, now sort alphabetically by code, with the rotation name used
+  when a code is unavailable.
 - **Scheduling:** Clinic half-day capacity is now a rule the solver plans around instead
   of a check applied to the finished schedule. A half-day can no longer be given more
   residents than every open clinic can seat between them, which is what produced
