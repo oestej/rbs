@@ -88,12 +88,22 @@ def test_elective_preference_options_pair_services_with_direct_inventory() -> No
     pgy1 = elective_preference_options(instance, instance.residents_by_id["resident-001"])
     pgy2 = elective_preference_options(instance, instance.residents_by_id["resident-009"])
 
+    assert list(pgy1) == [
+        "geriatrics|2",
+        "night_float|2",
+        "palliative_care|2",
+    ]
     assert pgy1 == {
-        "night_float|2": "NF · Night Float · 2 weeks",
         "geriatrics|2": "GERI · Geriatrics · 2 weeks",
+        "night_float|2": "NF · Night Float · 2 weeks",
         "palliative_care|2": "PALL · Palliative Care · 2 weeks",
     }
-    assert set(pgy2) == {"night_float|2", "fmed|2", "geriatrics|2", "palliative_care|2"}
+    assert list(pgy2) == [
+        "fmed|2",
+        "geriatrics|2",
+        "night_float|2",
+        "palliative_care|2",
+    ]
 
 
 def test_elective_preference_tab_renders_empty_fallback_state_and_stays_active() -> None:

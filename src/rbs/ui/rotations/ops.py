@@ -20,7 +20,11 @@ from rbs.models.instance import (
     ResidentRotationWaiver,
     SchedulerInput,
 )
-from rbs.models.rotation import ROTATION_CODE_MAX_LENGTH, Rotation
+from rbs.models.rotation import (
+    ROTATION_CODE_MAX_LENGTH,
+    Rotation,
+    rotation_display_sort_key,
+)
 from rbs.models.schedule import Schedule
 from rbs.ui.drafts import Draft
 from rbs.ui.locks import ScheduleBlock, schedule_blocks
@@ -65,7 +69,7 @@ def standard_rotations(instance: SchedulerInput) -> list[Rotation]:
             for rotation in instance.rotations
             if not rotation.requires_dedicated_configuration
         ),
-        key=lambda rotation: rotation.code.casefold(),
+        key=rotation_display_sort_key,
     )
 
 
@@ -73,7 +77,7 @@ def special_rotations(instance: SchedulerInput) -> list[Rotation]:
     """Rotations that require purpose-built configuration."""
     return sorted(
         (rotation for rotation in instance.rotations if rotation.requires_dedicated_configuration),
-        key=lambda rotation: rotation.code.casefold(),
+        key=rotation_display_sort_key,
     )
 
 
@@ -85,7 +89,7 @@ def elective_rotations(instance: SchedulerInput) -> list[Rotation]:
             for rotation in instance.rotations
             if rotation.kind is RotationKind.ELECTIVE and instance.is_elective_option(rotation.id)
         ),
-        key=lambda rotation: rotation.code.casefold(),
+        key=rotation_display_sort_key,
     )
 
 
@@ -1656,7 +1660,7 @@ def resident_missing_mandatory_rotations(
     labels: list[str] = []
     for (rotation_id, duration), required_count in sorted(
         required.items(),
-        key=lambda item: instance.rotation(item[0][0]).code.casefold(),
+        key=lambda item: rotation_display_sort_key(instance.rotation(item[0][0])),
     ):
         present = min(actual[rotation_id, duration], required_count)
         actual[rotation_id, duration] -= present

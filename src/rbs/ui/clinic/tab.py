@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from rbs.models.clinic import ClinicSiteConfig
 from rbs.models.enums import WEEKDAYS_MF, RotationKind, Session, Weekday
 from rbs.models.instance import ManualClinicBlock, SchedulerInput
-from rbs.models.rotation import Rotation
+from rbs.models.rotation import Rotation, rotation_display_sort_key
 from rbs.ui import page_shells
 from rbs.ui.buttons import SECONDARY_BUTTON_PROPS
 from rbs.ui.clinic.ops import (
@@ -116,7 +116,7 @@ def _clinic_block_rules_configuration(
 
     clinic_rotations = sorted(
         (rotation for rotation in instance.rotations if rotation.kind is RotationKind.CLINIC),
-        key=lambda rotation: rotation.code.casefold(),
+        key=rotation_display_sort_key,
     )
     with ui.column().classes("w-full gap-5"):
         with ui.row().classes("w-full items-center justify-between gap-3 flex-wrap"):
@@ -804,7 +804,7 @@ def _manual_clinic_rotation_options(
         rotation.id: f"{rotation.code} — {rotation.name}"
         for rotation in sorted(
             instance.rotations,
-            key=lambda item: item.code.casefold(),
+            key=rotation_display_sort_key,
         )
         if rotation.kind is RotationKind.CLINIC
         and _manual_duration_options(instance, resident_id, rotation.id)
@@ -890,7 +890,7 @@ def _manual_replacement_options(
             continue
         seen.add(block.rotation_id)
         candidates.append((rotation, remaining))
-    candidates.sort(key=lambda item: item[0].code.casefold())
+    candidates.sort(key=lambda item: rotation_display_sort_key(item[0]))
     return {
         rotation.id: (
             f"{rotation.code} — {rotation.name}"

@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from rbs.models.instance import SchedulerInput
 from rbs.models.resident import ElectivePreferenceRequest, Resident
+from rbs.models.rotation import rotation_display_sort_key
 from rbs.models.schedule import Schedule
 
 SaveResidentSchedule = Callable[[SchedulerInput, str, bool], None]
@@ -95,17 +96,25 @@ def elective_preference_options(
 ) -> dict[str, str]:
     """Return service/shape choices currently compatible with this resident."""
     inventory = instance.direct_elective_block_counts_for_pgy(resident.pgy)
-    options: dict[str, str] = {}
+    choices: list[tuple[tuple[str, str, str], int, str, str]] = []
     for option in instance.electives.rotation_options:
         rotation = instance.rotation(option.rotation_id)
         for duration in inventory:
             if option.allows(resident.pgy, duration) and rotation.allows_duration(
                 duration, pgy=resident.pgy
             ):
-                options[f"{rotation.id}|{duration}"] = (
-                    f"{rotation.code} · {rotation.name} · {duration} weeks"
+                choices.append(
+                    (
+                        rotation_display_sort_key(rotation),
+                        duration,
+                        f"{rotation.id}|{duration}",
+                        f"{rotation.code} · {rotation.name} · {duration} weeks",
+                    )
                 )
-    return options
+    return {
+        value: label
+        for _sort, _duration, value, label in sorted(choices)
+    }
 
 
 def render_elective_preferences(

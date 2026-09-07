@@ -11,6 +11,7 @@ from rbs.models.enums import RotationKind
 from rbs.models.instance import SchedulerInput
 from rbs.models.rotation import (
     Rotation,
+    rotation_display_sort_key,
 )
 from rbs.models.schedule import Schedule
 from rbs.ui import master_detail, page_shells
@@ -340,25 +341,28 @@ def _rotation_directory(
     def render_directory() -> None:
         directory.clear()
         query = str(search.value or "").strip().casefold()
-        filtered = [
-            rotation
-            for rotation in rotations
-            if not query
-            or query in rotation.code.casefold()
-            or query in rotation.name.casefold()
-            or query in rotation.kind.value.casefold()
-            or any(
-                query in instance.training_level_label(rule.pgy).casefold()
-                or query
-                in instance.training_level_label(
-                    rule.pgy,
-                    compact=True,
-                ).casefold()
-                or query in f"pgy {rule.pgy}"
-                or query in f"year {rule.pgy}"
-                for rule in rotation.pgy_rules
-            )
-        ]
+        filtered = sorted(
+            (
+                rotation
+                for rotation in rotations
+                if not query
+                or query in rotation.code.casefold()
+                or query in rotation.name.casefold()
+                or query in rotation.kind.value.casefold()
+                or any(
+                    query in instance.training_level_label(rule.pgy).casefold()
+                    or query
+                    in instance.training_level_label(
+                        rule.pgy,
+                        compact=True,
+                    ).casefold()
+                    or query in f"pgy {rule.pgy}"
+                    or query in f"year {rule.pgy}"
+                    for rule in rotation.pgy_rules
+                )
+            ),
+            key=rotation_display_sort_key,
+        )
         with directory:
             if not filtered:
                 master_detail.empty_directory(

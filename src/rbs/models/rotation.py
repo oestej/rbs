@@ -284,6 +284,22 @@ class Rotation(StrictModel):
         }
 
 
+def rotation_display_sort_key(rotation: Rotation) -> tuple[str, str, str]:
+    """Return the stable display order for rotation choices.
+
+    Rotation codes are the primary navigation label.  Imported or unfinished
+    records can lack one, in which case the name keeps the choice discoverable
+    and alphabetized.
+    """
+    code = rotation.code.strip()
+    name = rotation.name.strip()
+    return (
+        (code or name).casefold(),
+        name.casefold(),
+        rotation.id.casefold(),
+    )
+
+
 __all__ = [
     "ALL_CLINIC_SITES",
     "DEFAULT_ROTATION_COLOR",
@@ -307,4 +323,5 @@ __all__ = [
     "default_rotation_color",
     "lighten_hex_color",
     "normalize_clinic_site_ids",
+    "rotation_display_sort_key",
 ]

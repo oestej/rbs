@@ -15,6 +15,7 @@ from rbs.models.enums import RotationKind, Session, Weekday
 from rbs.models.instance import SchedulerInput
 from rbs.models.locks import LockedPlacement
 from rbs.models.resident import Resident, ResidentClinicHalfDay
+from rbs.models.rotation import rotation_display_sort_key
 from rbs.models.schedule import AssignedClinic, Schedule
 from rbs.ui import master_detail
 from rbs.ui.clinic.board import clinic_weekdays, occupancy
@@ -657,14 +658,14 @@ def _resident_block_rotation_options(
 ) -> dict[str, str]:
     curriculum = instance.curriculum_for(resident.pgy)
     curriculum_ids = {block.rotation_id for block in curriculum.blocks}
-    options: list[tuple[str, str, str]] = []
+    options: list[tuple[tuple[str, str, str], str, str]] = []
     for rotation_id in curriculum_ids:
         rotation = instance.rotation(rotation_id)
         if rotation.kind is RotationKind.ELECTIVE:
             continue
         options.append(
             (
-                rotation.code.casefold(),
+                rotation_display_sort_key(rotation),
                 rotation.id,
                 f"{rotation.code} · {rotation.name}",
             )
@@ -679,7 +680,7 @@ def _resident_block_rotation_options(
             continue
         options.append(
             (
-                rotation.code.casefold(),
+                rotation_display_sort_key(rotation),
                 _elective_rotation_option(rotation_id),
                 instance.assignment_label(rotation_id, elective=True),
             )
@@ -693,7 +694,7 @@ def _resident_block_rotation_options(
         rotation = instance.rotation(rotation_id)
         options.append(
             (
-                rotation.code.casefold(),
+                rotation_display_sort_key(rotation),
                 _elective_rotation_option(rotation_id),
                 instance.assignment_label(rotation_id, elective=True),
             )

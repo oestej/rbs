@@ -11,6 +11,7 @@ from rbs.models.enums import RotationKind
 from rbs.models.instance import SchedulerInput
 from rbs.models.rotation import (
     Rotation,
+    rotation_display_sort_key,
 )
 from rbs.ui import master_detail
 from rbs.ui.buttons import (
@@ -81,7 +82,7 @@ def _elective_configuration(
     available = [
         instance.rotation(option.rotation_id) for option in instance.electives.rotation_options
     ]
-    available.sort(key=lambda rotation: rotation.code.casefold())
+    available.sort(key=rotation_display_sort_key)
     selected = next(
         (rotation for rotation in available if rotation.id == selected_rotation_id),
         None,
@@ -494,32 +495,35 @@ def _elective_directory(
     def render_directory() -> None:
         directory.clear()
         query = str(search.value or "").strip().casefold()
-        filtered = [
-            rotation
-            for rotation in rotations
-            if not query
-            or query in rotation.code.casefold()
-            or query in rotation.name.casefold()
-            or query
-            in (
-                "mandatory service"
-                if rotation.kind is RotationKind.STANDARD
-                else "fmed service"
-                if rotation.kind is RotationKind.FMED
-                else "standalone elective"
-            )
-            or any(
-                query in instance.training_level_label(rule.pgy).casefold()
-                or query in instance.training_level_label(rule.pgy, compact=True).casefold()
-                or query in f"pgy {rule.pgy}"
-                or query in f"year {rule.pgy}"
-                for rule in rotation.pgy_rules
-            )
-            or any(
-                query in _weeks_label(size).casefold()
-                for size in instance.eligible_elective_block_sizes(rotation.id)
-            )
-        ]
+        filtered = sorted(
+            (
+                rotation
+                for rotation in rotations
+                if not query
+                or query in rotation.code.casefold()
+                or query in rotation.name.casefold()
+                or query
+                in (
+                    "mandatory service"
+                    if rotation.kind is RotationKind.STANDARD
+                    else "fmed service"
+                    if rotation.kind is RotationKind.FMED
+                    else "standalone elective"
+                )
+                or any(
+                    query in instance.training_level_label(rule.pgy).casefold()
+                    or query in instance.training_level_label(rule.pgy, compact=True).casefold()
+                    or query in f"pgy {rule.pgy}"
+                    or query in f"year {rule.pgy}"
+                    for rule in rotation.pgy_rules
+                )
+                or any(
+                    query in _weeks_label(size).casefold()
+                    for size in instance.eligible_elective_block_sizes(rotation.id)
+                )
+            ),
+            key=rotation_display_sort_key,
+        )
         with directory:
             if not filtered:
                 empty_configuration = not rotations and not query

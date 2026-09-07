@@ -5,7 +5,7 @@ from __future__ import annotations
 from rbs.models.clinic import ClinicPolicy, ClinicRule, ClinicSlot
 from rbs.models.enums import WEEKDAYS_MF, Session, Weekday
 from rbs.models.instance import SchedulerInput
-from rbs.models.rotation import Rotation
+from rbs.models.rotation import Rotation, rotation_display_sort_key
 from rbs.ui.editor_common import (
     _academic_block_name,
     _academic_block_start_for_week,
@@ -44,7 +44,7 @@ ROTATION_COLUMNS = [
 def rotation_rows(instance: SchedulerInput) -> list[dict]:
     return [
         _rotation_row(instance, rotation)
-        for rotation in sorted(instance.rotations, key=lambda item: item.code.casefold())
+        for rotation in sorted(instance.rotations, key=rotation_display_sort_key)
     ]
 
 
