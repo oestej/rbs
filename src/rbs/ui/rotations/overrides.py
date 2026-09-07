@@ -217,7 +217,11 @@ def _editor_manages_resident_override(
     if resident is None:
         return False
     group = instance.rotation_group_for(resident.pgy, rotation_id)
-    return group is not None and override.rotation_id in group.rotation_ids
+    return (
+        group is not None
+        and group.anchor_rotation_id is None
+        and override.rotation_id in group.rotation_ids
+    )
 
 
 def _resident_override_group_bundle(
@@ -230,7 +234,7 @@ def _resident_override_group_bundle(
 ) -> list[Draft] | None:
     resident = instance.residents_by_id[resident_id]
     group = instance.rotation_group_for(resident.pgy, rotation.id)
-    if group is None:
+    if group is None or group.anchor_rotation_id is not None:
         return None
     bundle: list[Draft] = []
     instance_id = uuid4().hex
@@ -420,7 +424,7 @@ def _open_resident_rotation_override_dialog(
             selected_resident = str(resident_select.value)
             resident = instance.residents_by_id[selected_resident]
             group = instance.rotation_group_for(resident.pgy, rotation.id)
-            if group is None:
+            if group is None or group.anchor_rotation_id is not None:
                 group_choice.value = "unmatched"
                 group_choice.set_visibility(False)
                 group_choice_help.set_visibility(False)

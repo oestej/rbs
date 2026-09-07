@@ -142,16 +142,12 @@ def _rotation_summary_cell_class(
 
 
 def _missing_mandatory_html(count: int, labels: list[str]) -> str:
+    if count == 0:
+        return '<span class="rbs-missing-mandatory-complete">Complete</span>'
     count_badge = (
         '<span class="rbs-missing-mandatory-count">'
         f"<strong>{count}</strong><small>missing</small></span>"
     )
-    if count == 0:
-        return (
-            '<span class="rbs-missing-mandatory is-complete">'
-            f'{count_badge}<span class="rbs-missing-mandatory-complete">'
-            "Complete</span></span>"
-        )
     details = "".join(
         f'<span class="rbs-missing-mandatory-item">{html.escape(label)}</span>' for label in labels
     )
@@ -179,8 +175,8 @@ def _resident_time_off_label(instance: SchedulerInput, resident) -> str:
 
 
 def _rotation_total_label(weeks: int, *, expected: int = 52) -> str:
-    marker = "✅" if weeks == expected else "❌"
-    return f"{marker} {_weeks_label(weeks)}"
+    label = _weeks_label(weeks)
+    return label if weeks == expected else f"{label} · expected {_weeks_label(expected)}"
 
 
 def _rotation_kind_label(rotation: Rotation) -> str | None:
@@ -233,20 +229,25 @@ def _elective_policy_summary_chips(
         instance.training_level_label(pgy, compact=True)
         for pgy in instance.eligible_elective_pgys(rotation_id)
     )
-    _rotation_summary_chip(f"Elective for {levels}")
+    block_sizes = instance.eligible_elective_block_sizes(rotation_id)
+    sizes = ", ".join(f"{size}-week" for size in block_sizes)
     _rotation_summary_chip(
-        _eligible_elective_block_size_label(instance.eligible_elective_block_sizes(rotation_id))
-    )
-    _rotation_summary_chip(
-        "May repeat as an elective"
-        if instance.elective_option_is_repeatable(rotation_id)
-        else "One elective block per resident"
+        f"Elective · {levels} · {sizes} {'block' if len(block_sizes) == 1 else 'blocks'}"
     )
     blackout_count = len(instance.elective_blackout_weeks(rotation_id))
-    _rotation_summary_chip(
-        "Available all year"
+    repeat = (
+        "Repeatable" if instance.elective_option_is_repeatable(rotation_id) else "Once per resident"
+    )
+    availability = (
+        "available all year"
         if blackout_count == 0
-        else f"{instance.calendar.weeks - blackout_count} weeks available"
+        else (
+            f"available {instance.calendar.weeks - blackout_count} "
+            f"of {instance.calendar.weeks} weeks"
+        )
+    )
+    _rotation_summary_chip(
+        f"{repeat} · {availability}"
     )
 
 

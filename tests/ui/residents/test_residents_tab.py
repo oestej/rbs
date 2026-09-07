@@ -1339,7 +1339,7 @@ def test_delete_all_unlocked_confirms_then_keeps_locked_blocks() -> None:
     assert [assignment.rotation_id for assignment in updated.assignments] == ["icu"]
 
 
-def test_delete_all_unlocked_is_disabled_without_unlocked_blocks() -> None:
+def test_delete_all_unlocked_is_hidden_without_unlocked_blocks() -> None:
     from nicegui import ui
 
     from rbs.ui.residents.schedule import _resident_block_schedule_manager
@@ -1356,14 +1356,14 @@ def test_delete_all_unlocked_is_disabled_without_unlocked_blocks() -> None:
         on_schedule_change=lambda *args: None,
         schedule_is_current=False,
     )
-    delete_all = next(
+    delete_all = [
         element
         for element_id, element in ui.context.client.elements.items()
         if element_id not in before
         and element.__class__.__name__ == "Button"
         and element._props.get("label") == "Delete all unlocked"
-    )
-    assert delete_all._props.get("disable") is True
+    ]
+    assert delete_all == []
 
 
 def test_inline_resident_schedule_is_a_chronological_report_for_one_resident() -> None:

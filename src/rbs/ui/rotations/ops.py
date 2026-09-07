@@ -293,16 +293,16 @@ def remove_mandatory_rotation(
     raw["rotations"] = [
         configured for configured in raw["rotations"] if configured["id"] != rotation_id
     ]
-    raw["rotation_groups"] = [
-        {**group, "rotation_ids": remaining}
-        for group in raw.get("rotation_groups", [])
-        if len(
-            remaining := [
-                member for member in group.get("rotation_ids", []) if member != rotation_id
-            ]
-        )
-        >= 2
-    ]
+    repaired_groups = []
+    for group in raw.get("rotation_groups", []):
+        if group.get("anchor_rotation_id") == rotation_id:
+            continue
+        remaining = [
+            member for member in group.get("rotation_ids", []) if member != rotation_id
+        ]
+        if len(remaining) >= 2:
+            repaired_groups.append({**group, "rotation_ids": remaining})
+    raw["rotation_groups"] = repaired_groups
     raw["electives"]["rotation_options"] = [
         option
         for option in raw["electives"]["rotation_options"]
@@ -526,7 +526,11 @@ def replace_standard_rotation(
                 if resident is not None and override.group_instance_id is not None
                 else None
             )
-            if group is None or override.rotation_id not in group.rotation_ids:
+            if (
+                group is None
+                or group.anchor_rotation_id is not None
+                or override.rotation_id not in group.rotation_ids
+            ):
                 raise ValueError("resident override belongs to a different rotation")
         updates["resident_rotation_overrides"] = [
             override
@@ -568,7 +572,11 @@ def _resident_override_managed_by_rotation(
     if resident is None:
         return False
     group = instance.rotation_group_for(resident.pgy, rotation_id)
-    return group is not None and override.rotation_id in group.rotation_ids
+    return (
+        group is not None
+        and group.anchor_rotation_id is None
+        and override.rotation_id in group.rotation_ids
+    )
 
 
 def _replace_rotation_group_members(
@@ -579,9 +587,10 @@ def _replace_rotation_group_members(
     extra_rotation: Rotation | None = None,
 ) -> list[RotationGroup]:
     """Replace this rotation's level-specific group memberships atomically."""
-    known = set(instance.rotations_by_id)
+    rotations = dict(instance.rotations_by_id)
     if extra_rotation is not None:
-        known.add(extra_rotation.id)
+        rotations[extra_rotation.id] = extra_rotation
+    known = set(rotations)
     requested_pgys = {int(pgy) for pgy in members_by_pgy}
     groups = [
         group
@@ -598,11 +607,23 @@ def _replace_rotation_group_members(
             raise ValueError(
                 "rotation group references unknown rotation(s): " + ", ".join(sorted(unknown))
             )
+        owned_members = {
+            member
+            for member in members
+            if rotations[member].kind not in {RotationKind.CLINIC, RotationKind.FMED}
+        }
         conflict = next(
             (
                 group
                 for group in groups
-                if group.pgy == pgy and set(group.rotation_ids) & set(members)
+                if group.pgy == pgy
+                and {
+                    member
+                    for member in group.rotation_ids
+                    if rotations[member].kind
+                    not in {RotationKind.CLINIC, RotationKind.FMED}
+                }
+                & owned_members
             ),
             None,
         )
@@ -611,7 +632,18 @@ def _replace_rotation_group_members(
                 f"a selected rotation already belongs to another "
                 f"{instance.training_level_label(pgy, compact=True)} group"
             )
-        groups.append(RotationGroup(pgy=pgy, rotation_ids=members))
+        directional = any(
+            rotations[member].kind in {RotationKind.CLINIC, RotationKind.FMED}
+            for member in members
+            if member != rotation_id
+        )
+        groups.append(
+            RotationGroup(
+                pgy=pgy,
+                rotation_ids=members,
+                anchor_rotation_id=rotation_id if directional else None,
+            )
+        )
     return groups
 
 
@@ -896,6 +928,7 @@ def add_elective_rotation(
     eligible_block_sizes: Iterable[int] | None = None,
     repeatable: bool = False,
     blackout_weeks: Iterable[int] = (),
+    group_members_by_pgy: dict[int, list[str]] | None = None,
 ) -> SchedulerInput:
     """Add a standalone Elective service and make it eligible immediately.
 
@@ -937,9 +970,19 @@ def add_elective_rotation(
             ),
         ],
     )
+    updates: dict[str, Any] = {
+        "rotations": [*instance.rotations, normalized],
+        "electives": configuration,
+    }
+    if group_members_by_pgy is not None:
+        updates["rotation_groups"] = _replace_rotation_group_members(
+            instance,
+            normalized.id,
+            group_members_by_pgy,
+            extra_rotation=normalized,
+        )
     return instance.revised(
-        rotations=[*instance.rotations, normalized],
-        electives=configuration,
+        **updates,
     )
 
 
@@ -975,6 +1018,7 @@ def replace_elective_rotation(
     eligible_block_sizes: Iterable[int] | None = None,
     repeatable: bool | None = None,
     blackout_weeks: Iterable[int] | None = None,
+    group_members_by_pgy: dict[int, list[str]] | None = None,
 ) -> SchedulerInput:
     """Replace a standalone Elective service."""
     try:
@@ -1033,16 +1077,24 @@ def replace_elective_rotation(
         else option
         for option in instance.electives.rotation_options
     ]
-    return instance.revised(
-        rotations=[
+    updates: dict[str, Any] = {
+        "rotations": [
             normalized if rotation.id == original_id else rotation
             for rotation in instance.rotations
         ],
-        electives=ElectiveConfiguration(
+        "electives": ElectiveConfiguration(
             color=instance.electives.color,
             rotation_options=options,
         ),
-    )
+    }
+    if group_members_by_pgy is not None:
+        updates["rotation_groups"] = _replace_rotation_group_members(
+            instance,
+            original_id,
+            group_members_by_pgy,
+            extra_rotation=normalized,
+        )
+    return instance.revised(**updates)
 
 
 def remove_elective_rotation(
@@ -1067,6 +1119,12 @@ def remove_elective_rotation(
         option
         for option in raw["electives"]["rotation_options"]
         if option["rotation_id"] != rotation_id
+    ]
+    raw["rotation_groups"] = [
+        group
+        for group in raw.get("rotation_groups", [])
+        if group.get("anchor_rotation_id") != rotation_id
+        and rotation_id not in group.get("rotation_ids", [])
     ]
     for configured in raw["rotations"]:
         for rule in configured["pgy_rules"]:

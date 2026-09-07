@@ -504,6 +504,43 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
             None,
         )
 
+    def anchored_rotation_group_for(
+        self,
+        pgy: int,
+        rotation_id: str,
+    ) -> RotationGroup | None:
+        """Return the directional group anchored by this rotation, if any."""
+        return next(
+            (
+                group
+                for group in self.rotation_groups
+                if group.pgy == pgy and group.anchor_rotation_id == rotation_id
+            ),
+            None,
+        )
+
+    def rotation_group_requiring(
+        self,
+        pgy: int,
+        rotation_id: str,
+    ) -> RotationGroup | None:
+        """Return a group which requires this rotation to stay with its peers."""
+        return next(
+            (
+                group
+                for group in self.rotation_groups
+                if group.pgy == pgy
+                and (
+                    group.anchor_rotation_id == rotation_id
+                    or (
+                        group.anchor_rotation_id is None
+                        and rotation_id in group.rotation_ids
+                    )
+                )
+            ),
+            None,
+        )
+
     def curriculum_for(self, pgy: int) -> PGYCurriculum:
         try:
             return self._curriculum_by_pgy[pgy]

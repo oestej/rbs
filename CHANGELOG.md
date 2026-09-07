@@ -4,6 +4,15 @@
 
 ### Changed
 
+- **Rotations:** Mandatory and available Elective services can now be kept
+  contiguous with Clinic, FMED/Inpatient, or both for each training level.
+  This grouping is one-way: every configured service block receives its
+  selected companion blocks, while additional Clinic and FMED blocks remain
+  free to schedule elsewhere.
+- **Rotations:** Dense configuration screens now start from compact summaries:
+  elective availability opens one four-week block at a time, multi-level rule
+  editors collapse when several levels are configured, and repeated detail
+  metadata and completion badges have been simplified.
 - **Rotations:** The FMED rule editor now uses a large, near-full-window dialog
   with horizontal tabs for general, training-level, clinic, and named-resident
   override settings. FMED elective takes are always available year-round rather

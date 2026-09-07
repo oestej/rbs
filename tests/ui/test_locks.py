@@ -449,7 +449,7 @@ def test_manual_exact_block_can_explicitly_exempt_rotation_grouping() -> None:
 def test_grouping_exemption_rejects_ungrouped_rotation() -> None:
     instance = sample_instance()
 
-    with pytest.raises(ValidationError, match="grouped Mandatory rotation"):
+    with pytest.raises(ValidationError, match="required to stay grouped"):
         replace_manual_block(
             instance,
             resident_id="resident-001",

@@ -230,7 +230,7 @@ def test_process_client_surfaces_structured_solver_errors() -> None:
             "-c",
             (
                 "import json,sys; request=json.load(sys.stdin); "
-                    "print(json.dumps({'protocol':'rbs.solve','version':4,"
+                    "print(json.dumps({'protocol':'rbs.solve','version':5,"
                 "'request_id':request['request_id'],'status':'error',"
                 "'error':{'code':'solver_error','message':'boom'}}))"
             ),

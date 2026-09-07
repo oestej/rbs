@@ -57,14 +57,14 @@ class SolverIntegrityMixin:
             if lock.grouping_exempt:
                 if (
                     lock.elective
-                    or self.rotation_group_for(
+                    or self.rotation_group_requiring(
                         resident.pgy,
                         lock.rotation_id,
                     )
                     is None
                 ):
                     raise ValueError(
-                        "a grouping-exempt lock must target a grouped Mandatory rotation"
+                        "a grouping-exempt lock must target a rotation required to stay grouped"
                     )
             allowed = self.rotation_ids_for_pgy(resident.pgy)
             if lock.rotation_id not in allowed:
@@ -367,7 +367,9 @@ class SolverIntegrityMixin:
             matching = [
                 group
                 for group in self.rotation_groups
-                if group.pgy == resident.pgy and member_ids <= set(group.rotation_ids)
+                if group.pgy == resident.pgy
+                and group.anchor_rotation_id is None
+                and member_ids <= set(group.rotation_ids)
             ]
             if len(matching) != 1 or member_ids != set(matching[0].rotation_ids):
                 raise ValueError(

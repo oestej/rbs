@@ -16,6 +16,7 @@ from rbs.solver.validation_coverage import (
     _week_rotation_index,
 )
 from rbs.solver.validation_electives import (
+    _validate_anchored_rotation_groups,
     _validate_elective_policies,
     _validate_rotation_groups,
 )
@@ -89,6 +90,7 @@ def validate_schedule(instance: SolverProblem, schedule: Schedule) -> ScheduleVa
         successful=successful,
     )
     _validate_rotation_groups(instance, schedule, successful, errors)
+    _validate_anchored_rotation_groups(instance, schedule, successful, errors)
     _validate_consecutive(instance, grid, errors)
     _validate_total_weeks(instance, grid, errors)
     _validate_clinics(

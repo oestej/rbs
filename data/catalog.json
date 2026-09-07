@@ -1,5 +1,5 @@
 {
-  "schema_version": 7,
+  "schema_version": 8,
   "calendar_weeks": 52,
   "electives": {
     "color": "#326800",
@@ -2594,6 +2594,7 @@
   "rotation_groups": [
     {
       "pgy": 1,
+      "anchor_rotation_id": null,
       "rotation_ids": [
         "outpatient_gyn",
         "inpatient_ld"
@@ -2601,6 +2602,7 @@
     },
     {
       "pgy": 2,
+      "anchor_rotation_id": null,
       "rotation_ids": [
         "outpatient_gyn",
         "inpatient_ld"

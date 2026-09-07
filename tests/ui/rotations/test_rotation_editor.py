@@ -1226,7 +1226,7 @@ def test_rotation_summary_is_the_first_and_default_workspace_tab() -> None:
     assert "Missing mandatory" in markup
     assert markup.index("Mandatory") < markup.index("Missing mandatory")
     assert "Time Off (included)" in markup
-    assert "✅ 52 weeks" in markup
+    assert ">52 weeks</td>" in markup
     assert markup.count('<col class="time">') == 5
     assert all(
         sum(resident_rotation_week_totals(sample_instance(), resident.id).values()) == 52
@@ -2264,6 +2264,29 @@ def test_standard_rotation_editor_can_clear_level_specific_grouping() -> None:
 
     assert updated.rotation_group_for(1, rotation.id) is None
     assert updated.rotation_group_for(2, rotation.id) is None
+
+
+def test_mandatory_rotation_can_group_one_way_with_clinic_and_fmed() -> None:
+    instance = sample_instance()
+    rotation = instance.rotation("night_float")
+
+    updated = replace_standard_rotation(
+        instance,
+        rotation.id,
+        rotation,
+        group_members_by_pgy={
+            1: ["clinic", "fmed"],
+            2: ["clinic"],
+            3: [],
+        },
+    )
+
+    pgy1 = updated.anchored_rotation_group_for(1, rotation.id)
+    pgy2 = updated.anchored_rotation_group_for(2, rotation.id)
+    assert pgy1 is not None
+    assert pgy1.rotation_ids == ["night_float", "clinic", "fmed"]
+    assert pgy2 is not None
+    assert pgy2.rotation_ids == ["night_float", "clinic"]
 
 
 def test_rotation_editor_normalizes_code_to_uppercase() -> None:

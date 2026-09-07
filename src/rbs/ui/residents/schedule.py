@@ -1113,7 +1113,7 @@ def _open_resident_block_dialog(
                     start_select, start_select.options, disabled_start_options
                 )
             grouping_exempt = ui.checkbox(
-                "Allow this block to be unmatched from its mandatory group",
+                "Allow this block to be unmatched from its configured group",
                 value=bool(original and original.grouping_exempt),
             )
             grouping_exempt_help = ui.label(
@@ -1126,7 +1126,7 @@ def _open_resident_block_dialog(
             selected_rotation_id, elective = _parse_rotation_option(rotation_option)
             grouped = (
                 not elective
-                and instance.rotation_group_for(
+                and instance.rotation_group_requiring(
                     resident.pgy,
                     selected_rotation_id,
                 )

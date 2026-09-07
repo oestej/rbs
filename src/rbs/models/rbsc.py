@@ -21,7 +21,7 @@ RBSC_FORMAT = "rbsc"
 # application-owned presentation (colors, solver tuning, automatic-locking
 # state) by design; import restores neutral defaults. A Save As deliberately
 # clears the bundled-sample flag before producing the user's document.
-RBSC_SCHEMA_VERSION = 8
+RBSC_SCHEMA_VERSION = 9
 _AUTOMATIC_LOCK_SOURCE = "through_today"
 
 
@@ -98,9 +98,9 @@ def _hydrate_portable_preferences(value: object) -> object:
     return hydrated
 
 
-def _migrate_v7_portable_state(value: object) -> object:
-    """Upgrade documents whose only missing feature is elective blackouts."""
-    if not isinstance(value, dict) or value.get("schema_version") != 7:
+def _migrate_v8_portable_state(value: object) -> object:
+    """Upgrade documents whose only missing feature is directional groups."""
+    if not isinstance(value, dict) or value.get("schema_version") != 8:
         return value
     migrated = deepcopy(value)
     migrated["schema_version"] = RBSC_SCHEMA_VERSION
@@ -185,7 +185,7 @@ class RBSCState(StrictModel):
     """The complete portable state of one RBS SQLite database."""
 
     format: Literal["rbsc"] = RBSC_FORMAT
-    schema_version: Literal[8] = RBSC_SCHEMA_VERSION
+    schema_version: Literal[9] = RBSC_SCHEMA_VERSION
     exported_at: str
     current_workspace_id: int | None = Field(default=None, ge=1)
     app_metadata: dict[str, str] = Field(default_factory=dict)
@@ -197,7 +197,7 @@ class RBSCState(StrictModel):
     @model_validator(mode="before")
     @classmethod
     def migrate_and_hydrate(cls, value: object) -> object:
-        return _hydrate_portable_preferences(_migrate_v7_portable_state(value))
+        return _hydrate_portable_preferences(_migrate_v8_portable_state(value))
 
     @model_serializer(mode="wrap")
     def serialize_portable_state(self, handler):

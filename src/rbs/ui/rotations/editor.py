@@ -287,7 +287,7 @@ def render_rotations_tab(
                     resident_edit_url=resident_edit_url,
                 )
             with ui.tab_panel(rotations_tab).classes("p-0 pt-4"):
-                with master_detail.split(detail_selected=selected_rotation_id is not None):
+                with master_detail.split(detail_selected=selected is not None or creating):
                     _rotation_directory(
                         instance,
                         rotations,
@@ -300,7 +300,9 @@ def render_rotations_tab(
                         creating=creating,
                         missing_id=(
                             selected_rotation_id
-                            if selected_rotation_id and selected is None and not creating
+                            if selected_rotation_id
+                            and selected_rotation_id not in instance.rotations_by_id
+                            and not creating
                             else None
                         ),
                         on_select=guarded_select,

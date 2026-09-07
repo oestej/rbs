@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from itertools import product
 
+from rbs.models.enums import RotationKind
 from rbs.models.instance import SolverProblem
 from rbs.models.schedule import Schedule
 
@@ -58,7 +59,8 @@ def _validate_rotation_groups(
     them. Resident-specific unmatched extras are excluded, while one explicit
     grouping-exempt exact lock releases one complete instance.
     """
-    if not successful or not instance.rotation_groups:
+    groups = [group for group in instance.rotation_groups if group.anchor_rotation_id is None]
+    if not successful or not groups:
         return
     assignments_by_resident: dict[str, list] = defaultdict(list)
     for assignment in schedule.assignments:
@@ -68,7 +70,7 @@ def _validate_rotation_groups(
     for resident in instance.residents:
         curriculum = instance.curriculum_for(resident.pgy)
         resident_assignments = assignments_by_resident.get(resident.id, [])
-        for group in (item for item in instance.rotation_groups if item.pgy == resident.pgy):
+        for group in (item for item in groups if item.pgy == resident.pgy):
             direct_count = sum(
                 block.count
                 for block in curriculum.blocks
@@ -153,6 +155,126 @@ def _validate_rotation_groups(
                     f"{resident.id} rotation group {labels} is not arranged as "
                     "the required contiguous instance(s)"
                 )
+
+
+def _validate_anchored_rotation_groups(
+    instance: SolverProblem,
+    schedule: Schedule,
+    successful: bool,
+    errors: list[str],
+) -> None:
+    """Confirm every directional anchor has distinct contiguous companions."""
+    groups = [group for group in instance.rotation_groups if group.anchor_rotation_id]
+    if not successful or not groups:
+        return
+    assignments_by_resident: dict[str, list] = defaultdict(list)
+    for assignment in schedule.assignments:
+        assignments_by_resident[assignment.resident_id].append(assignment)
+
+    for resident in instance.residents:
+        resident_assignments = assignments_by_resident.get(resident.id, [])
+        requirements: list[list[frozenset[int]]] = []
+        labels = []
+        for group in (item for item in groups if item.pgy == resident.pgy):
+            anchor_id = group.anchor_rotation_id
+            if anchor_id is None:  # pragma: no cover - narrowed above
+                continue
+            for anchor in resident_assignments:
+                if anchor.rotation_id != anchor_id or _assignment_is_grouping_exempt(
+                    instance,
+                    anchor,
+                ):
+                    continue
+                candidates = _anchored_group_candidates(
+                    instance,
+                    resident.pgy,
+                    group.rotation_ids,
+                    anchor,
+                    resident_assignments,
+                )
+                requirements.append(candidates)
+                labels.append(" + ".join(group.rotation_ids))
+
+        if not _can_reserve_anchored_group_companions(requirements):
+            detail = ", ".join(dict.fromkeys(labels))
+            errors.append(
+                f"{resident.id} one-way rotation group {detail} is not arranged with "
+                "distinct contiguous companion blocks"
+            )
+
+
+def _assignment_is_grouping_exempt(instance: SolverProblem, assignment) -> bool:
+    return any(
+        lock.resident_id == assignment.resident_id
+        and lock.rotation_id == assignment.rotation_id
+        and lock.elective == assignment.elective
+        and lock.grouping_exempt
+        and lock.exact_block
+        and lock.weeks == assignment.weeks
+        for lock in instance.locks
+    )
+
+
+def _anchored_group_candidates(
+    instance: SolverProblem,
+    pgy: int,
+    rotation_ids: list[str],
+    anchor,
+    resident_assignments: list,
+) -> list[frozenset[int]]:
+    companion_ids = [item for item in rotation_ids if item != anchor.rotation_id]
+    domains = []
+    for rotation_id in companion_ids:
+        kind = instance.rotation(rotation_id).kind
+        domains.append(
+            [
+                assignment
+                for assignment in resident_assignments
+                if assignment.rotation_id == rotation_id
+                and (kind in {RotationKind.CLINIC, RotationKind.FMED} or not assignment.elective)
+            ]
+        )
+    candidates: list[frozenset[int]] = []
+    for companions in product(*domains):
+        if len({id(item) for item in companions}) != len(companions):
+            continue
+        chronological = sorted([anchor, *companions], key=lambda item: item.start_week)
+        if any(
+            left.end_week + 1 != right.start_week
+            for left, right in zip(chronological, chronological[1:], strict=False)
+        ):
+            continue
+        chosen = {assignment.rotation_id: assignment for assignment in chronological}
+        if any(
+            predecessor_id in chosen
+            and chosen[predecessor_id].end_week >= chosen[rotation_id].start_week
+            for rotation_id in rotation_ids
+            for predecessor_id in instance.rotation(rotation_id)
+            .pgy_rule(pgy)
+            .prerequisite_rotation_ids
+        ):
+            continue
+        candidates.append(frozenset(id(item) for item in companions))
+    return candidates
+
+
+def _can_reserve_anchored_group_companions(
+    requirements: list[list[frozenset[int]]],
+) -> bool:
+    if not requirements:
+        return True
+    ordered = sorted(requirements, key=len)
+
+    def reserve(index: int, used: frozenset[int]) -> bool:
+        if index == len(ordered):
+            return True
+        return any(
+            not used.intersection(candidate)
+            and reserve(index + 1, used | candidate)
+            for candidate in ordered[index]
+        )
+
+    return reserve(0, frozenset())
 
 
 def _grouping_exempt_assignments(

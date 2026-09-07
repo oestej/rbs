@@ -711,6 +711,44 @@ def test_existing_elective_uses_the_master_detail_editor() -> None:
     )
 
 
+def test_available_elective_can_be_grouped_one_way_with_clinic_and_fmed() -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    saves: list = []
+    before = set(ui.context.client.elements)
+    _elective_rotation_editor(
+        instance,
+        instance.rotation("palliative_care"),
+        on_cancel=lambda: None,
+        on_save=lambda updated, rotation_id: saves.append((updated, rotation_id)),
+    )
+    created = _created_since(before)
+    grouping = [
+        element
+        for element in created
+        if element.__class__.__name__ == "Select"
+        and element._props.get("label") == "Keep contiguous with"
+    ]
+
+    assert len(grouping) == 2
+    assert {"clinic", "fmed"} <= set(grouping[0].options)
+    assert any(
+        "Clinic and FMED/Inpatient are one-way" in str(getattr(element, "_text", ""))
+        for element in created
+    )
+
+    grouping[0].set_value(["clinic", "fmed"])
+    _click(_button(created, "Save elective"))
+
+    updated, rotation_id = saves[-1]
+    group = updated.anchored_rotation_group_for(1, rotation_id)
+    assert rotation_id == "palliative_care"
+    assert group is not None
+    assert group.rotation_ids == ["palliative_care", "clinic", "fmed"]
+    assert updated.anchored_rotation_group_for(2, rotation_id) is None
+
+
 def test_elective_availability_is_the_fourth_tab_and_saves_block_blackouts() -> None:
     from nicegui import ui
 

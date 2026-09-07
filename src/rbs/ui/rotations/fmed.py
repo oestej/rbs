@@ -33,13 +33,12 @@ from rbs.ui.rotations.overrides import (
     _editor_manages_resident_override,
     _resident_rotation_overrides_editor,
 )
-from rbs.ui.rotations.summary import _rotation_kind_label
+from rbs.ui.rotations.summary import _rotation_identity
 from rbs.ui.rotations.types import (
     SaveRotation,
 )
 from rbs.ui.rotations.widgets import (
     clinic_week_editor,
-    rotation_code_style,
     rotation_color_palette,
 )
 
@@ -69,19 +68,7 @@ def _dedicated_rotation_cards(
         for rotation in rotations:
             with master_detail.detail_card():
                 with ui.row().classes("w-full items-center gap-4 p-5"):
-                    with ui.row().classes("items-center gap-4"):
-                        with (
-                            ui.avatar(color=None)
-                            .props("square")
-                            .classes("rbs-rotation-code-avatar rbs-rotation-code-avatar-large")
-                            .style(rotation_code_style(rotation.color))
-                        ):
-                            ui.label(rotation.code).classes("rbs-rotation-code-text")
-                        with ui.column().classes("gap-0"):
-                            ui.label(rotation.name).classes("rbs-type-page-title")
-                            kind_label = _rotation_kind_label(rotation)
-                            if kind_label is not None:
-                                ui.label(kind_label).classes("rbs-text-muted")
+                    _rotation_identity(rotation, instance=instance)
                 ui.separator()
                 _rotation_detail_contents(
                     instance,

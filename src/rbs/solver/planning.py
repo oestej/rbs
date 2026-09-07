@@ -27,6 +27,7 @@ class Occurrence:
     fixed_start_week: int | None = None
     rotation_group_key: str | None = None
     rotation_group_instance_id: str | None = None
+    grouped_with_rotation_ids: tuple[str, ...] = ()
     elective_blackout_weeks: tuple[int, ...] = ()
 
 
@@ -140,10 +141,18 @@ def expand_occurrences(
                     elective_option = (
                         instance.electives.option_for(candidate.id) if elective else None
                     )
-                    group = (
-                        instance.rotation_group_for(resident.pgy, candidate.id)
-                        if not elective and candidate.id == block.rotation_id
+                    group = instance.rotation_group_for(resident.pgy, candidate.id)
+                    symmetric_group = (
+                        group
+                        if not elective
+                        and candidate.id == block.rotation_id
+                        and group is not None
+                        and group.anchor_rotation_id is None
                         else None
+                    )
+                    anchored_group = instance.anchored_rotation_group_for(
+                        resident.pgy,
+                        candidate.id,
                     )
                     key = (
                         base_key
@@ -164,9 +173,21 @@ def expand_occurrences(
                             prerequisite_rotation_ids=tuple(rule.prerequisite_rotation_ids),
                             earliest_start_week=rule.earliest_start_week,
                             rotation_group_key=(
-                                rotation_group_key(group.pgy, group.rotation_ids)
-                                if group is not None
+                                rotation_group_key(
+                                    symmetric_group.pgy,
+                                    symmetric_group.rotation_ids,
+                                )
+                                if symmetric_group is not None
                                 else None
+                            ),
+                            grouped_with_rotation_ids=(
+                                tuple(
+                                    rotation_id
+                                    for rotation_id in anchored_group.rotation_ids
+                                    if rotation_id != candidate.id
+                                )
+                                if anchored_group is not None
+                                else ()
                             ),
                             elective_blackout_weeks=(
                                 tuple(elective_option.blackout_weeks)
@@ -181,6 +202,12 @@ def expand_occurrences(
                 instance.rotation_group_for(resident.pgy, override.rotation_id)
                 if override.group_instance_id is not None
                 else None
+            )
+            if override_group is not None and override_group.anchor_rotation_id is not None:
+                override_group = None
+            anchored_group = instance.anchored_rotation_group_for(
+                resident.pgy,
+                override.rotation_id,
             )
             key = (
                 f"{resident.id}:resident-override:{override.rotation_id}:"
@@ -208,6 +235,15 @@ def expand_occurrences(
                         f"{resident.id}:override-group:{override.group_instance_id}"
                         if override.group_instance_id is not None
                         else None
+                    ),
+                    grouped_with_rotation_ids=(
+                        tuple(
+                            rotation_id
+                            for rotation_id in anchored_group.rotation_ids
+                            if rotation_id != override.rotation_id
+                        )
+                        if anchored_group is not None
+                        else ()
                     ),
                 )
             )

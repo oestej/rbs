@@ -62,7 +62,6 @@ from rbs.ui.rotations.overrides import (
     _resident_rotation_overrides_view,
 )
 from rbs.ui.rotations.summary import (
-    _configured_duration_label,
     _elective_policy_summary_chips,
     _rotation_clinic_overview,
     _rotation_identity,
@@ -627,6 +626,15 @@ def _staffing_and_blocks(
     from nicegui import ui
 
     capacity = draft["capacity"]
+    configured_levels = [int(rule["pgy"]) for rule in draft["pgy_rules"]]
+    expanded_levels = set(configured_levels if len(configured_levels) == 1 else ())
+
+    def remember_expansion(pgy: int, event) -> None:
+        if event.value:
+            expanded_levels.add(pgy)
+        else:
+            expanded_levels.discard(pgy)
+
     with ui.column().classes("w-full gap-4 pt-2"):
         with ui.column().classes("rbs-rotation-editor-subsection w-full gap-3 rounded p-4"):
             with ui.column().classes("gap-0"):
@@ -686,6 +694,8 @@ def _staffing_and_blocks(
                         group_members_by_pgy=group_members_by_pgy,
                         elective_draft=elective_draft,
                         on_elective_change=on_elective_change,
+                        expanded=pgy in expanded_levels,
+                        on_expansion_change=partial(remember_expansion, pgy),
                     )
 
         render_rules()
@@ -702,6 +712,8 @@ def _pgy_rule_editor(
     group_members_by_pgy: dict[int, list[str]] | None = None,
     elective_draft: Draft | None = None,
     on_elective_change: Callable[[], None] | None = None,
+    expanded: bool = False,
+    on_expansion_change: Callable | None = None,
 ) -> None:
     from nicegui import ui
 
@@ -735,7 +747,8 @@ def _pgy_rule_editor(
         level_name,
         caption=caption,
         icon="school",
-        value=rule is not None,
+        value=expanded,
+        on_value_change=on_expansion_change,
     ).classes("rbs-pgy-rule w-full"):
         enabled = ui.checkbox(
             f"Available to {level_name}",
@@ -848,12 +861,17 @@ def _pgy_rule_editor(
             prerequisites.bind_value(rule, "prerequisite_rotation_ids", forward=_as_string_list)
             earliest.bind_value(rule, "earliest_start_week", forward=_as_int)
 
-        if group_members_by_pgy is not None and draft.get("kind") == RotationKind.STANDARD.value:
+        grouping_kind = RotationKind(str(draft.get("kind")))
+        if group_members_by_pgy is not None and grouping_kind in {
+            RotationKind.STANDARD,
+            RotationKind.ELECTIVE,
+        }:
             _rotation_group_editor(
                 instance,
                 rotation_id,
                 pgy,
                 group_members_by_pgy,
+                target_kind=grouping_kind,
             )
 
         with ui.row().classes("w-full items-center justify-between gap-3 pt-2"):
@@ -889,17 +907,25 @@ def _rotation_group_editor(
     rotation_id: str,
     pgy: int,
     members_by_pgy: dict[int, list[str]],
+    *,
+    target_kind: RotationKind,
 ) -> None:
     from nicegui import ui
 
-    options = _rotation_group_member_options(instance, rotation_id, pgy)
+    options = _rotation_group_member_options(
+        instance,
+        rotation_id,
+        pgy,
+        target_kind=target_kind,
+    )
     selected = [member for member in members_by_pgy.get(pgy, []) if member != rotation_id]
     with ui.column().classes("rbs-rotation-editor-subsection w-full gap-3 rounded p-4"):
         with ui.column().classes("gap-0"):
-            ui.label("Mandatory rotation group").classes("rbs-type-control-label")
+            ui.label("Block grouping").classes("rbs-type-control-label")
             ui.label(
-                "Grouped blocks must be consecutive, with no gap. Their order is "
-                "unrestricted here; use prerequisites above when order matters."
+                "Grouped blocks must be consecutive, with no gap. Clinic and "
+                "FMED/Inpatient are one-way: every block of this service stays with "
+                "one selected companion block, but their additional blocks remain free."
             ).classes("rbs-type-caption rbs-text-muted")
         members = (
             ui.select(
@@ -915,10 +941,7 @@ def _rotation_group_editor(
 
         def update(event) -> None:
             companions = [str(item) for item in (event.value or [])]
-            if companions:
-                members_by_pgy[pgy] = [rotation_id, *companions]
-            else:
-                members_by_pgy[pgy] = []
+            members_by_pgy[pgy] = companions
 
         members.on_value_change(update)
 
@@ -927,6 +950,8 @@ def _rotation_group_member_options(
     instance: SchedulerInput,
     rotation_id: str,
     pgy: int,
+    *,
+    target_kind: RotationKind = RotationKind.STANDARD,
 ) -> dict[str, str]:
     curriculum = instance.curriculum_for(pgy)
     target_count = sum(
@@ -935,7 +960,18 @@ def _rotation_group_member_options(
     current = instance.rotation_group_for(pgy, rotation_id)
     options: list[tuple[Rotation, str]] = []
     for rotation in instance.rotations:
-        if rotation.id == rotation_id or rotation.kind is not RotationKind.STANDARD:
+        if rotation.id == rotation_id:
+            continue
+        if target_kind is RotationKind.ELECTIVE and rotation.kind not in {
+            RotationKind.CLINIC,
+            RotationKind.FMED,
+        }:
+            continue
+        if target_kind is RotationKind.STANDARD and rotation.kind not in {
+            RotationKind.STANDARD,
+            RotationKind.CLINIC,
+            RotationKind.FMED,
+        }:
             continue
         try:
             rotation.pgy_rule(pgy)
@@ -943,12 +979,16 @@ def _rotation_group_member_options(
             continue
         count = sum(block.count for block in curriculum.blocks if block.rotation_id == rotation.id)
         other_group = instance.rotation_group_for(pgy, rotation.id)
-        if (
-            target_count > 0
-            and count == target_count
-            and (other_group is None or other_group is current)
-        ):
-            options.append((rotation, rotation.name))
+        if rotation.kind is RotationKind.STANDARD:
+            if (
+                target_count > 0
+                and count == target_count
+                and (other_group is None or other_group is current)
+            ):
+                options.append((rotation, rotation.name))
+            continue
+        if count >= max(target_count, 1):
+            options.append((rotation, f"{rotation.name} · one-way companion"))
     return {
         rotation.id: f"{rotation.code} — {name}"
         for rotation, name in sorted(options, key=lambda item: rotation_display_sort_key(item[0]))
@@ -1514,8 +1554,6 @@ def _rotation_detail_contents(
 
     with ui.column().classes("rbs-rotation-view w-full gap-5 p-5"):
         with ui.row().classes("rbs-rotation-summary-chips w-full gap-2 flex-wrap"):
-            for rule in rotation.pgy_rules:
-                _rotation_summary_chip(instance.training_level_label(rule.pgy, compact=True))
             for group in instance.rotation_groups:
                 if rotation.id not in group.rotation_ids:
                     continue
@@ -1524,11 +1562,18 @@ def _rotation_detail_contents(
                     for member in group.rotation_ids
                     if member != rotation.id
                 )
-                _rotation_summary_chip(
-                    f"{instance.training_level_label(group.pgy, compact=True)} "
-                    f"grouped with {companions}"
-                )
-            _rotation_summary_chip(_configured_duration_label(rotation))
+                if group.anchor_rotation_id is None or group.anchor_rotation_id == rotation.id:
+                    label = (
+                        f"{instance.training_level_label(group.pgy, compact=True)} "
+                        f"grouped with {companions}"
+                    )
+                else:
+                    anchor = instance.rotation(group.anchor_rotation_id).code
+                    label = (
+                        f"{instance.training_level_label(group.pgy, compact=True)} "
+                        f"one-way companion for {anchor}"
+                    )
+                _rotation_summary_chip(label)
             combined_capacity = _capacity_range_label(
                 rotation.capacity.min_concurrent,
                 rotation.capacity.max_concurrent,
