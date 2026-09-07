@@ -242,6 +242,12 @@ def _elective_policy_summary_chips(
         if instance.elective_option_is_repeatable(rotation_id)
         else "One elective block per resident"
     )
+    blackout_count = len(instance.elective_blackout_weeks(rotation_id))
+    _rotation_summary_chip(
+        "Available all year"
+        if blackout_count == 0
+        else f"{instance.calendar.weeks - blackout_count} weeks available"
+    )
 
 
 def _elective_block_size_options(sizes: tuple[int, ...]) -> dict[int, str]:

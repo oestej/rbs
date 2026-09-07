@@ -27,6 +27,7 @@ class Occurrence:
     fixed_start_week: int | None = None
     rotation_group_key: str | None = None
     rotation_group_instance_id: str | None = None
+    elective_blackout_weeks: tuple[int, ...] = ()
 
 
 def rotation_group_key(pgy: int, rotation_ids: list[str] | tuple[str, ...]) -> str:
@@ -133,6 +134,9 @@ def expand_occurrences(
                     rule = candidate.pgy_rule(resident.pgy)
                     elective = direct_elective
                     elective_fallback = elective and candidate.kind is RotationKind.CLINIC
+                    elective_option = (
+                        instance.electives.option_for(candidate.id) if elective else None
+                    )
                     group = (
                         instance.rotation_group_for(resident.pgy, candidate.id)
                         if not elective and candidate.id == block.rotation_id
@@ -160,6 +164,11 @@ def expand_occurrences(
                                 rotation_group_key(group.pgy, group.rotation_ids)
                                 if group is not None
                                 else None
+                            ),
+                            elective_blackout_weeks=(
+                                tuple(elective_option.blackout_weeks)
+                                if elective_option is not None
+                                else ()
                             ),
                         )
                     )
@@ -341,11 +350,14 @@ def legal_starts(
     block_config = rotation.block_config(occurrence.pgy, occurrence.duration_weeks)
     starts: list[int] = []
     for start in aligned_starts(occurrence.duration_weeks, calendar):
+        covered_weeks = set(weeks_covered(start, occurrence.duration_weeks))
+        if covered_weeks.intersection(occurrence.elective_blackout_weeks):
+            continue
         if not allow_blocks_to_span_four_week_boundaries and spans_four_week_boundary(
             start, occurrence.duration_weeks
         ):
             continue
-        overlap = set(weeks_covered(start, occurrence.duration_weeks)) & vacation
+        overlap = covered_weeks & vacation
         if overlap and not block_config.vacation.allowed:
             continue
         max_vac = block_config.vacation.max_weeks_per_block

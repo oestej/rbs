@@ -142,6 +142,12 @@ def _rotation_rule_conflicts(
     for rotation in instance.rotations:
         capacity_details: list[str] = []
         staffed_rules = [rule for rule in rotation.pgy_rules if rule.pgy in staffed]
+        option = instance.electives.option_for(rotation.id)
+        minimum_weeks = (
+            calendar_weeks - len(option.blackout_weeks)
+            if option is not None and rotation.kind is RotationKind.ELECTIVE
+            else calendar_weeks
+        )
         minimum_total = sum(rule.min_concurrent or 0 for rule in staffed_rules)
         overall_maximum = rotation.capacity.max_concurrent
         if overall_maximum is not None and minimum_total > overall_maximum:
@@ -156,7 +162,7 @@ def _rotation_rule_conflicts(
             for (rotation_id, _pgy), weeks in potential_weeks.items()
             if rotation_id == rotation.id
         )
-        overall_required = overall_minimum * calendar_weeks
+        overall_required = overall_minimum * minimum_weeks
         if overall_minimum and overall_available < overall_required:
             capacity_details.append(
                 f"the overall minimum of {overall_minimum} needs {overall_required} "
@@ -168,7 +174,7 @@ def _rotation_rule_conflicts(
             if not minimum:
                 continue
             available = potential_weeks[rotation.id, rule.pgy]
-            required = minimum * calendar_weeks
+            required = minimum * minimum_weeks
             if available >= required:
                 continue
             level = instance.training_level_label(rule.pgy, compact=True)

@@ -17,6 +17,7 @@ from rbs.ui.editor_common import (
     _optional_float,
     _validation_message,
 )
+from rbs.ui.rotations.availability import _elective_availability_editor
 from rbs.ui.rotations.forms import (
     _elective_repeatable_header,
     _rotation_detail_contents,
@@ -113,6 +114,7 @@ def _open_fmed_pgy_rules_dialog(
     elective_option = instance.electives.option_for(rotation.id)
     elective_draft: Draft = {
         "repeatable": bool(elective_option and elective_option.repeatable),
+        "blackout_weeks": set(elective_option.blackout_weeks if elective_option else ()),
         "shapes": elective_shapes_for_rotation(instance, rotation.id),
     }
     counts = {
@@ -162,6 +164,21 @@ def _open_fmed_pgy_rules_dialog(
                     elective_draft=elective_draft,
                     on_elective_change=refresh_repeatable,
                 )
+                if elective_option is not None:
+                    with ui.column().classes(
+                        "rbs-rotation-editor-subsection w-full gap-3 rounded p-4"
+                    ):
+                        with ui.column().classes("gap-0"):
+                            ui.label("Elective availability").classes(
+                                "rbs-type-section-title"
+                            )
+                            ui.label(
+                                "Choose every week when FMED may fill Elective time."
+                            ).classes("rbs-type-caption rbs-text-muted")
+                        _elective_availability_editor(
+                            instance,
+                            elective_draft["blackout_weeks"],
+                        )
         ui.separator()
         with ui.row().classes("w-full justify-end gap-3 p-4"):
             ui.button("Cancel", on_click=dialog.close).props("flat no-caps")
@@ -183,6 +200,9 @@ def _open_fmed_pgy_rules_dialog(
                         counts,
                         elective_shapes=set(elective_draft.get("shapes", set())),
                         elective_repeatable=bool(elective_draft.get("repeatable")),
+                        elective_blackout_weeks=sorted(
+                            elective_draft.get("blackout_weeks", set())
+                        ),
                     )
                     dialog.close()
                     ui.notify("FMED rules updated", type="positive")

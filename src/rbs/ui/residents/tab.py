@@ -32,6 +32,7 @@ from rbs.ui.residents.ops import (
     vacation_week_for_monday,
 )
 from rbs.ui.residents.schedule import (
+    OpenPdfExport,
     _resident_clinic_half_day_editor,
     _resident_schedule_workspace,
 )
@@ -61,6 +62,7 @@ def render_residents_tab(
     on_schedule_editing_change: Callable[[bool], None] | None = None,
     active_schedule_section: str = "resident_block_schedule",
     on_schedule_section_change=None,
+    on_pdf_open: OpenPdfExport | None = None,
 ) -> None:
     creating = selected_resident_id == NEW_RESIDENT_ID
     selected = next(
@@ -100,6 +102,7 @@ def render_residents_tab(
                 on_schedule_editing_change=on_schedule_editing_change,
                 active_schedule_section=active_schedule_section,
                 on_schedule_section_change=on_schedule_section_change,
+                on_pdf_open=on_pdf_open,
             )
 
 
@@ -210,6 +213,7 @@ def _resident_detail_panel(
     on_schedule_editing_change: Callable[[bool], None] | None = None,
     active_schedule_section: str = "resident_block_schedule",
     on_schedule_section_change=None,
+    on_pdf_open: OpenPdfExport | None = None,
 ) -> None:
     editing = creating
     panel = master_detail.detail_panel()
@@ -261,6 +265,7 @@ def _resident_detail_panel(
                     on_schedule_editing_change=on_schedule_editing_change,
                     active_schedule_section=active_schedule_section,
                     on_schedule_section_change=on_schedule_section_change,
+                    on_pdf_open=on_pdf_open,
                 )
             else:
                 _empty_resident_detail(missing_id)
@@ -285,6 +290,7 @@ def _resident_view(
     on_schedule_editing_change: Callable[[bool], None] | None = None,
     active_schedule_section: str = "resident_block_schedule",
     on_schedule_section_change=None,
+    on_pdf_open: OpenPdfExport | None = None,
 ) -> None:
     from nicegui import ui
 
@@ -327,6 +333,7 @@ def _resident_view(
             on_schedule_editing_change=on_schedule_editing_change,
             active_section=active_schedule_section,
             on_section_change=on_schedule_section_change,
+            on_pdf_open=on_pdf_open,
         )
 
 
@@ -405,18 +412,20 @@ def _resident_form(
                     ui.separator()
                     days_off = _days_off_editor(instance, initial_days_off)
 
-            with ui.column().classes("rbs-resident-form-section w-full gap-3 rounded p-4"):
-                with ui.column().classes("gap-0"):
-                    ui.label("Continuity clinic half-days").classes("rbs-type-section-title")
-                    ui.label(
-                        "These recurring sessions are added to the Clinic Schedule in "
-                        "every eligible week. They are omitted while the resident is on "
-                        "an Away rotation."
-                    ).classes("rbs-type-caption rbs-text-muted")
-                clinic_half_days = _resident_clinic_half_day_editor(
-                    instance,
-                    initial_clinic_half_days,
-                )
+            clinic_half_days = initial_clinic_half_days
+            if not creating:
+                with ui.column().classes("rbs-resident-form-section w-full gap-3 rounded p-4"):
+                    with ui.column().classes("gap-0"):
+                        ui.label("Continuity clinic half-days").classes("rbs-type-section-title")
+                        ui.label(
+                            "These recurring sessions are added to the Clinic Schedule in "
+                            "every eligible week. They are omitted while the resident is on "
+                            "an Away rotation."
+                        ).classes("rbs-type-caption rbs-text-muted")
+                    clinic_half_days = _resident_clinic_half_day_editor(
+                        instance,
+                        initial_clinic_half_days,
+                    )
 
             def save() -> None:
                 try:

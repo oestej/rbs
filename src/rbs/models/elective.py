@@ -31,6 +31,13 @@ class ElectiveRotationOption(StrictModel):
         default=False,
         description=("Whether one resident may take this service more than once as an elective."),
     )
+    blackout_weeks: list[int] = Field(
+        default_factory=list,
+        description=(
+            "Academic weeks when this service cannot fill Elective curriculum time. "
+            "A block may be placed only when every week it covers is available."
+        ),
+    )
 
     @field_validator("rotation_id")
     @classmethod
@@ -60,9 +67,28 @@ class ElectiveRotationOption(StrictModel):
             raise ValueError("eligible elective block sizes must be unique")
         return normalized
 
-    def allows(self, pgy: int, duration_weeks: int) -> bool:
-        """Return whether this policy admits one training-level block shape."""
-        return pgy in self.eligible_pgys and duration_weeks in self.eligible_block_sizes
+    @field_validator("blackout_weeks")
+    @classmethod
+    def normalize_blackout_weeks(cls, values: list[int]) -> list[int]:
+        normalized = sorted(int(value) for value in values)
+        if any(value < 1 for value in normalized):
+            raise ValueError("elective blackout weeks must be positive")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("elective blackout weeks must be unique")
+        return normalized
+
+    def allows(
+        self,
+        pgy: int,
+        duration_weeks: int,
+        *,
+        weeks: list[int] | tuple[int, ...] | None = None,
+    ) -> bool:
+        """Return whether this policy admits one training-level block placement."""
+        shape_allowed = pgy in self.eligible_pgys and duration_weeks in self.eligible_block_sizes
+        return shape_allowed and (
+            weeks is None or not set(weeks).intersection(self.blackout_weeks)
+        )
 
 
 class ElectiveConfiguration(StrictModel):

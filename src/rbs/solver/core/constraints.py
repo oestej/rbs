@@ -196,6 +196,12 @@ def _capacity(context: PlanningContext) -> None:
         occurrences = context.by_rotation.get(rotation.id, [])
         if not occurrences:
             continue
+        option = context.instance.electives.option_for(rotation.id)
+        blackout_weeks = (
+            set(option.blackout_weeks)
+            if option is not None and rotation.kind is RotationKind.ELECTIVE
+            else set()
+        )
         for week in context.weeks:
             literals = [
                 context.placements[occurrence.key, start]
@@ -206,7 +212,9 @@ def _capacity(context: PlanningContext) -> None:
             _add_capacity_bounds(
                 context,
                 literals,
-                minimum=rotation.capacity.min_concurrent,
+                minimum=(
+                    None if week in blackout_weeks else rotation.capacity.min_concurrent
+                ),
                 maximum=rotation.capacity.max_concurrent,
                 label=f"{rotation.id} total",
                 week=week,
@@ -222,7 +230,7 @@ def _capacity(context: PlanningContext) -> None:
                 _add_capacity_bounds(
                     context,
                     pgy_literals,
-                    minimum=rule.min_concurrent,
+                    minimum=None if week in blackout_weeks else rule.min_concurrent,
                     maximum=rule.max_concurrent,
                     label=(
                         f"{rotation.id} "

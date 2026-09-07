@@ -230,6 +230,11 @@ def replace_schedule_block(
                 weeks=block.weeks,
                 block_start_week=block.start_week,
                 block_duration_weeks=block.duration_weeks,
+                # A manual block edit places the block immediately, but clinic
+                # half-days still belong to the next solve. Leaving them empty
+                # keeps the draft honest while the UNKNOWN status below makes
+                # the required reconciliation explicit to the workspace UI.
+                clinic_slots=[],
                 vacation_weeks_during_block=sorted(
                     target_weeks & instance.resident_scheduling_vacation_weeks(block.resident_id)
                 ),

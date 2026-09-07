@@ -165,6 +165,28 @@ def test_mandatory_elective_policy_filters_by_training_level_and_repeatability()
     assert "night_float" in {rotation.id for rotation in instance.elective_options_for(2, 2)}
 
 
+def test_elective_blackout_weeks_are_normalized_preserved_and_calendar_bounded() -> None:
+    instance = set_elective_eligibility(
+        sample_instance(),
+        "night_float",
+        eligible=True,
+        blackout_weeks=[12, 9, 10, 11, 9],
+    )
+
+    assert instance.elective_blackout_weeks("night_float") == (9, 10, 11, 12)
+
+    preserved = set_elective_eligibility(instance, "night_float", eligible=True)
+    assert preserved.elective_blackout_weeks("night_float") == (9, 10, 11, 12)
+
+    with pytest.raises(ValueError, match="must be between 1 and 52"):
+        set_elective_eligibility(
+            instance,
+            "night_float",
+            eligible=True,
+            blackout_weeks=[53],
+        )
+
+
 def test_mandatory_elective_sizes_derive_from_training_level_rules() -> None:
     instance = _instance_with_two_elective_block_sizes()
 
@@ -445,14 +467,16 @@ def test_mandatory_rotation_owns_its_elective_availability() -> None:
         sample_instance(),
         "night_float",
         eligible=True,
+        blackout_weeks=[9, 10, 11, 12],
     )
     rotation = instance.rotation("night_float")
+    saves: list = []
     before = set(ui.context.client.elements)
     _rotation_editor(
         instance,
         rotation,
         on_cancel=lambda: None,
-        on_save=lambda _instance, _rotation_id: None,
+        on_save=lambda updated, rotation_id: saves.append((updated, rotation_id)),
     )
     created = [
         element
@@ -465,6 +489,11 @@ def test_mandatory_rotation_owns_its_elective_availability() -> None:
         if element.__class__.__name__ == "Checkbox"
     }
     toggles = [element for element in created if element.__class__.__name__ == "Toggle"]
+    tabs = [
+        element._props.get("label")
+        for element in created
+        if element.__class__.__name__ == "Tab"
+    ]
     size_controls = [
         element
         for element in created
@@ -488,6 +517,16 @@ def test_mandatory_rotation_owns_its_elective_availability() -> None:
     assert size_controls == []
     assert instance.eligible_elective_block_sizes("night_float") == (2,)
     assert any(getattr(element, "_text", None) == "Elective availability" for element in created)
+    assert tabs == [
+        "General",
+        "Training-level rules",
+        "Clinic",
+        "Availability",
+        "Advanced",
+    ]
+
+    _click(_button(created, "Save rotation"))
+    assert saves[-1][0].elective_blackout_weeks("night_float") == (9, 10, 11, 12)
 
     disabled = replace_standard_rotation(
         instance,
@@ -549,7 +588,7 @@ def test_new_elective_uses_the_full_screen_editor() -> None:
     # No separate add dialog: creation shares the master-detail editor.
     assert not any(element.__class__.__name__ == "Dialog" for element in created)
     assert any("rbs-master-detail" in getattr(element, "_classes", []) for element in created)
-    assert tabs == {"General", "Training-level rules", "Clinic"}
+    assert tabs == {"General", "Training-level rules", "Clinic", "Availability"}
     assert "Save elective" in button_labels
     assert "Cancel" not in button_labels
     assert "New elective" in text
@@ -630,7 +669,7 @@ def test_existing_elective_uses_the_master_detail_editor() -> None:
     )
     assert {
         element._props.get("label") for element in created if element.__class__.__name__ == "Tab"
-    } == {"General", "Training-level rules", "Clinic"}
+    } == {"General", "Training-level rules", "Clinic", "Availability"}
     assert not any(
         element.__class__.__name__ == "Button" and element._props.get("label") == "Cancel"
         for element in created
@@ -639,6 +678,51 @@ def test_existing_elective_uses_the_master_detail_editor() -> None:
         str(getattr(element, "_text", "")).startswith("Shared Elective color ·")
         for element in created
     )
+
+
+def test_elective_availability_is_the_fourth_tab_and_saves_block_blackouts() -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    saves: list = []
+    before = set(ui.context.client.elements)
+    _elective_rotation_editor(
+        instance,
+        instance.rotation("palliative_care"),
+        on_cancel=lambda: None,
+        on_save=lambda updated, rotation_id: saves.append((updated, rotation_id)),
+    )
+    created = _created_since(before)
+
+    tabs = [
+        element._props.get("label")
+        for element in created
+        if element.__class__.__name__ == "Tab"
+    ]
+    week_controls = [
+        element
+        for element in created
+        if element.__class__.__name__ == "Checkbox"
+        and str(getattr(element, "_text", "")).startswith("Week ")
+    ]
+    black_out_block_c = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Button"
+        and element._props.get("aria-label") == "Black out Block C/3"
+    )
+
+    assert tabs == ["General", "Training-level rules", "Clinic", "Availability"]
+    assert len(week_controls) == instance.calendar.weeks
+    assert all(control.value is True for control in week_controls)
+
+    _click(black_out_block_c)
+    assert [control.value for control in week_controls[8:12]] == [False] * 4
+    _click(_button(created, "Save elective"))
+
+    updated, rotation_id = saves[-1]
+    assert rotation_id == "palliative_care"
+    assert updated.elective_blackout_weeks(rotation_id) == (9, 10, 11, 12)
 
 
 def test_elective_detail_uses_elective_rules_without_requirement_pills() -> None:
@@ -697,6 +781,41 @@ def test_schedule_validation_enforces_an_electives_maximum_total_weeks() -> None
     assert any(
         f"{resident.id} has 4 total weeks on {rotation.id}, exceeding its 2-week maximum" in error
         for error in errors
+    )
+
+
+def test_schedule_validation_rejects_an_elective_on_a_blackout_week() -> None:
+    rotation = _standalone_elective()
+    instance = add_elective_rotation(
+        sample_instance(),
+        rotation,
+        blackout_weeks=[2],
+    )
+    resident = next(item for item in instance.residents if item.pgy == 1)
+    schedule = Schedule(
+        meta=ScheduleMeta(
+            academic_year=instance.academic_year,
+            engine=SolverEngineName.STUB,
+            status=SolverStatus.UNKNOWN,
+        ),
+        assignments=[
+            Assignment(
+                resident_id=resident.id,
+                rotation_id=rotation.id,
+                kind=RotationKind.ELECTIVE,
+                elective=True,
+                start_week=1,
+                end_week=2,
+                weeks=[1, 2],
+            )
+        ],
+    )
+
+    from rbs.solver.validation import validate_schedule
+
+    assert any(
+        "elective block overlaps blackout week(s) [2]" in error
+        for error in validate_schedule(instance, schedule).errors
     )
 
 

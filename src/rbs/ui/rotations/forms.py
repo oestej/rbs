@@ -44,6 +44,7 @@ from rbs.ui.editor_common import (
     _validation_message,
     _weeks_label,
 )
+from rbs.ui.rotations.availability import _elective_availability_editor
 from rbs.ui.rotations.ops import (
     add_mandatory_rotation,
     elective_shapes_for_rotation,
@@ -124,6 +125,7 @@ def _rotation_editor(
     elective_option = instance.electives.option_for(rotation.id) if rotation is not None else None
     elective_draft: Draft = {
         "repeatable": bool(elective_option and elective_option.repeatable),
+        "blackout_weeks": set(elective_option.blackout_weeks if elective_option else ()),
         "shapes": (
             elective_shapes_for_rotation(instance, rotation.id) if rotation is not None else set()
         ),
@@ -205,6 +207,9 @@ def _rotation_editor(
                     counts,
                     elective_shapes=elective_shapes,
                     elective_repeatable=bool(elective_draft.get("repeatable")),
+                    elective_blackout_weeks=sorted(
+                        elective_draft.get("blackout_weeks", set())
+                    ),
                 )
             else:
                 updated = replace_standard_rotation(
@@ -215,6 +220,9 @@ def _rotation_editor(
                     resident_waivers=resident_waiver_drafts,
                     elective_shapes=elective_shapes,
                     elective_repeatable=bool(elective_draft.get("repeatable")),
+                    elective_blackout_weeks=sorted(
+                        elective_draft.get("blackout_weeks", set())
+                    ),
                     group_members_by_pgy=group_draft,
                     counts=counts,
                 )
@@ -262,6 +270,11 @@ def _rotation_editor(
                 icon="groups",
             )
             clinic_tab = ui.tab("rotation_clinic", label="Clinic", icon="event_available")
+            availability_tab = (
+                ui.tab("rotation_availability", label="Availability", icon="event_busy")
+                if elective_option is not None
+                else None
+            )
             # Exceptions reference a saved rotation, so a rotation being
             # created has no Advanced tab yet.
             advanced_tab = (
@@ -309,6 +322,22 @@ def _rotation_editor(
                         ).classes("rbs-type-caption rbs-text-muted")
                     clinic_editor = ui.column().classes("w-full")
                     render_clinic_editor()
+
+            if availability_tab is not None:
+                with ui.tab_panel(availability_tab).classes("p-0"):
+                    with ui.column().classes("w-full gap-4 p-5"):
+                        with ui.column().classes("gap-0"):
+                            ui.label("Elective availability").classes(
+                                "rbs-type-section-title"
+                            )
+                            ui.label(
+                                "Choose every week when this service may fill Elective time. "
+                                "Use the block controls to update a whole four-week block."
+                            ).classes("rbs-type-caption rbs-text-muted")
+                        _elective_availability_editor(
+                            instance,
+                            elective_draft["blackout_weeks"],
+                        )
 
             if advanced_tab is not None and rotation is not None:
                 with ui.tab_panel(advanced_tab).classes("p-0"):

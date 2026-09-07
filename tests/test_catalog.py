@@ -125,15 +125,23 @@ def test_catalog_schema_rejects_curriculum_choice_groups() -> None:
         ConstraintCatalog.model_validate(raw)
 
 
+def test_v6_catalogs_migrate_with_electives_available_all_year() -> None:
+    raw = bootstrap_catalog().model_dump(mode="json")
+    raw["schema_version"] = 6
+    for option in raw["electives"]["rotation_options"]:
+        option.pop("blackout_weeks")
+
+    migrated = ConstraintCatalog.model_validate(raw)
+
+    assert migrated.schema_version == 7
+    assert all(not option.blackout_weeks for option in migrated.electives.rotation_options)
+
+
 def test_pre_v6_catalogs_are_rejected() -> None:
     raw = bootstrap_catalog().model_dump(mode="json")
-    raw["schema_version"] = 4
-
-    with pytest.raises(ValidationError, match="Input should be 6"):
-        ConstraintCatalog.model_validate(raw)
-
     raw["schema_version"] = 5
-    with pytest.raises(ValidationError, match="Input should be 6"):
+
+    with pytest.raises(ValidationError, match="Input should be 7"):
         ConstraintCatalog.model_validate(raw)
 
 
@@ -146,15 +154,17 @@ def test_instance_catalog_projection_preserves_explicit_elective_policy() -> Non
         eligible=True,
         eligible_pgys=[2],
         repeatable=False,
+        blackout_weeks=[9, 10, 11, 12],
     )
 
     catalog = instance.constraint_catalog()
     option = catalog.electives.option_for("night_float")
 
-    assert catalog.schema_version == 6
+    assert catalog.schema_version == 7
     assert option is not None
     assert option.eligible_pgys == [2]
     assert not option.repeatable
+    assert option.blackout_weeks == [9, 10, 11, 12]
 
 
 def test_legacy_rotation_shape_is_rejected() -> None:

@@ -196,6 +196,20 @@ def render_elective_preferences(
 
         stack = ui.column().classes("w-full gap-2")
 
+        def persist_preferences() -> None:
+            """Save the working stack immediately; edits never wait for a button."""
+            if on_schedule_save is None:
+                return
+            try:
+                updated = replace_elective_preferences(
+                    instance,
+                    resident.id,
+                    preferences,
+                )
+                on_schedule_save(updated, resident.id, False)
+            except (ValidationError, ValueError) as exc:
+                ui.notify(str(exc), type="negative", multi_line=True)
+
         def move(source: int, target: int, position: str = "before") -> None:
             if source == target or not (0 <= source < len(preferences)):
                 return
@@ -204,6 +218,7 @@ def render_elective_preferences(
                 target -= 1
             insert_at = target + (1 if position == "after" else 0)
             preferences.insert(max(0, min(insert_at, len(preferences))), item)
+            persist_preferences()
             render_stack()
 
         def handle_drop(event) -> None:
@@ -216,6 +231,18 @@ def render_elective_preferences(
                 )
             except (TypeError, ValueError):
                 ui.notify("Unable to reorder that preference", type="negative")
+
+        def remove_preference(index: int) -> None:
+            if not (0 <= index < len(preferences)):
+                return
+            rotation = instance.rotation(preferences[index].rotation_id)
+            ui.notify(
+                f"{rotation.code} · {rotation.name} removed; solve required",
+                type="positive",
+            )
+            preferences.pop(index)
+            persist_preferences()
+            render_stack()
 
         def render_stack() -> None:
             stack.clear()
@@ -285,9 +312,8 @@ def render_elective_preferences(
                             down.set_enabled(rank < len(preferences) - 1)
                             ui.button(
                                 icon="delete_outline",
-                                on_click=lambda _event=None, index=rank: (
-                                    preferences.pop(index),
-                                    render_stack(),
+                                on_click=lambda _event=None, index=rank: remove_preference(
+                                    index
                                 ),
                             ).props(
                                 f"flat round dense color=negative "
@@ -304,11 +330,12 @@ def render_elective_preferences(
             .props("outlined options-dense")
             .classes("w-full max-w-xl")
         )
+        selected.add_slot("prepend", '<q-icon name="add" />')
 
-        def add_request() -> None:
+        def add_selected_request(_event=None) -> None:
             value = str(selected.value or "")
+            selected.value = None
             if "|" not in value:
-                ui.notify("Choose a service to add", type="warning")
                 return
             rotation_id, duration_text = value.rsplit("|", 1)
             duration = int(duration_text)
@@ -333,38 +360,21 @@ def render_elective_preferences(
                     type="warning",
                 )
                 return
+            rotation = instance.rotation(rotation_id)
+            ui.notify(
+                f"{rotation.code} · {rotation.name} added; solve required",
+                type="positive",
+            )
             preferences.append(
                 ElectivePreferenceRequest(
                     rotation_id=rotation_id,
                     duration_weeks=duration,
                 )
             )
-            selected.value = None
+            persist_preferences()
             render_stack()
 
-        with ui.row().classes("items-center gap-2 flex-wrap"):
-            ui.button("Add request", icon="add", on_click=add_request).props("outline no-caps")
-
-            def save() -> None:
-                if on_schedule_save is None:
-                    return
-                try:
-                    updated = replace_elective_preferences(
-                        instance,
-                        resident.id,
-                        preferences,
-                    )
-                    ui.notify("Elective preferences saved; solve required", type="positive")
-                    on_schedule_save(updated, resident.id, False)
-                except (ValidationError, ValueError) as exc:
-                    ui.notify(str(exc), type="negative", multi_line=True)
-
-            save_button = ui.button(
-                "Save preferences",
-                icon="save",
-                on_click=save,
-            ).props("unelevated no-caps")
-            save_button.set_enabled(on_schedule_save is not None)
+        selected.on_value_change(add_selected_request)
 
 
 def _empty_state(title: str, description: str) -> None:

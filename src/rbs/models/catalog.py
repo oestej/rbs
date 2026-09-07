@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import Field, model_validator
 
@@ -22,13 +22,23 @@ if TYPE_CHECKING:
 class ConstraintCatalog(StrictModel):
     """Versioned block constraints that can be imported and stored independently."""
 
-    schema_version: Literal[6] = 6
+    schema_version: Literal[7] = 7
     calendar_weeks: int = Field(default=52, ge=1)
     rotations: list[Rotation]
     requirements: list[PGYCurriculum] = Field(min_length=1)
     rotation_groups: list[RotationGroup] = Field(default_factory=list)
     electives: ElectiveConfiguration
     clinic_policy: ClinicPolicy
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_v6(cls, value: Any) -> Any:
+        """Upgrade catalogs written before elective blackout weeks existed."""
+        if not isinstance(value, dict) or value.get("schema_version") != 6:
+            return value
+        migrated = dict(value)
+        migrated["schema_version"] = 7
+        return migrated
 
     @model_validator(mode="after")
     def check_integrity(self) -> ConstraintCatalog:
@@ -51,7 +61,7 @@ class ConstraintCatalog(StrictModel):
     @classmethod
     def from_instance(cls, instance: SolverProblem) -> ConstraintCatalog:
         return cls(
-            schema_version=6,
+            schema_version=7,
             calendar_weeks=instance.calendar.weeks,
             rotations=instance.rotations,
             requirements=instance.requirements,
@@ -96,6 +106,7 @@ def validate_catalog_integrity(
         by_rotation,
         elective_pgys,
         known_levels,
+        calendar_weeks,
     )
     _validate_clinic_references(rotations, set(clinic_policy.site_ids))
     _validate_rotation_groups(rotation_groups, by_rotation, requirements)
@@ -227,6 +238,7 @@ def _validate_elective_options(
     by_rotation: dict[str, Rotation],
     elective_pgys: dict[int, set[int]],
     known_levels: set[int],
+    calendar_weeks: int,
 ) -> None:
     known = set(by_rotation)
     unknown = set(electives.eligible_rotation_ids) - known
@@ -252,6 +264,7 @@ def _validate_elective_options(
             by_rotation[option.rotation_id],
             elective_pgys,
             known_levels,
+            calendar_weeks,
         )
 
 
@@ -260,6 +273,7 @@ def _validate_elective_option(
     rotation: Rotation,
     elective_pgys: dict[int, set[int]],
     known_levels: set[int],
+    calendar_weeks: int,
 ) -> None:
     if not option.eligible_pgys:
         raise ValueError(
@@ -302,6 +316,13 @@ def _validate_elective_option(
         raise ValueError(
             f"eligible elective rotation {option.rotation_id!r} has no matching "
             f"Elective block configuration for training level(s): {labels}"
+        )
+    outside_calendar = [week for week in option.blackout_weeks if week > calendar_weeks]
+    if outside_calendar:
+        labels = ", ".join(str(week) for week in outside_calendar)
+        raise ValueError(
+            f"eligible elective rotation {option.rotation_id!r} has blackout "
+            f"week(s) outside the {calendar_weeks}-week calendar: {labels}"
         )
 
 

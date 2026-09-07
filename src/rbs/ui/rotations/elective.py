@@ -31,6 +31,7 @@ from rbs.ui.editor_common import (
     _validation_message,
     _weeks_label,
 )
+from rbs.ui.rotations.availability import _elective_availability_editor
 from rbs.ui.rotations.fmed import _open_fmed_pgy_rules_dialog
 from rbs.ui.rotations.forms import (
     _clinic_rule_editor,
@@ -814,6 +815,9 @@ def _elective_rotation_editor(
             else list(instance.elective_block_sizes)
         ),
     }
+    blackout_weeks = set(
+        instance.elective_blackout_weeks(rotation.id) if rotation is not None else ()
+    )
     academic_half_day = instance.clinic_policy.recurring_academic_half_day
     site_options = {site.id: site.name for site in instance.clinic_policy.sites}
     default_site_ids = list(instance.clinic_policy.site_ids)
@@ -857,6 +861,7 @@ def _elective_rotation_editor(
                     instance,
                     replacement,
                     eligible_block_sizes=eligible_block_sizes,
+                    blackout_weeks=sorted(blackout_weeks),
                 )
                 if creating
                 else replace_elective_rotation(
@@ -865,6 +870,7 @@ def _elective_rotation_editor(
                     replacement,
                     eligible_pgys=_elective_rule_pgys(draft),
                     eligible_block_sizes=eligible_block_sizes,
+                    blackout_weeks=sorted(blackout_weeks),
                 )
             )
             if save_error is not None:
@@ -912,6 +918,11 @@ def _elective_rotation_editor(
                 label="Clinic",
                 icon="event_available",
             )
+            availability_tab = ui.tab(
+                "elective_detail_availability",
+                label="Availability",
+                icon="event_busy",
+            )
 
         with (
             ui.tab_panels(editor_tabs, value=general_tab)
@@ -954,6 +965,17 @@ def _elective_rotation_editor(
                         ui.label("Continuity clinic").classes("rbs-type-section-title")
                     clinic_editor = ui.column().classes("w-full min-w-0 max-w-full")
                     render_clinic_editor()
+
+            with ui.tab_panel(availability_tab).classes("p-0"):
+                with ui.column().classes("w-full gap-4 p-5"):
+                    with ui.column().classes("gap-0"):
+                        ui.label("Elective availability").classes("rbs-type-section-title")
+                        ui.label(
+                            "Choose every week when this elective may be scheduled. "
+                            "Use the block controls to make a whole four-week block "
+                            "available or unavailable at once."
+                        ).classes("rbs-type-caption rbs-text-muted")
+                    _elective_availability_editor(instance, blackout_weeks)
 
         with ui.row().classes(
             "rbs-rotation-editor-actions w-full items-center justify-end gap-2 px-5 py-3"

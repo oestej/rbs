@@ -110,6 +110,7 @@ class PlanningContext:
         placements: dict[tuple[str, int], Any] = {}
         by_resident = {resident_id: [] for resident_id in residents}
         by_rotation = {rotation_id: [] for rotation_id in rotations}
+        placeable_occurrences: list[Occurrence] = []
 
         for occurrence in occurrences:
             rotation = rotations[occurrence.rotation_id]
@@ -127,10 +128,16 @@ class PlanningContext:
                 )
             )
             if not legal:
+                # An unavailable elective candidate can simply lose to another
+                # requested service or the Clinic fallback in its shared group.
+                # Required rotations and the fallback itself still need a domain.
+                if occurrence.preference_managed and not occurrence.elective_fallback:
+                    continue
                 raise ModelBuildError(
                     f"{occurrence.resident_id} has no legal start weeks for "
                     f"{occurrence.rotation_id} ({occurrence.duration_weeks}wk)"
                 )
+            placeable_occurrences.append(occurrence)
             starts[occurrence.key] = legal
             by_resident[occurrence.resident_id].append(occurrence)
             by_rotation[occurrence.rotation_id].append(occurrence)
@@ -143,7 +150,7 @@ class PlanningContext:
             options=options,
             residents=residents,
             rotations=rotations,
-            occurrences=occurrences,
+            occurrences=placeable_occurrences,
             weeks=weeks,
             starts=starts,
             placements=placements,

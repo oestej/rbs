@@ -141,6 +141,7 @@ def add_mandatory_rotation(
     eligible_elective_block_sizes: Iterable[int] | None = None,
     elective_shapes: Iterable[tuple[int, int]] | None = None,
     elective_repeatable: bool = False,
+    elective_blackout_weeks: Iterable[int] = (),
     group_members_by_pgy: dict[int, list[str]] | None = None,
 ) -> SchedulerInput:
     """Add one standard rotation, spending the level's unallocated weeks.
@@ -228,6 +229,10 @@ def add_mandatory_rotation(
                 eligible_pgys=pgys,
                 eligible_block_sizes=sizes,
                 repeatable=elective_repeatable,
+                blackout_weeks=_normalize_elective_blackout_weeks(
+                    instance,
+                    elective_blackout_weeks,
+                ),
             ).model_dump(mode="json")
         )
     for curriculum in raw["requirements"]:
@@ -352,6 +357,7 @@ def replace_standard_rotation(
     eligible_elective_block_sizes: Iterable[int] | None = None,
     elective_shapes: Iterable[tuple[int, int]] | None = None,
     elective_repeatable: bool | None = None,
+    elective_blackout_weeks: Iterable[int] | None = None,
     group_members_by_pgy: dict[int, list[str]] | None = None,
     counts: dict[tuple[int, int], int] | None = None,
 ) -> SchedulerInput:
@@ -483,6 +489,18 @@ def replace_standard_rotation(
                         elective_repeatable
                         if elective_repeatable is not None
                         else bool(original_option and original_option.repeatable)
+                    ),
+                    blackout_weeks=_normalize_elective_blackout_weeks(
+                        instance,
+                        (
+                            elective_blackout_weeks
+                            if elective_blackout_weeks is not None
+                            else (
+                                original_option.blackout_weeks
+                                if original_option is not None
+                                else ()
+                            )
+                        ),
                     ),
                 )
             )
@@ -792,6 +810,7 @@ def set_elective_eligibility(
     eligible_pgys: Iterable[int] | None = None,
     eligible_block_sizes: Iterable[int] | None = None,
     repeatable: bool | None = None,
+    blackout_weeks: Iterable[int] | None = None,
 ) -> SchedulerInput:
     """Enable or disable one configured service as an Elective option."""
     try:
@@ -846,6 +865,18 @@ def set_elective_eligibility(
                     if repeatable is not None
                     else bool(original_option and original_option.repeatable)
                 ),
+                blackout_weeks=_normalize_elective_blackout_weeks(
+                    instance,
+                    (
+                        blackout_weeks
+                        if blackout_weeks is not None
+                        else (
+                            original_option.blackout_weeks
+                            if original_option is not None
+                            else ()
+                        )
+                    ),
+                ),
             )
         )
     configuration = ElectiveConfiguration(
@@ -862,6 +893,7 @@ def add_elective_rotation(
     eligible_pgys: Iterable[int] | None = None,
     eligible_block_sizes: Iterable[int] | None = None,
     repeatable: bool = False,
+    blackout_weeks: Iterable[int] = (),
 ) -> SchedulerInput:
     """Add a standalone Elective service and make it eligible immediately.
 
@@ -896,6 +928,10 @@ def add_elective_rotation(
                 eligible_pgys=pgys,
                 eligible_block_sizes=sizes,
                 repeatable=repeatable,
+                blackout_weeks=_normalize_elective_blackout_weeks(
+                    instance,
+                    blackout_weeks,
+                ),
             ),
         ],
     )
@@ -936,6 +972,7 @@ def replace_elective_rotation(
     eligible_pgys: Iterable[int] | None = None,
     eligible_block_sizes: Iterable[int] | None = None,
     repeatable: bool | None = None,
+    blackout_weeks: Iterable[int] | None = None,
 ) -> SchedulerInput:
     """Replace a standalone Elective service."""
     try:
@@ -978,6 +1015,16 @@ def replace_elective_rotation(
                 repeatable
                 if repeatable is not None
                 else bool(original_option and original_option.repeatable)
+            ),
+            blackout_weeks=_normalize_elective_blackout_weeks(
+                instance,
+                (
+                    blackout_weeks
+                    if blackout_weeks is not None
+                    else (
+                        original_option.blackout_weeks if original_option is not None else ()
+                    )
+                ),
             ),
         )
         if option.rotation_id == original_id
@@ -1139,6 +1186,22 @@ def _normalize_elective_block_sizes(
     return sizes
 
 
+def _normalize_elective_blackout_weeks(
+    instance: SchedulerInput,
+    values: Iterable[int],
+) -> list[int]:
+    """Normalize unavailable weeks and keep them inside the academic year."""
+    weeks = sorted({int(value) for value in values})
+    outside = [week for week in weeks if week < 1 or week > instance.calendar.weeks]
+    if outside:
+        labels = ", ".join(str(week) for week in outside)
+        raise ValueError(
+            f"elective blackout week(s) must be between 1 and "
+            f"{instance.calendar.weeks}: {labels}"
+        )
+    return weeks
+
+
 def _normalize_elective_pgys(
     instance: SchedulerInput,
     rotation: Rotation,
@@ -1224,6 +1287,7 @@ def replace_fmed_pgy_rules(
     eligible_elective_block_sizes: Iterable[int] | None = None,
     elective_shapes: Iterable[tuple[int, int]] | None = None,
     elective_repeatable: bool | None = None,
+    elective_blackout_weeks: Iterable[int] | None = None,
 ) -> SchedulerInput:
     """Replace editable FMED staffing, block, and clinic rules.
 
@@ -1294,6 +1358,18 @@ def replace_fmed_pgy_rules(
                         if elective_repeatable is not None
                         else bool(original_option and original_option.repeatable)
                     ),
+                    blackout_weeks=_normalize_elective_blackout_weeks(
+                        instance,
+                        (
+                            elective_blackout_weeks
+                            if elective_blackout_weeks is not None
+                            else (
+                                original_option.blackout_weeks
+                                if original_option is not None
+                                else ()
+                            )
+                        ),
+                    ),
                 )
             )
         elective_configuration = ElectiveConfiguration(
@@ -1310,6 +1386,7 @@ def replace_fmed_pgy_rules(
         elective_configuration=elective_configuration,
         elective_shapes=elective_shapes,
         elective_repeatable=elective_repeatable,
+        elective_blackout_weeks=elective_blackout_weeks,
     )
 
 
@@ -1324,6 +1401,7 @@ def _replace_required_rotation_rules(
     elective_configuration: ElectiveConfiguration | None = None,
     elective_shapes: Iterable[tuple[int, int]] | None = None,
     elective_repeatable: bool | None = None,
+    elective_blackout_weeks: Iterable[int] | None = None,
 ) -> SchedulerInput:
     """Replace required-block rules, spending or freeing unallocated weeks.
 
@@ -1405,6 +1483,18 @@ def _replace_required_rotation_rules(
                         elective_repeatable
                         if elective_repeatable is not None
                         else bool(original_option and original_option.repeatable)
+                    ),
+                    blackout_weeks=_normalize_elective_blackout_weeks(
+                        instance,
+                        (
+                            elective_blackout_weeks
+                            if elective_blackout_weeks is not None
+                            else (
+                                original_option.blackout_weeks
+                                if original_option is not None
+                                else ()
+                            )
+                        ),
                     ),
                 )
             )

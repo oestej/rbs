@@ -83,6 +83,17 @@ class SolverIntegrityMixin:
                     f"lock: {lock.rotation_id!r} is not an eligible Elective rotation "
                     "or Clinic fallback"
                 )
+            option = self.electives.option_for(lock.rotation_id) if lock.elective else None
+            blackout_overlap = (
+                sorted(set(lock.weeks).intersection(option.blackout_weeks))
+                if option is not None
+                else []
+            )
+            if blackout_overlap:
+                raise ValueError(
+                    f"lock: {lock.rotation_id!r} is unavailable during blackout "
+                    f"week(s) {blackout_overlap}"
+                )
             available = self.available_weeks(
                 resident.pgy,
                 lock.rotation_id,

@@ -85,6 +85,10 @@ class DesktopDocumentController:
 
     application_name = "RBS Desktop"
 
+    #: The controller runs beside the user, so generated files can open in
+    #: native applications instead of inside the desktop window.
+    opens_exports_natively: bool = True
+
     def __init__(
         self,
         store: Store,

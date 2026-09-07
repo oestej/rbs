@@ -225,15 +225,34 @@ def test_importing_a_file_with_no_workspaces_is_refused(tmp_path) -> None:
         _store(tmp_path).import_workspace_rbsc(payload)
 
 
-def test_pre_v7_files_are_rejected(tmp_path) -> None:
+def test_pre_v8_files_are_rejected(tmp_path) -> None:
     from pydantic import ValidationError
 
     source = _store(tmp_path / "a")
     payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
     payload["schema_version"] = 1
 
-    with pytest.raises(ValidationError, match="Input should be 7"):
+    with pytest.raises(ValidationError, match="Input should be 8"):
         _store(tmp_path / "b").import_workspace_rbsc(json.dumps(payload))
+
+
+def test_v7_files_are_upgraded_with_electives_available_all_year(tmp_path) -> None:
+    source = _store(tmp_path / "a")
+    payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
+    payload["schema_version"] = 7
+    for record in payload["catalogs"]:
+        record["catalog"]["schema_version"] = 6
+        for option in record["catalog"]["electives"]["rotation_options"]:
+            option.pop("blackout_weeks")
+
+    target = _store(tmp_path / "b")
+    imported = target.import_workspace_rbsc(json.dumps(payload))[0]
+
+    assert imported.instance.electives.rotation_options
+    assert all(
+        not option.blackout_weeks
+        for option in imported.instance.electives.rotation_options
+    )
 
 
 # ---- desk cap ----------------------------------------------------------

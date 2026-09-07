@@ -2,6 +2,49 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Residents:** Adding or changing a block now saves it as an immediate
+  calendar assignment with clinic half-days left open, while marking the case
+  as needing a solve. The editor no longer falls back to a pending-only lock
+  when the working schedule cannot be saved with it.
+- **Residents:** The rotation menu in the block editor now clears its existing
+  text when typing ahead, so a new search starts from an empty box instead of
+  appending to the current selection.
+- **Residents:** The rotation menu in the block editor now greys out Mandatory
+  rotations the resident already has on their schedule, so they cannot be added
+  a second time. Blocks pending solve count as scheduled, while Elective
+  options may repeat and stay enabled. A new block also opens on the first
+  still-available rotation instead of a greyed-out default, and saving a
+  greyed-out rotation is rejected.
+- **Residents:** The block editor now disables weeks that overlap another
+  block or manual pin on the resident's schedule instead of offering them,
+  and saving an overlapping range is rejected instead of displacing the
+  existing block.
+- **Residents:** Manually locked schedule blocks now show a "Locked" status
+  instead of "Manual".
+- **Residents:** The clinic schedule header now uses the same Show completed
+  / Edit schedule order as the block schedule, and both headers pin those
+  controls to the right so they no longer jump left when the row wraps.
+- **Residents:** The block and clinic schedule editors now say "Return to
+  view" instead of "Done editing". Every change already saves the moment it
+  is made, so returning to view is navigation only and never required to
+  save.
+- **Residents:** The block schedule editor has a "Delete all unlocked"
+  button with a confirmation step that deletes unlocked blocks together
+  while keeping locked blocks. A new Solve is required afterwards.
+- **Residents:** Elective preferences no longer need Add or Save buttons.
+  Choosing a service in the (now clearly marked) add menu appends it at
+  once, and reordering or removing requests saves automatically.
+- **Residents:** The New resident form no longer shows the continuity
+  clinic half-days section; like vacation and days off, it is configured
+  when editing the resident instead.
+- **Residents and Clinic schedule:** PDF exports now open in a new browser
+  window instead of downloading. In the desktop app they open in the
+  user's preferred PDF viewer rather than inside the app window.
+- **PDF exports:** Every page now shows the export date and time in the top
+  right, with a readable month, AM/PM time, and local time zone.
+
 ## [0.1.6] - 2026-09-07
 
 ### Changed

@@ -301,8 +301,10 @@ def test_replace_schedule_block_places_it_and_clears_whole_overlapping_blocks() 
     placed = updated.assignment_for(resident.id, 3)
     assert placed is not None
     assert placed.kind is RotationKind.CLINIC
+    assert placed.clinic_slots == []
     assert placed.locked_weeks == [3, 4]
     assert updated.assignment_for(resident.id, 1) is None
+    assert updated.is_working_draft
     assert updated.meta.status is SolverStatus.UNKNOWN
     assert updated.meta.solver_status is SolverStatus.UNKNOWN
     assert updated.meta.notes[-1].endswith("solve required")

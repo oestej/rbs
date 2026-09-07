@@ -29,6 +29,12 @@ def _validate_elective_policies(
                 f"available for {instance.training_level_label(resident.pgy, compact=True)} "
                 f"in {assignment.block_duration_weeks}-week blocks"
             )
+        blackout_overlap = sorted(set(assignment.weeks).intersection(option.blackout_weeks))
+        if blackout_overlap:
+            errors.append(
+                f"{assignment.resident_id} {assignment.rotation_id}: elective block overlaps "
+                f"blackout week(s) {blackout_overlap}"
+            )
         counts[assignment.resident_id, assignment.rotation_id] += 1
 
     for (resident_id, rotation_id), count in counts.items():
