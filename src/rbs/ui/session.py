@@ -151,6 +151,7 @@ class WorkspaceSession:
         instance: SchedulerInput,
         *,
         preserve_schedule: bool = False,
+        draft_schedule: Schedule | None = None,
     ) -> None:
         if self.workspace_id is None:
             return
@@ -161,6 +162,7 @@ class WorkspaceSession:
             workspace,
             instance,
             preserve_schedule=preserve_schedule,
+            draft_schedule=draft_schedule,
         )
         documents = getattr(self.workspace_host, "document_io", None)
         sync_settings = getattr(documents, "sync_application_settings", None)

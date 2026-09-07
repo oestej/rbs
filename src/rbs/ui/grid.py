@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 
 from rbs.models.color_scheme import contrasting_text_color
 from rbs.models.instance import SchedulerInput
-from rbs.models.resident import Resident
+from rbs.models.resident import Resident, resident_display_sort_key
 from rbs.models.rotation import ROTATION_COLOR_PALETTE
 from rbs.models.schedule import Schedule
 from rbs.models.special import SpecialRotationKind
@@ -391,7 +391,7 @@ def render_grid_html(
         key=lambda item: instance.training_level_sort_key(item[0]),
     ):
         rows: list[str] = []
-        for index, resident in enumerate(residents):
+        for index, resident in enumerate(sorted(residents, key=resident_display_sort_key)):
             pgy_cell = ""
             if index == 0:
                 pgy_cell = (

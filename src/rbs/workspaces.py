@@ -22,12 +22,14 @@ class WorkspaceController:
         instance: SchedulerInput,
         *,
         preserve_schedule: bool = False,
+        draft_schedule: Schedule | None = None,
     ) -> Workspace:
         return self.repository.save_instance(
             workspace.id,
             instance,
             expected_workspace_revision=workspace.workspace_revision,
             preserve_schedule=preserve_schedule,
+            draft_schedule=draft_schedule,
         )
 
     def save_schedule(self, workspace: Workspace, schedule: Schedule | None) -> Workspace:

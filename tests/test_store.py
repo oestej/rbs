@@ -410,6 +410,135 @@ def test_save_instance_can_preserve_a_matching_schedule(tmp_path) -> None:
     assert saved.schedule.meta.source_instance_revision == saved.instance_revision
 
 
+def test_save_instance_can_atomically_replace_the_working_schedule(tmp_path) -> None:
+    from rbs.models.enums import RotationKind, SolverEngineName, SolverStatus
+    from rbs.models.schedule import Assignment, Schedule, ScheduleMeta
+    from rbs.ui.app_status import solve_summary
+    from rbs.ui.locks import replace_manual_block
+
+    store = Store(tmp_path / "rbs.sqlite")
+    store.init()
+    instance = sample_instance()
+    resident = instance.residents[8]
+    workspace = store.create("manual-block", instance)
+    updated = replace_manual_block(
+        instance,
+        resident_id=resident.id,
+        rotation_id="clinic",
+        start_week=7,
+        duration_weeks=2,
+    )
+    draft = Schedule(
+        meta=ScheduleMeta(
+            academic_year=instance.academic_year,
+            engine=SolverEngineName.STUB,
+            status=SolverStatus.UNKNOWN,
+            solver_status=SolverStatus.UNKNOWN,
+        ),
+        assignments=[
+            Assignment(
+                resident_id=resident.id,
+                rotation_id="clinic",
+                kind=RotationKind.CLINIC,
+                start_week=7,
+                end_week=8,
+                weeks=[7, 8],
+                block_start_week=7,
+                block_duration_weeks=2,
+                locked_weeks=[7, 8],
+            )
+        ],
+    )
+
+    saved = store.save_instance(
+        workspace.id,
+        updated,
+        expected_workspace_revision=workspace.workspace_revision,
+        draft_schedule=draft,
+    )
+
+    assert saved.schedule is not None
+    assert saved.stale_schedule is None
+    assert saved.schedule.assignment_for(resident.id, 7).rotation_id == "clinic"
+    assert saved.schedule_revision == saved.instance_revision
+    assert saved.schedule.meta.source_instance_revision == saved.instance_revision
+    assert solve_summary(saved)[0] == "Needs solve"
+
+
+def test_constraint_conflicting_working_draft_remains_current_and_round_trips(
+    tmp_path,
+) -> None:
+    from rbs.models.enums import RotationKind, SolverEngineName, SolverStatus
+    from rbs.models.rotation import CapacityRule
+    from rbs.models.schedule import Assignment, Schedule, ScheduleMeta
+    from rbs.solver.validation import validate_schedule
+
+    instance = sample_instance()
+    clinic = instance.rotation("clinic")
+    instance = instance.revised(
+        rotations=[
+            rotation.model_copy(update={"capacity": CapacityRule(max_concurrent=1)})
+            if rotation.id == clinic.id
+            else rotation
+            for rotation in instance.rotations
+        ]
+    )
+    assignments = [
+        Assignment(
+            resident_id=resident.id,
+            rotation_id=clinic.id,
+            kind=RotationKind.CLINIC,
+            start_week=7,
+            end_week=8,
+            weeks=[7, 8],
+            block_start_week=7,
+            block_duration_weeks=2,
+        )
+        for resident in instance.residents[8:10]
+    ]
+    draft = Schedule(
+        meta=ScheduleMeta(
+            academic_year=instance.academic_year,
+            engine=SolverEngineName.STUB,
+            status=SolverStatus.UNKNOWN,
+            solver_status=SolverStatus.UNKNOWN,
+        ),
+        assignments=assignments,
+    )
+    assert not validate_schedule(instance, draft).valid
+
+    source = Store(tmp_path / "source.sqlite")
+    source.init()
+    workspace = source.create("capacity-draft", instance)
+    saved = source.save_instance(
+        workspace.id,
+        instance,
+        expected_workspace_revision=workspace.workspace_revision,
+        draft_schedule=draft,
+    )
+
+    assert saved.schedule is not None
+    assert saved.stale_schedule is None
+    assert saved.schedule.is_working_draft
+
+    saved = source.save_instance(
+        saved.id,
+        saved.instance,
+        expected_workspace_revision=saved.workspace_revision,
+        preserve_schedule=True,
+    )
+    assert saved.schedule is not None
+    assert saved.stale_schedule is None
+
+    target = Store(tmp_path / "target.sqlite")
+    target.init()
+    target.restore_rbsc(source.export_rbsc())
+    restored = target.get(saved.id)
+    assert restored.schedule is not None
+    assert restored.stale_schedule is None
+    assert restored.schedule.is_working_draft
+
+
 def test_incomplete_manual_schedule_is_persisted_as_needing_solve(tmp_path) -> None:
     from rbs.models.enums import SolverEngineName, SolverStatus
     from rbs.models.schedule import Schedule, ScheduleMeta

@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from rbs.models.enums import Session
 from rbs.models.instance import SchedulerInput
+from rbs.models.resident import resident_display_sort_key
 from rbs.models.special import SpecialRotation, SpecialRotationKind
 from rbs.ui import master_detail
 from rbs.ui.editor_common import (
@@ -222,7 +223,7 @@ def _open_special_rotation_dialog(
     )
     residents = {
         resident.id: (f"{resident.name} · {instance.training_level_name(resident.pgy)}")
-        for resident in sorted(instance.residents, key=lambda item: item.name.casefold())
+        for resident in sorted(instance.residents, key=resident_display_sort_key)
     }
 
     with ui.dialog() as dialog, ui.card().classes("w-full max-w-3xl p-0 gap-0"):

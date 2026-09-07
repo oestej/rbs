@@ -8,7 +8,7 @@ from rbs.emit import dumps, dumps_bundle
 from rbs.ingest import parse_workspace_payload
 from rbs.models.rbsc import RBSCState
 from rbs.models.workspace import DeskFullError, Workspace, WorkspaceConflictError
-from rbs.solver.validation import validate_schedule_or_raise
+from rbs.solver.validation import validate_persistable_schedule_or_raise
 from rbs.store_schema import CURRENT_KEY
 from rbs.store_support import (
     _catalog_hash,
@@ -35,7 +35,7 @@ class StoreExchangeMixin:
             ):
                 continue
             instance = catalogs[workspace.catalog_id].apply(workspace.case)
-            validate_schedule_or_raise(instance, workspace.schedule)
+            validate_persistable_schedule_or_raise(instance, workspace.schedule)
         return state
 
     def export_rbsc(self) -> str:

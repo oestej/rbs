@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from rbs.models.enums import SolverStatus
 from rbs.models.instance import SolverProblem
 from rbs.models.workspace import DownloadState, Workspace
 from rbs.solver.readiness import ReadinessResult, check_solve_readiness
@@ -45,6 +46,11 @@ def solve_summary(workspace: Workspace) -> tuple[str, str] | None:
                 PILL_MUTED,
             )
         )
+    if workspace.schedule.meta.status not in {
+        SolverStatus.FEASIBLE,
+        SolverStatus.OPTIMAL,
+    }:
+        return "Needs solve", PILL_WARN
     if _workspace_open_week_count(workspace):
         return "Needs solve", PILL_WARN
     return None
@@ -177,6 +183,8 @@ def _workspace_status(workspace: Workspace) -> str:
     if open_weeks:
         noun = "week" if open_weeks == 1 else "weeks"
         return f"Needs solve · {open_weeks} schedule {noun} open"
+    if schedule.meta.status not in {SolverStatus.FEASIBLE, SolverStatus.OPTIMAL}:
+        return "Needs solve · manual schedule changes require reconciliation"
     status = f"{schedule.meta.status.value} · {schedule.meta.engine}"
     if (
         schedule.meta.solver_status is not None

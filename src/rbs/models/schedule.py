@@ -264,6 +264,14 @@ class Schedule(StrictModel):
         )
 
     @property
+    def is_working_draft(self) -> bool:
+        """Whether this is an intentionally unsolved, editable schedule."""
+        return (
+            self.meta.status is SolverStatus.UNKNOWN
+            and self.meta.solver_status is SolverStatus.UNKNOWN
+        )
+
+    @property
     def coverage(self) -> list[WeekCoverage]:
         grouped: dict[tuple[int, str, bool], list[str]] = {}
         for assignment in self.assignments:

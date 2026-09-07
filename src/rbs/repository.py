@@ -46,6 +46,7 @@ class WorkspaceRepository(Protocol):
         *,
         expected_workspace_revision: int,
         preserve_schedule: bool = False,
+        draft_schedule: Schedule | None = None,
     ) -> Workspace: ...
 
     def save_schedule(

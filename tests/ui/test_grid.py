@@ -15,6 +15,14 @@ from rbs.ui.grid import (
 from rbs.ui.residents.ops import resident_schedule_report_rows
 
 
+def _resident_row_markup(markup: str, resident_name: str) -> str:
+    marker = f'<th class="rbs-resident-name" scope="row">{resident_name}</th>'
+    name_start = markup.index(marker)
+    row_start = markup.rfind('<tr class="rbs-resident-row"', 0, name_start)
+    row_end = markup.index("</tr>", name_start)
+    return markup[row_start:row_end]
+
+
 def test_parse_and_format_weeks() -> None:
     assert parse_weeks("12, 13, 28, 41") == [12, 13, 28, 41]
     assert parse_weeks("") == []
@@ -196,9 +204,10 @@ def test_solved_grid_uses_uninterrupted_assignment_and_vacation_runs() -> None:
         ],
     )
     markup = render_grid_html(instance, schedule)
-    first_row_start = markup.index('<tr class="rbs-resident-row"')
-    first_row_end = markup.index("</tr>", first_row_start)
-    resident_markup = markup[first_row_start:first_row_end]
+    resident_markup = _resident_row_markup(
+        markup,
+        instance.residents_by_id[resident_id].name,
+    )
     assert "rbs-block-schedule-grid grouped" in markup
     assert "rbs-rotation-color-" in markup
     assert rotation_color_class(instance.rotation("fmed").color) in markup
@@ -258,9 +267,7 @@ def test_same_schedule_run_stays_unbroken_across_four_week_boundaries() -> None:
     )
 
     markup = render_grid_html(instance, schedule)
-    first_row_start = markup.index('<tr class="rbs-resident-row"')
-    first_row_end = markup.index("</tr>", first_row_start)
-    resident_markup = markup[first_row_start:first_row_end]
+    resident_markup = _resident_row_markup(markup, resident.name)
 
     assert 'colspan="52" class="rbs-block-cell' in resident_markup
     assert "rbs-four-week-boundary" not in resident_markup

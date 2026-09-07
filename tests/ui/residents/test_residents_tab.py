@@ -32,7 +32,11 @@ from rbs.ui.residents.ops import (
     vacation_range_for_monday,
     vacation_week_for_monday,
 )
-from rbs.ui.residents.schedule import _resident_schedule_workspace
+from rbs.ui.residents.schedule import (
+    _open_resident_block_dialog,
+    _resident_schedule_workspace,
+    _schedule_week_date_ranges,
+)
 from rbs.ui.residents.tab import NEW_RESIDENT_ID, _resident_view, render_residents_tab
 
 
@@ -492,6 +496,206 @@ def test_block_schedule_edit_mode_toggles_tools_inline() -> None:
 
     assert editing_changes == [True, False]
     assert "Add block" not in {element._props.get("label") for element in current_buttons()}
+
+
+def test_block_schedule_edit_mode_interleaves_solved_and_pending_rows() -> None:
+    from nicegui import ui
+
+    from rbs.models.enums import RotationKind, SolverEngineName, SolverStatus
+    from rbs.models.locks import LockedPlacement
+    from rbs.models.schedule import Assignment, Schedule, ScheduleMeta
+
+    instance = sample_instance()
+    resident = instance.residents[8]
+    instance = instance.model_copy(
+        update={
+            "locks": [
+                LockedPlacement(
+                    resident_id=resident.id,
+                    rotation_id="clinic",
+                    weeks=[3, 4],
+                    exact_block=True,
+                ),
+                LockedPlacement(
+                    resident_id=resident.id,
+                    rotation_id="night_float",
+                    weeks=[6],
+                ),
+            ]
+        }
+    )
+    schedule = Schedule(
+        meta=ScheduleMeta(
+            academic_year=instance.academic_year,
+            engine=SolverEngineName.STUB,
+            status=SolverStatus.FEASIBLE,
+        ),
+        assignments=[
+            Assignment(
+                resident_id=resident.id,
+                rotation_id="fmed",
+                kind=RotationKind.FMED,
+                start_week=1,
+                end_week=2,
+                weeks=[1, 2],
+                block_start_week=1,
+                block_duration_weeks=2,
+            ),
+            Assignment(
+                resident_id=resident.id,
+                rotation_id="clinic",
+                kind=RotationKind.CLINIC,
+                start_week=7,
+                end_week=8,
+                weeks=[7, 8],
+                block_start_week=7,
+                block_duration_weeks=2,
+            ),
+        ],
+    )
+    before = set(ui.context.client.elements)
+
+    _resident_schedule_workspace(
+        instance,
+        schedule,
+        resident,
+        on_schedule_save=lambda _instance, _resident_id, _preserve: None,
+        schedule_is_current=False,
+        block_schedule_editing=True,
+        on_block_schedule_editing_change=lambda _editing: None,
+    )
+
+    created = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+    labels = {getattr(element, "_text", None) for element in created}
+    rows = [
+        element
+        for element in created
+        if "rbs-resident-block-management-row" in getattr(element, "_classes", [])
+    ]
+
+    def row_text(element) -> list[str]:
+        text = [element._text] if getattr(element, "_text", None) else []
+        return text + [
+            value
+            for slot in element.slots.values()
+            for child in slot.children
+            for value in row_text(child)
+        ]
+
+    assert "Working schedule" in labels
+    assert "Current schedule" not in labels
+    assert "Pending blocks and manual pins" not in labels
+    assert [row_text(row)[:2] for row in rows] == [
+        ["Weeks 1–2 (Jun 29–Jul 12, 2026)", "FMED · Family Med Education Service"],
+        ["Weeks 3–4 (Jul 13–26, 2026)", "CLINIC · Clinic"],
+        ["Week 5 (Jul 27–Aug 2, 2026)", "Unscheduled"],
+        ["Week 6 (Aug 3–9, 2026)", "NF · Night Float"],
+        ["Weeks 7–8 (Aug 10–23, 2026)", "CLINIC · Clinic"],
+        ["Weeks 9–52 (Aug 24, 2026–Jun 27, 2027)", "Unscheduled"],
+    ]
+    assert "Block · pending solve" in row_text(rows[1])
+    assert "Manual week pin" in row_text(rows[3])
+
+
+def test_pending_week_dates_preserve_noncontiguous_ranges() -> None:
+    assert _schedule_week_date_ranges(sample_instance(), [1, 2, 4]) == (
+        "Jun 29–Jul 12, 2026; Jul 20–26, 2026"
+    )
+
+
+def test_saving_a_manual_block_places_it_on_the_working_schedule() -> None:
+    from nicegui import ui
+    from nicegui.events import ClickEventArguments
+
+    from rbs.models.enums import RotationKind, SolverEngineName, SolverStatus
+    from rbs.models.schedule import Assignment, Schedule, ScheduleMeta
+    from rbs.ui.locks import ScheduleBlock
+
+    instance = sample_instance()
+    resident = instance.residents[8]
+    schedule = Schedule(
+        meta=ScheduleMeta(
+            academic_year=instance.academic_year,
+            engine=SolverEngineName.STUB,
+            status=SolverStatus.FEASIBLE,
+        ),
+        assignments=[
+            Assignment(
+                resident_id=resident.id,
+                rotation_id="fmed",
+                kind=RotationKind.FMED,
+                start_week=7,
+                end_week=10,
+                weeks=[7, 8, 9, 10],
+                block_start_week=7,
+                block_duration_weeks=4,
+            )
+        ],
+    )
+    saved: list[tuple] = []
+    legacy_saves: list[tuple] = []
+    before = set(ui.context.client.elements)
+
+    _open_resident_block_dialog(
+        instance,
+        schedule,
+        resident,
+        on_schedule_save=lambda *args: legacy_saves.append(args),
+        on_block_schedule_save=lambda *args: saved.append(args),
+        schedule_is_current=True,
+        initial=ScheduleBlock(
+            resident_id=resident.id,
+            rotation_id="clinic",
+            start_week=7,
+            duration_weeks=2,
+        ),
+    )
+    save = next(
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+        and element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Save block"
+    )
+    listener = next(
+        listener for listener in save._event_listeners.values() if listener.type == "click"
+    )
+
+    listener.handler(ClickEventArguments(sender=save, client=save.client))
+
+    assert legacy_saves == []
+    assert len(saved) == 1
+    updated_instance, updated_schedule, resident_id = saved[0]
+    assert resident_id == resident.id
+    assert any(
+        lock.exact_block and lock.rotation_id == "clinic" and lock.weeks == [7, 8]
+        for lock in updated_instance.locks
+    )
+    assert updated_schedule.assignment_for(resident.id, 7).rotation_id == "clinic"
+    assert updated_schedule.assignment_for(resident.id, 9) is None
+    assert updated_schedule.meta.status is SolverStatus.UNKNOWN
+
+    before = set(ui.context.client.elements)
+    _resident_schedule_workspace(
+        updated_instance,
+        updated_schedule,
+        resident,
+        on_schedule_save=lambda _instance, _resident_id, _preserve: None,
+        block_schedule_editing=True,
+        on_block_schedule_editing_change=lambda _editing: None,
+    )
+    labels = {
+        getattr(element, "_text", None)
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    }
+    assert "Block · pending solve" not in labels
+    assert "Manual" in labels
+    assert "Weeks 7–8 (Aug 10–23, 2026)" in labels
 
 
 def test_locked_hardcoded_block_must_be_unlocked_before_deletion() -> None:

@@ -10,7 +10,7 @@ from functools import partial
 from pydantic import ValidationError
 
 from rbs.models.instance import SchedulerInput
-from rbs.models.resident import Resident
+from rbs.models.resident import Resident, resident_display_sort_key
 from rbs.models.schedule import Schedule
 from rbs.ui import master_detail, page_shells
 from rbs.ui.buttons import (
@@ -40,6 +40,7 @@ SelectResident = Callable[[str | None], None]
 SaveResident = Callable[[SchedulerInput, str], None]
 SaveResidentSchedule = Callable[[SchedulerInput, str, bool], None]
 SaveResidentScheduleResult = Callable[[Schedule, str, bool], None]
+SaveResidentBlockSchedule = Callable[[SchedulerInput, Schedule, str], None]
 NEW_RESIDENT_ID = "__new_resident__"
 
 
@@ -51,6 +52,7 @@ def render_residents_tab(
     on_select: SelectResident,
     on_save: SaveResident,
     on_schedule_save: SaveResidentSchedule | None = None,
+    on_block_schedule_save: SaveResidentBlockSchedule | None = None,
     on_schedule_change: SaveResidentScheduleResult | None = None,
     schedule_is_current: bool = True,
     block_schedule_editing: bool = False,
@@ -89,6 +91,7 @@ def render_residents_tab(
                 on_select=on_select,
                 on_save=on_save,
                 on_schedule_save=on_schedule_save,
+                on_block_schedule_save=on_block_schedule_save,
                 on_schedule_change=on_schedule_change,
                 schedule_is_current=schedule_is_current,
                 block_schedule_editing=block_schedule_editing,
@@ -153,7 +156,7 @@ def _resident_directory(
                     len(grouped[pgy]),
                 )
                 with ui.list().props("separator").classes("w-full"):
-                    for resident in grouped[pgy]:
+                    for resident in sorted(grouped[pgy], key=resident_display_sort_key):
                         _resident_list_item(
                             resident,
                             selected_resident_id,
@@ -198,6 +201,7 @@ def _resident_detail_panel(
     on_select: SelectResident,
     on_save: SaveResident,
     on_schedule_save: SaveResidentSchedule | None = None,
+    on_block_schedule_save: SaveResidentBlockSchedule | None = None,
     on_schedule_change: SaveResidentScheduleResult | None = None,
     schedule_is_current: bool = True,
     block_schedule_editing: bool = False,
@@ -248,6 +252,7 @@ def _resident_detail_panel(
                     start_editing,
                     on_select,
                     on_schedule_save=on_schedule_save,
+                    on_block_schedule_save=on_block_schedule_save,
                     on_schedule_change=on_schedule_change,
                     schedule_is_current=schedule_is_current,
                     block_schedule_editing=block_schedule_editing,
@@ -271,6 +276,7 @@ def _resident_view(
     on_select: SelectResident,
     *,
     on_schedule_save: SaveResidentSchedule | None = None,
+    on_block_schedule_save: SaveResidentBlockSchedule | None = None,
     on_schedule_change: SaveResidentScheduleResult | None = None,
     schedule_is_current: bool = True,
     block_schedule_editing: bool = False,
@@ -312,6 +318,7 @@ def _resident_view(
             schedule,
             resident,
             on_schedule_save=on_schedule_save,
+            on_block_schedule_save=on_block_schedule_save,
             on_schedule_change=on_schedule_change,
             schedule_is_current=schedule_is_current,
             block_schedule_editing=block_schedule_editing,

@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from rbs.models.enums import RotationKind
 from rbs.models.instance import SchedulerInput
+from rbs.models.resident import resident_display_sort_key
 from rbs.models.rotation import (
     Rotation,
     rotation_display_sort_key,
@@ -268,7 +269,7 @@ def _resident_override_resident_options(
 ) -> dict[str, str]:
     return {
         resident.id: (f"{resident.name} · {instance.training_level_name(resident.pgy)}")
-        for resident in sorted(instance.residents, key=lambda item: item.name.casefold())
+        for resident in sorted(instance.residents, key=resident_display_sort_key)
         if _resident_override_duration_options(
             instance,
             rotation,
@@ -560,7 +561,7 @@ def _resident_waiver_resident_options(
 ) -> dict[str, str]:
     return {
         resident.id: (f"{resident.name} · {instance.training_level_name(resident.pgy)}")
-        for resident in sorted(instance.residents, key=lambda item: item.name.casefold())
+        for resident in sorted(instance.residents, key=resident_display_sort_key)
         if _resident_waiver_duration_options(
             instance,
             rotation,

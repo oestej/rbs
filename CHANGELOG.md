@@ -2,8 +2,18 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Residents:** Block schedule editing now presents assignments, manual pins,
+  and unscheduled gaps in one chronological view, with calendar dates alongside
+  week numbers. Adding or editing an exact block places it on the working
+  schedule immediately and pins it for the next solve instead of leaving it in
+  a separate pending list.
+
 ### Fixed
 
+- **Residents:** Resident lists and selection menus now sort alphabetically by
+  last name, using the first name for residents with a single-name record.
 - **Rotations:** Mandatory and Elective selection menus, including eligible
   rotation choices, now sort alphabetically by code, with the rotation name used
   when a code is unavailable.

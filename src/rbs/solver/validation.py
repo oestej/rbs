@@ -105,3 +105,23 @@ def validate_schedule_or_raise(instance: SolverProblem, schedule: Schedule) -> N
     if result.errors:
         preview = "; ".join(result.errors[:5])
         raise ValueError(f"schedule does not match instance: {preview}")
+
+
+def validate_persistable_schedule_or_raise(
+    instance: SolverProblem,
+    schedule: Schedule,
+) -> None:
+    """Validate solved output while permitting an explicitly unsolved working draft.
+
+    A manual block edit can temporarily exceed capacity, consecutive-week, or
+    annual-total constraints until the next solve rearranges the cohort. The
+    draft must still belong to the same academic year.
+    """
+    if schedule.is_working_draft:
+        if schedule.meta.academic_year != instance.academic_year:
+            raise ValueError(
+                f"schedule academic year {schedule.meta.academic_year!r} does not match "
+                f"instance {instance.academic_year!r}"
+            )
+        return
+    validate_schedule_or_raise(instance, schedule)
