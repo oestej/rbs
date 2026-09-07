@@ -41,30 +41,43 @@ class AcademicHalfDayOverride(StrictModel):
 class ManualClinicBlock(StrictModel):
     """A resident-specific Clinic block placed at an exact week.
 
-    The block replaces a same-length direct curriculum requirement so the
-    resident's academic year remains exactly 52 weeks.
+    By default the block uses the resident's otherwise-unallocated time.
+    ``replaces_rotation_id`` may instead name a same-length direct Elective
+    block to remove when the resident has no suitable unallocated time.
     """
 
     resident_id: str
     rotation_id: str
     start_week: int = Field(ge=1)
     duration_weeks: int = Field(ge=1, le=5)
-    replaces_rotation_id: str
+    replaces_rotation_id: str | None = Field(
+        default=None,
+        description=(
+            "Same-length Elective block replaced to fund this placement. None uses "
+            "the resident's unallocated time, which is preferred when available."
+        ),
+    )
 
 
 class ResidentRotationOverride(StrictModel):
-    """One additional resident-specific Mandatory block.
+    """One additional resident-specific required-service block.
 
-    The solver places the block normally and removes a same-length direct
-    Elective requirement for that resident. When ``replaces_rotation_id`` is
-    None the block is instead funded by the training level's unallocated
-    weeks, leaving every curriculum requirement in place.
+    The solver places the block normally. By default it uses the resident's
+    otherwise-unallocated time and leaves every curriculum requirement in
+    place. ``replaces_rotation_id`` may instead name a same-length direct
+    Elective block to remove when the resident has no suitable unallocated time.
     """
 
     resident_id: str
     rotation_id: str
     duration_weeks: int = Field(ge=1, le=5)
-    replaces_rotation_id: str | None = Field(default=None)
+    replaces_rotation_id: str | None = Field(
+        default=None,
+        description=(
+            "Same-length Elective block replaced to fund this addition. None uses "
+            "the resident's unallocated time, which is preferred when available."
+        ),
+    )
     group_instance_id: str | None = Field(
         default=None,
         description=(
@@ -88,9 +101,9 @@ class ResidentRotationWaiver(StrictModel):
     """One resident-specific excusal from a direct curriculum block.
 
     The solver simply does not place the waived block for that resident; the
-    freed weeks become unscheduled time. Waivers consume the same direct
-    inventory as Mandatory rotation overrides, so a block cannot be both
-    waived and replaced away.
+    freed weeks become unscheduled time. Waivers share the resident's direct
+    requirement inventory with replacement-funded additions, so one block
+    cannot be both waived and replaced away.
     """
 
     resident_id: str

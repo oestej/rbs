@@ -125,15 +125,23 @@ def test_catalog_schema_rejects_curriculum_choice_groups() -> None:
         ConstraintCatalog.model_validate(raw)
 
 
-def test_pre_v6_catalogs_are_rejected() -> None:
+def test_v7_catalogs_migrate_with_directional_groups_disabled() -> None:
     raw = bootstrap_catalog().model_dump(mode="json")
-    raw["schema_version"] = 4
+    raw["schema_version"] = 7
+    for group in raw["rotation_groups"]:
+        group.pop("anchor_rotation_id")
 
-    with pytest.raises(ValidationError, match="Input should be 6"):
-        ConstraintCatalog.model_validate(raw)
+    migrated = ConstraintCatalog.model_validate(raw)
 
-    raw["schema_version"] = 5
-    with pytest.raises(ValidationError, match="Input should be 6"):
+    assert migrated.schema_version == 8
+    assert all(group.anchor_rotation_id is None for group in migrated.rotation_groups)
+
+
+def test_pre_v7_catalogs_are_rejected() -> None:
+    raw = bootstrap_catalog().model_dump(mode="json")
+    raw["schema_version"] = 6
+
+    with pytest.raises(ValidationError, match="Input should be 8"):
         ConstraintCatalog.model_validate(raw)
 
 
@@ -146,15 +154,53 @@ def test_instance_catalog_projection_preserves_explicit_elective_policy() -> Non
         eligible=True,
         eligible_pgys=[2],
         repeatable=False,
+        blackout_weeks=[9, 10, 11, 12],
     )
 
     catalog = instance.constraint_catalog()
     option = catalog.electives.option_for("night_float")
 
-    assert catalog.schema_version == 6
+    assert catalog.schema_version == 8
     assert option is not None
     assert option.eligible_pgys == [2]
     assert not option.repeatable
+    assert option.blackout_weeks == [9, 10, 11, 12]
+
+
+def test_catalog_round_trip_preserves_one_way_rotation_group_anchor() -> None:
+    from rbs.ui.rotations.ops import replace_elective_rotation
+
+    instance = sample_instance()
+    rotation = instance.rotation("palliative_care")
+    grouped = replace_elective_rotation(
+        instance,
+        rotation.id,
+        rotation,
+        group_members_by_pgy={1: ["clinic", "fmed"], 2: []},
+    )
+
+    catalog = ConstraintCatalog.model_validate_json(
+        grouped.constraint_catalog().model_dump_json()
+    )
+    group = next(item for item in catalog.rotation_groups if item.anchor_rotation_id)
+
+    assert group.pgy == 1
+    assert group.anchor_rotation_id == "palliative_care"
+    assert group.rotation_ids == ["palliative_care", "clinic", "fmed"]
+
+
+def test_one_way_rotation_group_cannot_be_anchored_by_clinic() -> None:
+    raw = bootstrap_catalog().model_dump(mode="json")
+    raw["rotation_groups"].append(
+        {
+            "pgy": 1,
+            "rotation_ids": ["clinic", "fmed"],
+            "anchor_rotation_id": "clinic",
+        }
+    )
+
+    with pytest.raises(ValidationError, match="anchored by a Mandatory or elective"):
+        ConstraintCatalog.model_validate(raw)
 
 
 def test_legacy_rotation_shape_is_rejected() -> None:

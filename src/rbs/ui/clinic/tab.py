@@ -44,7 +44,9 @@ from rbs.ui.editor_common import (
 )
 from rbs.ui.rotations.ops import (
     add_manual_clinic_block,
+    add_resident_rotation_waiver,
     remove_manual_clinic_block,
+    remove_resident_rotation_waiver,
     replace_clinic_block_rules,
     rotation_editor_state,
 )
@@ -81,9 +83,13 @@ def render_clinic_tab(
         ):
             sites_tab = ui.tab("clinic_sites", label="Clinics")
             rules_tab = ui.tab("clinic_block_rules", label="Block rules")
+            clinic_exception_count = len(instance.manual_clinic_blocks) + sum(
+                instance.rotation(waiver.rotation_id).kind is RotationKind.CLINIC
+                for waiver in instance.resident_rotation_waivers
+            )
             manual_tab = ui.tab(
                 "clinic_manual_blocks",
-                label=f"Manual blocks ({len(instance.manual_clinic_blocks)})",
+                label=f"Resident exceptions ({clinic_exception_count})",
             )
 
         sections = {
@@ -704,15 +710,22 @@ def _manual_clinic_blocks_configuration(
     from nicegui import ui
 
     eligible_residents = _manual_clinic_resident_options(instance)
+    clinic_waivers = [
+        (index, waiver)
+        for index, waiver in enumerate(instance.resident_rotation_waivers)
+        if instance.rotation(waiver.rotation_id).kind is RotationKind.CLINIC
+    ]
+    waiver_residents = _manual_clinic_waiver_resident_options(instance)
     with ui.column().classes("w-full gap-5"):
         with ui.row().classes("w-full items-center justify-between gap-3 flex-wrap"):
             with ui.column().classes("gap-0"):
-                ui.label("Manual Clinic blocks").classes("rbs-type-section-title")
+                ui.label("Resident Clinic exceptions").classes("rbs-type-section-title")
                 ui.label(
-                    "Place an additional resident Clinic block by replacing a "
-                    "same-length Elective block."
+                    "Schedule an additional Clinic block for one resident, using "
+                    "unallocated time first or Elective time as a fallback, or exempt "
+                    "a resident from a required Clinic block."
                 ).classes("rbs-type-caption rbs-text-muted")
-            if instance.manual_clinic_blocks:
+            with ui.row().classes("items-center gap-2 flex-wrap"):
                 add_button = ui.button(
                     "Schedule clinic block",
                     icon="add",
@@ -723,32 +736,35 @@ def _manual_clinic_blocks_configuration(
                     ),
                 ).props("unelevated no-caps")
                 add_button.set_enabled(bool(eligible_residents))
+                waive_button = ui.button(
+                    "Exempt resident",
+                    icon="person_off",
+                    on_click=partial(
+                        _open_manual_clinic_waiver_dialog,
+                        instance,
+                        on_save=on_save,
+                    ),
+                ).props("outline no-caps")
+                waive_button.set_enabled(bool(waiver_residents))
 
-        if not instance.manual_clinic_blocks:
+        if not instance.manual_clinic_blocks and not clinic_waivers:
             with ui.column().classes(
                 "rbs-manual-clinic-empty w-full items-center justify-center gap-2 rounded p-6"
             ):
-                ui.icon("event_available").classes("rbs-icon-lg rbs-text-disabled")
-                ui.label("No manually scheduled Clinic blocks").classes("rbs-font-semibold")
-                ui.label("Schedule one when a resident needs an additional Clinic block.").classes(
-                    "rbs-type-body rbs-text-muted text-center"
+                ui.icon("person_pin_circle").classes("rbs-icon-lg rbs-text-disabled")
+                ui.label("No resident-specific Clinic exceptions").classes(
+                    "rbs-font-semibold"
                 )
-                add_button = ui.button(
-                    "Schedule clinic block",
-                    icon="add",
-                    on_click=partial(
-                        _open_manual_clinic_block_dialog,
-                        instance,
-                        on_save=on_save,
-                    ),
-                ).props("unelevated no-caps")
-                add_button.set_enabled(bool(eligible_residents))
+                ui.label(
+                    "Schedule a fixed Clinic block or exempt a resident from one of "
+                    "their direct Clinic requirements."
+                ).classes("rbs-type-body rbs-text-muted text-center")
             return
 
         residents = instance.residents_by_id
         rotations = instance.rotations_by_id
 
-        def remove(index: int) -> None:
+        def remove_block(index: int) -> None:
             try:
                 updated = remove_manual_clinic_block(instance, index)
                 ui.notify("Manual Clinic block removed", type="positive")
@@ -760,29 +776,75 @@ def _manual_clinic_blocks_configuration(
                     multi_line=True,
                 )
 
-        with ui.column().classes("w-full gap-2"):
-            for index, block in enumerate(instance.manual_clinic_blocks):
-                resident = residents[block.resident_id]
-                clinic = rotations[block.rotation_id]
-                replaced = rotations[block.replaces_rotation_id]
-                with ui.row().classes(
-                    "rbs-manual-clinic-row w-full items-center gap-3 rounded px-4 py-3"
-                ):
-                    ui.icon("event_repeat").classes("rbs-text-primary")
-                    with ui.column().classes("min-w-0 flex-1 gap-0"):
-                        ui.label(
-                            f"{resident.name} · {instance.training_level_name(resident.pgy)}"
-                        ).classes("rbs-font-semibold")
-                        ui.label(
-                            f"{clinic.code} · {_manual_week_range_label(instance, block)} "
-                            f"· replaces {replaced.code}"
-                        ).classes("rbs-type-caption rbs-text-muted")
-                    ui.button(
-                        icon="delete_outline",
-                        on_click=partial(remove, index),
-                    ).props(
-                        "flat round dense color=negative aria-label='Remove manual Clinic block'"
+        def remove_waiver(index: int) -> None:
+            try:
+                updated = remove_resident_rotation_waiver(instance, index)
+                ui.notify("Clinic exemption removed", type="positive")
+                on_save(updated, None)
+            except (ValidationError, ValueError) as exc:
+                ui.notify(
+                    _validation_message(exc),
+                    type="negative",
+                    multi_line=True,
+                )
+
+        if instance.manual_clinic_blocks:
+            with ui.column().classes("w-full gap-2"):
+                ui.label("Scheduled blocks").classes("rbs-type-control-label")
+                for index, block in enumerate(instance.manual_clinic_blocks):
+                    resident = residents[block.resident_id]
+                    clinic = rotations[block.rotation_id]
+                    funded_by = (
+                        "uses unallocated time"
+                        if block.replaces_rotation_id is None
+                        else f"replaces {rotations[block.replaces_rotation_id].code}"
                     )
+                    with ui.row().classes(
+                        "rbs-manual-clinic-row w-full items-center gap-3 rounded px-4 py-3"
+                    ):
+                        ui.icon("event_repeat").classes("rbs-text-primary")
+                        with ui.column().classes("min-w-0 flex-1 gap-0"):
+                            ui.label(
+                                f"{resident.name} · "
+                                f"{instance.training_level_name(resident.pgy)}"
+                            ).classes("rbs-font-semibold")
+                            ui.label(
+                                f"{clinic.code} · {_manual_week_range_label(instance, block)} "
+                                f"· {funded_by}"
+                            ).classes("rbs-type-caption rbs-text-muted")
+                        ui.button(
+                            icon="delete_outline",
+                            on_click=partial(remove_block, index),
+                        ).props(
+                            "flat round dense color=negative "
+                            "aria-label='Remove manual Clinic block'"
+                        )
+
+        if clinic_waivers:
+            with ui.column().classes("w-full gap-2"):
+                ui.label("Exemptions").classes("rbs-type-control-label")
+                for index, waiver in clinic_waivers:
+                    resident = residents[waiver.resident_id]
+                    clinic = rotations[waiver.rotation_id]
+                    with ui.row().classes(
+                        "rbs-resident-rotation-waiver w-full items-center gap-3 rounded px-4 py-3"
+                    ):
+                        ui.icon("person_off").classes("rbs-text-primary")
+                        with ui.column().classes("min-w-0 flex-1 gap-0"):
+                            ui.label(
+                                f"{resident.name} · "
+                                f"{instance.training_level_name(resident.pgy)}"
+                            ).classes("rbs-font-semibold")
+                            ui.label(
+                                f"{clinic.code} · {_weeks_label(waiver.duration_weeks)} exempt"
+                            ).classes("rbs-type-caption rbs-text-muted")
+                        ui.button(
+                            icon="delete_outline",
+                            on_click=partial(remove_waiver, index),
+                        ).props(
+                            "flat round dense color=negative "
+                            "aria-label='Remove resident Clinic exemption'"
+                        )
 
 
 def _manual_clinic_resident_options(instance: SchedulerInput) -> dict[str, str]:
@@ -823,22 +885,14 @@ def _manual_duration_options(
         rule = clinic.pgy_rule(resident.pgy)
     except KeyError:
         return {}
-    replacement_durations = {
-        block.duration_weeks
-        for block in instance.curriculum_for(resident.pgy).blocks
-        if instance.rotation(block.rotation_id).kind is RotationKind.ELECTIVE
-        and _remaining_replacement_count(
-            instance,
-            resident_id,
-            block.rotation_id,
-            block.duration_weeks,
-        )
-        > 0
-    }
     return {
         config.duration_weeks: _weeks_label(config.duration_weeks)
         for config in rule.block_configs
-        if config.duration_weeks in replacement_durations
+        if _manual_funding_options(
+            instance,
+            resident_id,
+            config.duration_weeks,
+        )
     }
 
 
@@ -863,6 +917,11 @@ def _remaining_replacement_count(
         override.replaces_rotation_id == rotation_id and override.duration_weeks == duration_weeks
         for override in instance.resident_rotation_overrides
         if override.resident_id == resident_id
+    )
+    used += sum(
+        waiver.rotation_id == rotation_id and waiver.duration_weeks == duration_weeks
+        for waiver in instance.resident_rotation_waivers
+        if waiver.resident_id == resident_id
     )
     return available - used
 
@@ -898,6 +957,76 @@ def _manual_replacement_options(
             + (f" ({remaining} available)" if remaining > 1 else "")
         )
         for rotation, remaining in candidates
+    }
+
+
+_UNALLOCATED_FUNDING_KEY = "unallocated"
+
+
+def _manual_funding_options(
+    instance: SchedulerInput,
+    resident_id: str,
+    duration_weeks: int,
+) -> dict[str, str]:
+    """Funding choices for a fixed Clinic block, with unallocated time first."""
+    options: dict[str, str] = {}
+    remaining = instance.resident_unallocated_weeks(resident_id)
+    if remaining >= duration_weeks:
+        options[_UNALLOCATED_FUNDING_KEY] = (
+            f"Unallocated time ({remaining} weeks available)"
+        )
+    options.update(
+        _manual_replacement_options(
+            instance,
+            resident_id,
+            duration_weeks,
+        )
+    )
+    return options
+
+
+def _manual_clinic_waiver_duration_options(
+    instance: SchedulerInput,
+    resident_id: str,
+    clinic_rotation_id: str,
+) -> dict[int, str]:
+    """Direct Clinic block shapes this resident can still be exempted from."""
+    resident = instance.residents_by_id[resident_id]
+    waived: dict[int, int] = {}
+    for waiver in instance.resident_rotation_waivers:
+        if waiver.resident_id == resident_id and waiver.rotation_id == clinic_rotation_id:
+            waived[waiver.duration_weeks] = waived.get(waiver.duration_weeks, 0) + 1
+    available: dict[int, str] = {}
+    for block in instance.curriculum_for(resident.pgy).blocks:
+        if block.rotation_id != clinic_rotation_id:
+            continue
+        if block.count <= waived.get(block.duration_weeks, 0):
+            continue
+        available[block.duration_weeks] = _weeks_label(block.duration_weeks)
+    return dict(sorted(available.items()))
+
+
+def _manual_clinic_waiver_rotation_options(
+    instance: SchedulerInput,
+    resident_id: str,
+) -> dict[str, str]:
+    return {
+        rotation.id: f"{rotation.code} — {rotation.name}"
+        for rotation in sorted(instance.rotations, key=rotation_display_sort_key)
+        if rotation.kind is RotationKind.CLINIC
+        and _manual_clinic_waiver_duration_options(
+            instance,
+            resident_id,
+            rotation.id,
+        )
+    }
+
+
+def _manual_clinic_waiver_resident_options(instance: SchedulerInput) -> dict[str, str]:
+    return {
+        resident.id: f"{resident.name} · {instance.training_level_name(resident.pgy)}"
+        for resident in sorted(instance.residents, key=resident_display_sort_key)
+        if _manual_clinic_waiver_rotation_options(instance, resident.id)
     }
 
 
@@ -961,7 +1090,7 @@ def _open_manual_clinic_block_dialog(
 
     resident_options = _manual_clinic_resident_options(instance)
     if not resident_options:
-        ui.notify("No residents have an eligible Clinic replacement block", type="warning")
+        ui.notify("No resident has unallocated or Elective time for a Clinic block", type="warning")
         return
     initial_resident = next(iter(resident_options))
     clinic_options = _manual_clinic_rotation_options(instance, initial_resident)
@@ -973,6 +1102,11 @@ def _open_manual_clinic_block_dialog(
     )
     initial_duration = _default_block_duration(duration_options)
     assert initial_duration is not None
+    funding_options = _manual_funding_options(
+        instance,
+        initial_resident,
+        initial_duration,
+    )
     start_options = _manual_start_options(
         instance,
         initial_resident,
@@ -992,8 +1126,9 @@ def _open_manual_clinic_block_dialog(
         ui.separator()
         with ui.column().classes("w-full gap-4 p-5"):
             ui.label(
-                "The Clinic block is fixed to these weeks and replaces a same-length "
-                "Elective block so the resident remains scheduled for 52 weeks."
+                "The Clinic block is fixed to these weeks. It uses the resident's "
+                "unallocated time when available; a same-length Elective block is the "
+                "fallback."
             ).classes("rbs-type-body rbs-text-muted")
             resident_select = (
                 ui.select(
@@ -1032,6 +1167,15 @@ def _open_manual_clinic_block_dialog(
                 .props("outlined options-dense use-input")
                 .classes("w-full")
             )
+            funding_select = (
+                ui.select(
+                    funding_options,
+                    value=next(iter(funding_options), None),
+                    label="Funded by",
+                )
+                .props("outlined options-dense")
+                .classes("w-full")
+            )
 
         def refresh_duration_fields() -> None:
             resident_id = str(resident_select.value)
@@ -1045,6 +1189,7 @@ def _open_manual_clinic_block_dialog(
             duration_select.set_options(durations, value=duration)
             if duration is None:
                 start_select.set_options({}, value=None)
+                funding_select.set_options({}, value=None)
                 return
             starts = _manual_start_options(
                 instance,
@@ -1058,6 +1203,12 @@ def _open_manual_clinic_block_dialog(
                     start_select.value if start_select.value in starts else next(iter(starts), None)
                 ),
             )
+            funding = _manual_funding_options(
+                instance,
+                resident_id,
+                duration,
+            )
+            funding_select.set_options(funding, value=next(iter(funding), None))
 
         def change_resident(_event) -> None:
             resident_id = str(resident_select.value)
@@ -1085,17 +1236,21 @@ def _open_manual_clinic_block_dialog(
                             clinic_select.value,
                             duration_select.value,
                             start_select.value,
+                            funding_select.value,
                         )
                     ):
                         raise ValueError("complete all manual Clinic block fields")
-                    replacements = _manual_replacement_options(
+                    funding = _manual_funding_options(
                         instance,
                         str(resident_select.value),
                         int(duration_select.value),
                     )
-                    replacement_id = next(iter(replacements), None)
-                    if replacement_id is None:
-                        raise ValueError("no same-length Elective block remains available")
+                    funding_id = str(funding_select.value)
+                    if funding_id not in funding:
+                        raise ValueError("no compatible unallocated or Elective time remains")
+                    replacement_id = (
+                        None if funding_id == _UNALLOCATED_FUNDING_KEY else funding_id
+                    )
                     updated = add_manual_clinic_block(
                         instance,
                         {
@@ -1117,6 +1272,141 @@ def _open_manual_clinic_block_dialog(
                     )
 
             ui.button("Schedule block", icon="save", on_click=save_block).props(
+                "unelevated no-caps"
+            )
+    dialog.open()
+
+
+def _open_manual_clinic_waiver_dialog(
+    instance: SchedulerInput,
+    *,
+    on_save: SaveRotation,
+) -> None:
+    from nicegui import ui
+
+    resident_options = _manual_clinic_waiver_resident_options(instance)
+    if not resident_options:
+        ui.notify("No resident has a Clinic requirement available to exempt", type="warning")
+        return
+    initial_resident = next(iter(resident_options))
+    clinic_options = _manual_clinic_waiver_rotation_options(instance, initial_resident)
+    initial_clinic = next(iter(clinic_options))
+    duration_options = _manual_clinic_waiver_duration_options(
+        instance,
+        initial_resident,
+        initial_clinic,
+    )
+
+    with ui.dialog() as dialog, ui.card().classes("w-full max-w-2xl p-0 gap-0"):
+        with ui.row().classes("w-full items-center justify-between gap-3 px-5 py-4"):
+            ui.label("Exempt resident from Clinic").classes("rbs-type-dialog-title")
+            ui.button(icon="close", on_click=dialog.close).props(
+                "flat round dense aria-label='Close resident Clinic exemption dialog'"
+            )
+        ui.separator()
+        with ui.column().classes("w-full gap-4 p-5"):
+            ui.label(
+                "Excuses one resident from one direct Clinic requirement without "
+                "changing the training-level curriculum. The freed weeks become that "
+                "resident's unallocated time."
+            ).classes("rbs-type-body rbs-text-muted")
+            resident_select = (
+                ui.select(
+                    resident_options,
+                    value=initial_resident,
+                    label="Resident",
+                )
+                .props("outlined options-dense use-input")
+                .classes("w-full")
+            )
+            clinic_select = (
+                ui.select(
+                    clinic_options,
+                    value=initial_clinic,
+                    label="Clinic requirement",
+                )
+                .props("outlined options-dense")
+                .classes("w-full")
+            )
+            duration_select = (
+                ui.select(
+                    duration_options,
+                    value=_default_block_duration(duration_options),
+                    label="Block length",
+                )
+                .props("outlined options-dense")
+                .classes("w-full")
+            )
+
+        def refresh_durations() -> None:
+            durations = _manual_clinic_waiver_duration_options(
+                instance,
+                str(resident_select.value),
+                str(clinic_select.value),
+            )
+            duration_select.set_options(
+                durations,
+                value=_default_block_duration(durations),
+            )
+
+        def change_resident(_event) -> None:
+            clinics = _manual_clinic_waiver_rotation_options(
+                instance,
+                str(resident_select.value),
+            )
+            clinic_id = (
+                clinic_select.value if clinic_select.value in clinics else next(iter(clinics), None)
+            )
+            clinic_select.set_options(clinics, value=clinic_id)
+            refresh_durations()
+
+        resident_select.on_value_change(change_resident)
+        clinic_select.on_value_change(lambda _event: refresh_durations())
+
+        ui.separator()
+        with ui.row().classes("w-full justify-end gap-3 p-4"):
+            ui.button("Cancel", on_click=dialog.close).props("flat no-caps")
+
+            def add_exemption() -> None:
+                try:
+                    if any(
+                        value is None
+                        for value in (
+                            resident_select.value,
+                            clinic_select.value,
+                            duration_select.value,
+                        )
+                    ):
+                        raise ValueError("select a resident, Clinic requirement, and block length")
+                    resident_id = str(resident_select.value)
+                    clinic_id = str(clinic_select.value)
+                    duration_weeks = int(duration_select.value)
+                    available = _manual_clinic_waiver_duration_options(
+                        instance,
+                        resident_id,
+                        clinic_id,
+                    )
+                    if duration_weeks not in available:
+                        raise ValueError("that Clinic requirement is no longer available to exempt")
+                    updated = add_resident_rotation_waiver(
+                        instance,
+                        {
+                            "resident_id": resident_id,
+                            "rotation_id": clinic_id,
+                            "duration_weeks": duration_weeks,
+                        },
+                    )
+                    dialog.close()
+                    ui.notify("Clinic exemption added", type="positive")
+                    on_save(updated, None)
+                except (ValidationError, ValueError) as exc:
+                    ui.notify(
+                        _validation_message(exc),
+                        type="negative",
+                        multi_line=True,
+                    )
+
+            ui.button("Add exemption", icon="person_off", on_click=add_exemption).props(
                 "unelevated no-caps"
             )
     dialog.open()

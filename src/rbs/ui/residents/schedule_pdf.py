@@ -32,6 +32,7 @@ from rbs.models.color_scheme import (
 )
 from rbs.models.curriculum import default_training_level_name
 from rbs.models.resident import Resident
+from rbs.ui.pdf_pages import with_export_timestamp
 from rbs.ui.print_tokens import (
     PRINT_AVATAR_SIZE,
     PRINT_BODY_LEADING,
@@ -162,7 +163,8 @@ def build_resident_schedule_pdf(
             )
         )
 
-    document.build(story, onFirstPage=_page_footer, onLaterPages=_page_footer)
+    draw_page = with_export_timestamp(_page_footer)
+    document.build(story, onFirstPage=draw_page, onLaterPages=draw_page)
     return buffer.getvalue()
 
 

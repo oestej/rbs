@@ -452,7 +452,7 @@ def test_invalid_or_cancelled_settings_import_leaves_application_unchanged(
     assert controller.workspace.instance == before_instance
 
 
-def test_open_rejects_pre_v7_documents_with_a_clear_error(tmp_path) -> None:
+def test_open_rejects_pre_v9_documents_with_a_clear_error(tmp_path) -> None:
     from pydantic import ValidationError
 
     source_store = _store(tmp_path / "source.sqlite")
@@ -465,7 +465,7 @@ def test_open_rejects_pre_v7_documents_with_a_clear_error(tmp_path) -> None:
     target = _store(tmp_path / "target.sqlite")
     controller = DesktopDocumentController(target, Dialogs())
 
-    with pytest.raises(ValidationError, match="Input should be 7"):
+    with pytest.raises(ValidationError, match="Input should be 9"):
         controller.load(document)
 
 

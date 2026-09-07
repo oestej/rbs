@@ -95,6 +95,11 @@ class ElectiveQueriesMixin:
         option = self.electives.option_for(rotation_id)
         return bool(option is not None and option.repeatable)
 
+    def elective_blackout_weeks(self, rotation_id: str) -> tuple[int, ...]:
+        """Academic weeks when a service cannot fill Elective time."""
+        option = self.electives.option_for(rotation_id)
+        return tuple(option.blackout_weeks) if option is not None else ()
+
     def available_elective_pgys(self, rotation_id: str) -> tuple[int, ...]:
         """Training levels with a compatible direct Elective slot for this service."""
         rotation = self.rotation(rotation_id)

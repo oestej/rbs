@@ -301,8 +301,10 @@ def test_replace_schedule_block_places_it_and_clears_whole_overlapping_blocks() 
     placed = updated.assignment_for(resident.id, 3)
     assert placed is not None
     assert placed.kind is RotationKind.CLINIC
+    assert placed.clinic_slots == []
     assert placed.locked_weeks == [3, 4]
     assert updated.assignment_for(resident.id, 1) is None
+    assert updated.is_working_draft
     assert updated.meta.status is SolverStatus.UNKNOWN
     assert updated.meta.solver_status is SolverStatus.UNKNOWN
     assert updated.meta.notes[-1].endswith("solve required")
@@ -447,7 +449,7 @@ def test_manual_exact_block_can_explicitly_exempt_rotation_grouping() -> None:
 def test_grouping_exemption_rejects_ungrouped_rotation() -> None:
     instance = sample_instance()
 
-    with pytest.raises(ValidationError, match="grouped Mandatory rotation"):
+    with pytest.raises(ValidationError, match="required to stay grouped"):
         replace_manual_block(
             instance,
             resident_id="resident-001",

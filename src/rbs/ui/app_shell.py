@@ -45,6 +45,7 @@ from rbs.ui.clinic.schedule_csv import build_clinic_schedule_csv, clinic_schedul
 from rbs.ui.clinic.schedule_pdf import build_clinic_schedule_pdf, clinic_schedule_pdf_filename
 from rbs.ui.clinic.tab import render_clinic_tab
 from rbs.ui.grid import render_grid_html
+from rbs.ui.pdf_export import present_pdf_export
 from rbs.ui.residents.tab import render_residents_tab
 from rbs.ui.rotations.editor import render_rotations_tab
 from rbs.ui.session import TAB_NAMES, WorkspaceSession
@@ -391,6 +392,7 @@ def _render_clinic_schedule(session: WorkspaceSession, workspace: Workspace) -> 
                     instance.academic_year,
                     site=site,
                 )
+                ui.download.content(content, filename)
             else:
                 content = build_clinic_schedule_pdf(
                     instance,
@@ -401,7 +403,7 @@ def _render_clinic_schedule(session: WorkspaceSession, workspace: Workspace) -> 
                     instance.academic_year,
                     site=site,
                 )
-            ui.download.content(content, filename)
+                _open_exported_pdf(session, content, filename)
             get_logger("documents").info(
                 "schedule.exported",
                 source=extension,
@@ -487,6 +489,16 @@ def _render_rotations(session: WorkspaceSession, workspace: Workspace) -> None:
     )
 
 
+def _open_exported_pdf(session: WorkspaceSession, content: bytes, filename: str) -> None:
+    """Open a PDF export in the user's preferred viewer for this packaging."""
+    documents = getattr(session.workspace_host, "document_io", None)
+    present_pdf_export(
+        content,
+        filename,
+        native=bool(getattr(documents, "opens_exports_natively", False)),
+    )
+
+
 def _render_residents(session: WorkspaceSession, workspace: Workspace) -> None:
     def select_resident(resident_id: str | None) -> None:
         if resident_id != session.resident_id:
@@ -569,6 +581,9 @@ def _render_residents(session: WorkspaceSession, workspace: Workspace) -> None:
         on_schedule_editing_change=set_clinic_schedule_editing,
         active_schedule_section=session.resident_schedule_section,
         on_schedule_section_change=remember_schedule_section,
+        on_pdf_open=lambda content, filename: _open_exported_pdf(
+            session, content, filename
+        ),
     )
 
 

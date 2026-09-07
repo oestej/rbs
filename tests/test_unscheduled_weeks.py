@@ -21,6 +21,7 @@ from rbs.ui.rotations.ops import (
     direct_elective_counts,
     elective_slot_rotation,
     remove_mandatory_rotation,
+    replace_standard_rotation,
     set_elective_allocation,
 )
 
@@ -299,6 +300,91 @@ def test_unscheduled_weeks_block_a_solve_in_the_program_s_words() -> None:
 
     assert not result.ready
     assert result.errors == ("PGY1 has 44 unscheduled weeks to allocate",)
+
+
+def test_named_additions_can_fill_each_residents_unallocated_time() -> None:
+    instance = sample_instance()
+    rotation = instance.rotation("night_float")
+    freed = replace_standard_rotation(
+        instance,
+        rotation.id,
+        rotation,
+        counts={(1, 2): 0, (2, 2): 0},
+    )
+    assert freed.unallocated_weeks(1) == 2
+    pgy1_resident_ids = [resident.id for resident in freed.residents if resident.pgy == 1]
+
+    partially_filled = replace_standard_rotation(
+        freed,
+        rotation.id,
+        rotation,
+        resident_overrides=[
+            {
+                "resident_id": pgy1_resident_ids[0],
+                "rotation_id": rotation.id,
+                "duration_weeks": 2,
+                "replaces_rotation_id": None,
+            }
+        ],
+    )
+    partial_readiness = check_solve_readiness(SolverProblem.from_instance(partially_filled))
+    assert any(issue.code == "unallocated_weeks" for issue in partial_readiness.issues)
+
+    filled = replace_standard_rotation(
+        freed,
+        rotation.id,
+        rotation,
+        resident_overrides=[
+            {
+                "resident_id": resident_id,
+                "rotation_id": rotation.id,
+                "duration_weeks": 2,
+                "replaces_rotation_id": None,
+            }
+            for resident_id in pgy1_resident_ids
+        ],
+    )
+
+    assert all(
+        filled.resident_unallocated_weeks(resident_id) == 0 for resident_id in pgy1_resident_ids
+    )
+    assert check_solve_readiness(SolverProblem.from_instance(filled)).ready
+
+
+def test_waived_requirement_becomes_resident_unallocated_time() -> None:
+    instance = sample_instance()
+    rotation = instance.rotation("night_float")
+    waiver = {
+        "resident_id": "resident-001",
+        "rotation_id": rotation.id,
+        "duration_weeks": 2,
+    }
+    waived = replace_standard_rotation(
+        instance,
+        rotation.id,
+        rotation,
+        resident_waivers=[waiver],
+    )
+
+    assert waived.resident_unallocated_weeks("resident-001") == 2
+    assert not check_solve_readiness(SolverProblem.from_instance(waived)).ready
+
+    filled = replace_standard_rotation(
+        waived,
+        rotation.id,
+        rotation,
+        resident_overrides=[
+            {
+                "resident_id": "resident-001",
+                "rotation_id": rotation.id,
+                "duration_weeks": 2,
+                "replaces_rotation_id": None,
+            }
+        ],
+    )
+
+    assert filled.resident_unallocated_weeks("resident-001") == 0
+    assert check_solve_readiness(SolverProblem.from_instance(filled)).ready
 
 
 def test_a_level_with_no_residents_never_blocks_a_solve() -> None:

@@ -27,6 +27,8 @@ class Occurrence:
     fixed_start_week: int | None = None
     rotation_group_key: str | None = None
     rotation_group_instance_id: str | None = None
+    grouped_with_rotation_ids: tuple[str, ...] = ()
+    elective_blackout_weeks: tuple[int, ...] = ()
 
 
 def rotation_group_key(pgy: int, rotation_ids: list[str] | tuple[str, ...]) -> str:
@@ -92,6 +94,9 @@ def expand_occurrences(
         ]
         replacements: dict[tuple[str, int], int] = defaultdict(int)
         for manual in manual_blocks:
+            # Unallocated-funded fixed Clinic blocks remove no curriculum block.
+            if manual.replaces_rotation_id is None:
+                continue
             replacements[manual.replaces_rotation_id, manual.duration_weeks] += 1
         for override in resident_overrides:
             # Unallocated-funded extras remove no curriculum block.
@@ -133,10 +138,21 @@ def expand_occurrences(
                     rule = candidate.pgy_rule(resident.pgy)
                     elective = direct_elective
                     elective_fallback = elective and candidate.kind is RotationKind.CLINIC
-                    group = (
-                        instance.rotation_group_for(resident.pgy, candidate.id)
-                        if not elective and candidate.id == block.rotation_id
+                    elective_option = (
+                        instance.electives.option_for(candidate.id) if elective else None
+                    )
+                    group = instance.rotation_group_for(resident.pgy, candidate.id)
+                    symmetric_group = (
+                        group
+                        if not elective
+                        and candidate.id == block.rotation_id
+                        and group is not None
+                        and group.anchor_rotation_id is None
                         else None
+                    )
+                    anchored_group = instance.anchored_rotation_group_for(
+                        resident.pgy,
+                        candidate.id,
                     )
                     key = (
                         base_key
@@ -157,9 +173,26 @@ def expand_occurrences(
                             prerequisite_rotation_ids=tuple(rule.prerequisite_rotation_ids),
                             earliest_start_week=rule.earliest_start_week,
                             rotation_group_key=(
-                                rotation_group_key(group.pgy, group.rotation_ids)
-                                if group is not None
+                                rotation_group_key(
+                                    symmetric_group.pgy,
+                                    symmetric_group.rotation_ids,
+                                )
+                                if symmetric_group is not None
                                 else None
+                            ),
+                            grouped_with_rotation_ids=(
+                                tuple(
+                                    rotation_id
+                                    for rotation_id in anchored_group.rotation_ids
+                                    if rotation_id != candidate.id
+                                )
+                                if anchored_group is not None
+                                else ()
+                            ),
+                            elective_blackout_weeks=(
+                                tuple(elective_option.blackout_weeks)
+                                if elective_option is not None
+                                else ()
                             ),
                         )
                     )
@@ -169,6 +202,12 @@ def expand_occurrences(
                 instance.rotation_group_for(resident.pgy, override.rotation_id)
                 if override.group_instance_id is not None
                 else None
+            )
+            if override_group is not None and override_group.anchor_rotation_id is not None:
+                override_group = None
+            anchored_group = instance.anchored_rotation_group_for(
+                resident.pgy,
+                override.rotation_id,
             )
             key = (
                 f"{resident.id}:resident-override:{override.rotation_id}:"
@@ -196,6 +235,15 @@ def expand_occurrences(
                         f"{resident.id}:override-group:{override.group_instance_id}"
                         if override.group_instance_id is not None
                         else None
+                    ),
+                    grouped_with_rotation_ids=(
+                        tuple(
+                            rotation_id
+                            for rotation_id in anchored_group.rotation_ids
+                            if rotation_id != override.rotation_id
+                        )
+                        if anchored_group is not None
+                        else ()
                     ),
                 )
             )
@@ -341,11 +389,14 @@ def legal_starts(
     block_config = rotation.block_config(occurrence.pgy, occurrence.duration_weeks)
     starts: list[int] = []
     for start in aligned_starts(occurrence.duration_weeks, calendar):
+        covered_weeks = set(weeks_covered(start, occurrence.duration_weeks))
+        if covered_weeks.intersection(occurrence.elective_blackout_weeks):
+            continue
         if not allow_blocks_to_span_four_week_boundaries and spans_four_week_boundary(
             start, occurrence.duration_weeks
         ):
             continue
-        overlap = set(weeks_covered(start, occurrence.duration_weeks)) & vacation
+        overlap = covered_weeks & vacation
         if overlap and not block_config.vacation.allowed:
             continue
         max_vac = block_config.vacation.max_weeks_per_block

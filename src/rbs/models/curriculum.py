@@ -24,10 +24,24 @@ class BlockRequirement(StrictModel):
 
 
 class RotationGroup(StrictModel):
-    """An unordered, contiguous set of Mandatory rotations for one training level."""
+    """An unordered, contiguous set of rotations for one training level.
+
+    Ordinary groups are symmetric: every member has the same number of direct
+    Mandatory occurrences and each occurrence belongs to one complete group.
+    An anchored group is directional. Every occurrence of
+    ``anchor_rotation_id`` must be grouped, while Clinic and FMED companions
+    may have additional occurrences elsewhere on the calendar.
+    """
 
     pgy: int = Field(ge=1)
     rotation_ids: list[str] = Field(min_length=2)
+    anchor_rotation_id: str | None = Field(
+        default=None,
+        description=(
+            "Rotation whose occurrences require a complete group. When omitted, "
+            "all group members require one another in equal numbers."
+        ),
+    )
 
     @field_validator("rotation_ids")
     @classmethod
@@ -38,6 +52,25 @@ class RotationGroup(StrictModel):
         if len(normalized) != len(set(normalized)):
             raise ValueError("rotation group members must be unique")
         return normalized
+
+    @field_validator("anchor_rotation_id")
+    @classmethod
+    def normalize_anchor_rotation_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("rotation group anchor ID cannot be empty")
+        return normalized
+
+    @model_validator(mode="after")
+    def anchor_is_a_member(self) -> "RotationGroup":
+        if (
+            self.anchor_rotation_id is not None
+            and self.anchor_rotation_id not in self.rotation_ids
+        ):
+            raise ValueError("rotation group anchor must be one of its members")
+        return self
 
 
 class PGYCurriculum(StrictModel):

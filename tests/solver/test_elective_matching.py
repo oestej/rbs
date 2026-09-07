@@ -51,6 +51,7 @@ def _matching_problem(
     locks: list[dict] | None = None,
     clinic_max: int | None = None,
     a_repeatable: bool = True,
+    a_blackout_weeks: list[int] | None = None,
 ) -> SchedulerInput:
     raw = sample_instance().model_dump(mode="json")
     resident = deepcopy(raw["residents"][0])
@@ -100,6 +101,7 @@ def _matching_problem(
                 "eligible_pgys": [1],
                 "eligible_block_sizes": [1],
                 "repeatable": a_repeatable,
+                "blackout_weeks": a_blackout_weeks or [],
             },
             {
                 "rotation_id": "b",
@@ -178,6 +180,33 @@ def test_one_use_request_excludes_unranked_services_and_then_falls_back() -> Non
     assert not any(assignment.rotation_id == "b" for assignment in electives)
     assert schedule.meta.metrics.elective_fallback_blocks == 1
     assert schedule.meta.metrics.elective_preference_rank_counts == [1]
+
+
+def test_elective_is_scheduled_only_outside_its_blackout_weeks() -> None:
+    schedule = _solve(
+        _matching_problem(
+            [("a", 1)],
+            a_blackout_weeks=list(range(1, 52)),
+        )
+    )
+
+    assignment = next(
+        item for item in schedule.assignments if item.elective and item.rotation_id == "a"
+    )
+    assert assignment.weeks == [52]
+
+
+def test_fully_blacked_out_elective_falls_back_to_clinic() -> None:
+    schedule = _solve(
+        _matching_problem(
+            [("a", 1)],
+            a_blackout_weeks=list(range(1, 53)),
+        )
+    )
+
+    electives = [assignment for assignment in schedule.assignments if assignment.elective]
+    assert schedule.meta.status in {SolverStatus.OPTIMAL, SolverStatus.FEASIBLE}
+    assert all(assignment.rotation_id == "clinic" for assignment in electives)
 
 
 def test_duplicate_requests_can_match_the_same_service_more_than_once() -> None:

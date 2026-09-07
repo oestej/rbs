@@ -71,7 +71,7 @@ def test_dump_catalog(tmp_path: Path) -> None:
     output = tmp_path / "catalog.json"
     assert main(["dump-catalog", "-o", str(output)]) == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 6
+    assert payload["schema_version"] == 8
     assert payload["rotation_groups"]
     assert payload["rotations"]
     assert all("weekend" not in rotation for rotation in payload["rotations"])

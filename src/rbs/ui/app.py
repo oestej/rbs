@@ -42,6 +42,7 @@ from rbs.ui.asgi import guard_nicegui_socket_mount
 from rbs.ui.diagnostics import CLIENT_ERROR_SCRIPT, install_client_error_endpoint
 from rbs.ui.host import WorkspaceHost
 from rbs.ui.legal_notices import load_application_license, load_third_party_licenses
+from rbs.ui.pdf_export import PDF_EXPORT_ROUTE, take_staged_pdf_export
 from rbs.ui.preview import build_host
 from rbs.ui.release_notes import load_release_notes
 from rbs.ui.session import WorkspaceSession
@@ -195,6 +196,10 @@ def _register(workspace_host: WorkspaceHost) -> None:
             save_as=save_as,
         )
 
+    @app.get(PDF_EXPORT_ROUTE)
+    async def serve_pdf_export(token: str, request: Request) -> Response:
+        return pdf_export_response(workspace_host, token, request)
+
     @ui.page("/")
     async def index(resident: str | None = None) -> None:
         ui.add_head_html(f"<script>{CLIENT_ERROR_SCRIPT}</script>")
@@ -244,6 +249,35 @@ def _register(workspace_host: WorkspaceHost) -> None:
         # Awaiting the script guarantees all preceding element updates have
         # reached the browser before the overlay stops intercepting input.
         await ui.run_javascript(DISMISS_LOADING_SCREEN_SCRIPT, timeout=10.0)
+
+
+def pdf_export_response(workspace_host: WorkspaceHost, token: str, request) -> Response:
+    """Serve one staged PDF export inline so browsers open it in a new tab.
+
+    Identity is resolved again here rather than trusted from the open
+    websocket, mirroring the workspace download above: the staged token is
+    unguessable, but a lapsed proxy session must not serve another user's
+    export.
+    """
+    principal = workspace_host.principal(request)
+    if principal is None:
+        get_logger("documents").info("pdf.export_denied", status_code=403)
+        return Response(status_code=403)
+    staged = take_staged_pdf_export(token)
+    if staged is None:
+        get_logger("documents").info("pdf.export_missing", status_code=404)
+        return Response(status_code=404)
+    content, filename = staged
+    safe_filename = filename.replace('"', "")
+    get_logger("documents").info("pdf.exported")
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{safe_filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 def export_workspace_response(

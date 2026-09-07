@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from copy import deepcopy
 from functools import partial
 
 from pydantic import ValidationError
@@ -31,9 +32,12 @@ from rbs.ui.editor_common import (
     _validation_message,
     _weeks_label,
 )
+from rbs.ui.rotations.availability import _elective_availability_editor
 from rbs.ui.rotations.fmed import _open_fmed_pgy_rules_dialog
 from rbs.ui.rotations.forms import (
+    RotationEditorGuard,
     _clinic_rule_editor,
+    _confirm_close_editor,
     _core_settings,
     _draft_has_clinic_configuration,
     _rotation_detail_contents,
@@ -50,12 +54,12 @@ from rbs.ui.rotations.ops import (
     replace_elective_rotation,
     rotation_editor_state,
     rotation_from_editor_state,
+    rotation_group_members_by_pgy,
     set_elective_allocation,
 )
 from rbs.ui.rotations.summary import (
     _elective_block_size_options,
     _rotation_identity,
-    _rotation_overview_row,
 )
 from rbs.ui.rotations.types import (
     NEW_ELECTIVE_ROTATION_ID,
@@ -75,6 +79,7 @@ def _elective_configuration(
     on_select: SelectRotation,
     on_save: SaveRotation,
     on_color_save: SaveRotation,
+    guard: RotationEditorGuard | None = None,
 ) -> None:
     """Render shared Elective policy and a unified option workspace."""
     from nicegui import ui
@@ -130,6 +135,7 @@ def _elective_configuration(
                 ),
                 on_select=on_select,
                 on_save=on_save,
+                guard=guard,
             )
 
 
@@ -143,8 +149,10 @@ def _elective_shared_summary(instance: SchedulerInput) -> None:
     """
     from nicegui import ui
 
-    with ui.column().classes("rbs-elective-shared-summary w-full gap-4"):
-        with ui.column().classes("gap-1"):
+    with ui.row().classes(
+        "rbs-elective-shared-summary w-full items-start gap-5 flex-wrap"
+    ):
+        with ui.column().classes("rbs-elective-shared-color gap-1"):
             ui.label("Block schedule color").classes(
                 "rbs-type-caption rbs-font-semibold uppercase rbs-text-muted"
             )
@@ -153,7 +161,7 @@ def _elective_shared_summary(instance: SchedulerInput) -> None:
                     f"--rbs-rotation-choice-color:{instance.electives.color}"
                 )
                 ui.label(instance.electives.color).classes("rbs-type-body")
-        with ui.column().classes("w-full gap-2"):
+        with ui.column().classes("rbs-elective-shared-time min-w-0 flex-1 gap-2"):
             ui.label("Elective time").classes(
                 "rbs-type-caption rbs-font-semibold uppercase rbs-text-muted"
             )
@@ -162,7 +170,7 @@ def _elective_shared_summary(instance: SchedulerInput) -> None:
                     "rbs-type-body rbs-text-muted"
                 )
                 return
-            with ui.element("div").classes("rbs-rotation-pgy-grid w-full"):
+            with ui.element("div").classes("rbs-elective-shared-grid w-full"):
                 for curriculum in instance.requirements:
                     _elective_time_level_summary(instance, curriculum.pgy)
 
@@ -172,29 +180,19 @@ def _elective_time_level_summary(instance: SchedulerInput, pgy: int) -> None:
     from nicegui import ui
 
     committed = direct_elective_counts(instance, pgy)
-    with (
-        ui.card()
-        .props("flat bordered")
-        .classes("rbs-rotation-overview-card rbs-rotation-pgy-card gap-3 p-4")
-    ):
-        with ui.row().classes("w-full items-start justify-between gap-3"):
+    total = sum(duration * count for duration, count in committed.items())
+    with ui.column().classes("rbs-elective-time-summary min-w-0 gap-0"):
+        with ui.row().classes("w-full items-baseline justify-between gap-2 flex-nowrap"):
             ui.label(instance.training_level_name(pgy)).classes("rbs-type-control-label")
-            ui.badge(
-                _weeks_label(sum(duration * count for duration, count in committed.items())),
-                color="secondary",
-            ).props("outline")
-        _rotation_overview_row(
-            "Elective blocks",
+            ui.label(_weeks_label(total)).classes("rbs-type-caption rbs-text-muted")
+        ui.label(
             "; ".join(
                 f"{count} × {_weeks_label(duration)}" for duration, count in committed.items()
             )
-            or "None committed",
-            icon="view_week",
-        )
-        _rotation_overview_row(
-            "Unscheduled",
-            _weeks_label(instance.unallocated_weeks(pgy)),
-            icon="event_available",
+            or "None committed"
+        ).classes("rbs-type-body rbs-font-semibold")
+        ui.label(f"{_weeks_label(instance.unallocated_weeks(pgy))} unscheduled").classes(
+            "rbs-type-caption rbs-text-muted"
         )
 
 
@@ -598,7 +596,21 @@ def _elective_list_item(
                 if instance.elective_option_is_repeatable(rotation.id)
                 else "once per resident"
             )
-            ui.item_label(f"{option_type} · {levels} · {sizes} · {repeat_label}").props("caption")
+            grouped_with = sorted(
+                {
+                    instance.rotation(member).code
+                    for group in instance.rotation_groups
+                    if group.anchor_rotation_id == rotation.id
+                    for member in group.rotation_ids
+                    if member != rotation.id
+                }
+            )
+            grouping_label = (
+                f" · grouped with {' + '.join(grouped_with)}" if grouped_with else ""
+            )
+            ui.item_label(
+                f"{option_type} · {levels} · {sizes} · {repeat_label}{grouping_label}"
+            ).props("caption")
         with ui.item_section().props("side"):
             ui.icon("chevron_right").props("size=20px").classes("rbs-text-subtle")
 
@@ -611,12 +623,15 @@ def _elective_detail_panel(
     missing_id: str | None,
     on_select: SelectRotation,
     on_save: SaveRotation,
+    guard: RotationEditorGuard | None = None,
 ) -> None:
     editing = False
     panel = master_detail.detail_panel()
 
     def render_panel() -> None:
         nonlocal editing
+        if guard is not None:
+            guard.clear()
         panel.clear()
         with panel:
             if creating:
@@ -625,6 +640,7 @@ def _elective_detail_panel(
                     None,
                     on_cancel=partial(on_select, None),
                     on_save=on_save,
+                    guard=guard,
                 )
                 return
             if rotation is None:
@@ -647,6 +663,7 @@ def _elective_detail_panel(
                         rotation,
                         on_cancel=stop_editing,
                         on_save=on_save,
+                        guard=guard,
                     )
                 elif rotation.kind is RotationKind.ELECTIVE:
                     _elective_rotation_editor(
@@ -654,6 +671,7 @@ def _elective_detail_panel(
                         rotation,
                         on_cancel=stop_editing,
                         on_save=on_save,
+                        guard=guard,
                     )
                 return
 
@@ -791,6 +809,7 @@ def _elective_rotation_editor(
     *,
     on_cancel: Callable[[], None],
     on_save: SaveRotation,
+    guard: RotationEditorGuard | None = None,
 ) -> None:
     """Edit a standalone Elective in the master-detail workspace.
 
@@ -814,6 +833,14 @@ def _elective_rotation_editor(
             else list(instance.elective_block_sizes)
         ),
     }
+    blackout_weeks = set(
+        instance.elective_blackout_weeks(rotation.id) if rotation is not None else ()
+    )
+    group_draft = (
+        rotation_group_members_by_pgy(instance, rotation.id)
+        if rotation is not None
+        else {pgy: [] for pgy in instance.training_level_ids}
+    )
     academic_half_day = instance.clinic_policy.recurring_academic_half_day
     site_options = {site.id: site.name for site in instance.clinic_policy.sites}
     default_site_ids = list(instance.clinic_policy.site_ids)
@@ -837,7 +864,7 @@ def _elective_rotation_editor(
 
     save_error = None
 
-    def save() -> None:
+    def save() -> bool:
         try:
             if creating:
                 draft["id"] = next_mandatory_rotation_id(
@@ -857,6 +884,8 @@ def _elective_rotation_editor(
                     instance,
                     replacement,
                     eligible_block_sizes=eligible_block_sizes,
+                    blackout_weeks=sorted(blackout_weeks),
+                    group_members_by_pgy=group_draft,
                 )
                 if creating
                 else replace_elective_rotation(
@@ -865,17 +894,53 @@ def _elective_rotation_editor(
                     replacement,
                     eligible_pgys=_elective_rule_pgys(draft),
                     eligible_block_sizes=eligible_block_sizes,
+                    blackout_weeks=sorted(blackout_weeks),
+                    group_members_by_pgy=group_draft,
                 )
             )
             if save_error is not None:
                 save_error.set_text("")
             ui.notify(f"Saved {replacement.code} — {replacement.name}", type="positive")
             on_save(updated, replacement.id)
+            return True
         except (ValidationError, ValueError) as exc:
             message = _validation_message(exc)
             if save_error is not None:
                 save_error.set_text(message)
             ui.notify(message, type="negative", multi_line=True)
+            return False
+
+    def current_editor_state() -> dict:
+        return {
+            "draft": draft,
+            "sizes": size_draft,
+            "blackout_weeks": blackout_weeks,
+            "group": group_draft,
+        }
+
+    initial_editor_state: dict = {}
+
+    if creating or rotation is None:
+        subject = "the new elective"
+    else:
+        subject = f"{rotation.name} ({rotation.code})"
+
+    def discard_to_cancel() -> None:
+        if guard is not None:
+            guard.clear()
+        on_cancel()
+
+    def request_close() -> None:
+        if current_editor_state() == initial_editor_state:
+            on_cancel()
+            return
+        _confirm_close_editor(
+            subject=subject,
+            save_label="Save elective",
+            save_icon="save",
+            on_discard=discard_to_cancel,
+            on_save_click=save,
+        )
 
     with master_detail.detail_card():
         with ui.row().classes(
@@ -888,13 +953,19 @@ def _elective_rotation_editor(
                         ui.badge("Creating", color="secondary").props("outline")
             else:
                 _rotation_identity(rotation, instance=instance, editing=True)
-            with ui.button(icon="close", on_click=on_cancel).props(
-                button_props(
-                    ICON_BUTTON_PROPS,
-                    "aria-label='Cancel elective editing'",
-                )
-            ):
-                ui.tooltip("Cancel elective editing")
+            with ui.row().classes("items-center gap-2"):
+                ui.button(
+                    "Save elective",
+                    icon="save",
+                    on_click=save,
+                ).props("unelevated no-caps")
+                with ui.button(icon="close", on_click=request_close).props(
+                    button_props(
+                        ICON_BUTTON_PROPS,
+                        "aria-label='Close elective editor'",
+                    )
+                ):
+                    ui.tooltip("Close elective editor")
         ui.separator()
         with (
             ui.tabs()
@@ -911,6 +982,11 @@ def _elective_rotation_editor(
                 "elective_detail_clinic",
                 label="Clinic",
                 icon="event_available",
+            )
+            availability_tab = ui.tab(
+                "elective_detail_availability",
+                label="Availability",
+                icon="event_busy",
             )
 
         with (
@@ -946,6 +1022,7 @@ def _elective_rotation_editor(
                         instance,
                         draft,
                         rotation.id if rotation is not None else str(draft["id"]),
+                        group_members_by_pgy=group_draft,
                     )
 
             with ui.tab_panel(clinic_tab).classes("p-0"):
@@ -955,13 +1032,31 @@ def _elective_rotation_editor(
                     clinic_editor = ui.column().classes("w-full min-w-0 max-w-full")
                     render_clinic_editor()
 
+            with ui.tab_panel(availability_tab).classes("p-0"):
+                with ui.column().classes("w-full gap-4 p-5"):
+                    with ui.column().classes("gap-0"):
+                        ui.label("Elective availability").classes("rbs-type-section-title")
+                        ui.label(
+                            "Choose every week when this elective may be scheduled. "
+                            "Use the block controls to make a whole four-week block "
+                            "available or unavailable at once."
+                        ).classes("rbs-type-caption rbs-text-muted")
+                    _elective_availability_editor(instance, blackout_weeks)
+
         with ui.row().classes(
             "rbs-rotation-editor-actions w-full items-center justify-end gap-2 px-5 py-3"
         ):
             save_error = ui.label().classes(
                 "rbs-rotation-save-error min-w-0 flex-1 rbs-type-caption rbs-text-danger"
             )
-            ui.button("Save elective", icon="save", on_click=save).props("unelevated no-caps")
+
+    initial_editor_state.update(deepcopy(current_editor_state()))
+    if guard is not None:
+        guard.is_dirty = lambda: current_editor_state() != initial_editor_state
+        guard.save = save
+        guard.subject = subject
+        guard.save_label = "Save elective"
+        guard.save_icon = "save"
 
 
 def _confirm_remove_elective_rotation(

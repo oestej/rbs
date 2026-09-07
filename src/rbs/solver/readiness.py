@@ -63,18 +63,41 @@ def check_solve_readiness(instance: SolverProblem) -> ReadinessResult:
     staffed = {resident.pgy for resident in instance.residents}
     issues: list[ReadinessIssue] = []
 
-    for pgy, weeks in sorted(unallocated_weeks_by_level(instance).items()):
-        if pgy not in staffed:
+    for pgy in sorted(staffed):
+        weeks = instance.unallocated_weeks(pgy)
+        residents = [resident for resident in instance.residents if resident.pgy == pgy]
+        remaining = []
+        for resident in residents:
+            resident_weeks = instance.resident_unallocated_weeks(resident.id)
+            if resident_weeks > 0:
+                remaining.append((resident, resident_weeks))
+        if not remaining:
             continue
         level = instance.training_level_label(pgy, compact=True)
+        if len(remaining) == len(residents) and all(
+            resident_weeks == weeks for _resident, resident_weeks in remaining
+        ):
+            message = (
+                f"{level} has {weeks} unscheduled {'week' if weeks == 1 else 'weeks'} to allocate"
+            )
+        else:
+            by_weeks: dict[int, list[str]] = defaultdict(list)
+            for resident, resident_weeks in remaining:
+                by_weeks[resident_weeks].append(resident.name)
+            detail = "; ".join(
+                f"{resident_weeks} "
+                f"{'week' if resident_weeks == 1 else 'weeks'}: " + ", ".join(names)
+                for resident_weeks, names in sorted(by_weeks.items())
+            )
+            message = f"{level} has unscheduled resident time remaining ({detail})"
         issues.append(
             ReadinessIssue(
                 code="unallocated_weeks",
-                message=(
-                    f"{level} has {weeks} unscheduled "
-                    f"{'week' if weeks == 1 else 'weeks'} to allocate"
+                message=message,
+                suggestions=(
+                    "Add named-resident rotations that use the remaining unallocated time.",
+                    "Or allocate the remaining weeks for the whole training level under Rotations.",
                 ),
-                suggestions=("Allocate the remaining weeks under Rotations.",),
                 pgy=pgy,
             )
         )
@@ -142,6 +165,12 @@ def _rotation_rule_conflicts(
     for rotation in instance.rotations:
         capacity_details: list[str] = []
         staffed_rules = [rule for rule in rotation.pgy_rules if rule.pgy in staffed]
+        option = instance.electives.option_for(rotation.id)
+        minimum_weeks = (
+            calendar_weeks - len(option.blackout_weeks)
+            if option is not None and rotation.kind is RotationKind.ELECTIVE
+            else calendar_weeks
+        )
         minimum_total = sum(rule.min_concurrent or 0 for rule in staffed_rules)
         overall_maximum = rotation.capacity.max_concurrent
         if overall_maximum is not None and minimum_total > overall_maximum:
@@ -156,7 +185,7 @@ def _rotation_rule_conflicts(
             for (rotation_id, _pgy), weeks in potential_weeks.items()
             if rotation_id == rotation.id
         )
-        overall_required = overall_minimum * calendar_weeks
+        overall_required = overall_minimum * minimum_weeks
         if overall_minimum and overall_available < overall_required:
             capacity_details.append(
                 f"the overall minimum of {overall_minimum} needs {overall_required} "
@@ -168,7 +197,7 @@ def _rotation_rule_conflicts(
             if not minimum:
                 continue
             available = potential_weeks[rotation.id, rule.pgy]
-            required = minimum * calendar_weeks
+            required = minimum * minimum_weeks
             if available >= required:
                 continue
             level = instance.training_level_label(rule.pgy, compact=True)

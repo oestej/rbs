@@ -122,7 +122,16 @@ def _grouping(instance: SchedulerInput, rotation: Rotation) -> str:
     for group in instance.rotation_groups:
         if rotation.id not in group.rotation_ids:
             continue
-        members = " + ".join(instance.rotation(item).code for item in group.rotation_ids)
+        if group.anchor_rotation_id is None:
+            members = " + ".join(instance.rotation(item).code for item in group.rotation_ids)
+        else:
+            anchor = instance.rotation(group.anchor_rotation_id).code
+            companions = " + ".join(
+                instance.rotation(item).code
+                for item in group.rotation_ids
+                if item != group.anchor_rotation_id
+            )
+            members = f"{anchor} → {companions}"
         parts.append(f"{instance.training_level_name(group.pgy)}: {members}")
     return "; ".join(parts) if parts else "—"
 

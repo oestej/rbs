@@ -32,8 +32,6 @@ def _resident_rotation_overrides_view(
         for override in instance.resident_rotation_overrides
         if override.rotation_id == rotation.id
     ]
-    if not overrides:
-        return
     residents = instance.residents_by_id
     rotations = instance.rotations_by_id
     waivers = [
@@ -76,22 +74,31 @@ def _resident_override_elective_options(
     resident = next(item for item in instance.residents if item.id == resident_id)
     used: dict[str, int] = {}
     for manual in instance.manual_clinic_blocks:
-        if manual.resident_id == resident_id and manual.duration_weeks == duration_weeks:
+        if (
+            manual.resident_id == resident_id
+            and manual.duration_weeks == duration_weeks
+            and manual.replaces_rotation_id is not None
+        ):
             used[manual.replaces_rotation_id] = used.get(manual.replaces_rotation_id, 0) + 1
     for override in instance.resident_rotation_overrides:
         if (
             not _editor_manages_resident_override(instance, override, rotation.id)
             and override.resident_id == resident_id
             and override.duration_weeks == duration_weeks
+            and override.replaces_rotation_id is not None
         ):
             used[override.replaces_rotation_id] = used.get(override.replaces_rotation_id, 0) + 1
     for override in override_drafts:
         if (
             str(override["resident_id"]) == resident_id
             and int(override["duration_weeks"]) == duration_weeks
+            and override.get("replaces_rotation_id") is not None
         ):
             replacement_id = str(override["replaces_rotation_id"])
             used[replacement_id] = used.get(replacement_id, 0) + 1
+    for waiver in instance.resident_rotation_waivers:
+        if waiver.resident_id == resident_id and waiver.duration_weeks == duration_weeks:
+            used[waiver.rotation_id] = used.get(waiver.rotation_id, 0) + 1
 
     options: list[tuple[tuple[str, str, str], str, str]] = []
     for block in instance.curriculum_for(resident.pgy).blocks:
@@ -118,30 +125,46 @@ _UNALLOCATED_FUNDING_KEY = "unallocated"
 
 def _resident_override_unallocated_remaining(
     instance: SchedulerInput,
+    rotation: Rotation,
     override_drafts: list[Draft],
     resident_id: str,
+    waiver_drafts: list[Draft] | None = None,
 ) -> int:
-    """Unallocated weeks left in the resident's training level.
+    """Unallocated weeks left for one resident after saved and drafted extras.
 
-    Accounts for saved unallocated-funded extras and unsaved drafts sharing
-    the training-level pool.
+    Drafts replace the overrides managed by this editor, while saved overrides
+    for other rotations continue to consume this resident's own balance.
     """
-    resident = next(item for item in instance.residents if item.id == resident_id)
-    residents = instance.residents_by_id
-    used = 0
-    for override in instance.resident_rotation_overrides:
-        if override.replaces_rotation_id is not None:
-            continue
-        saved = residents.get(override.resident_id)
-        if saved is not None and saved.pgy == resident.pgy:
-            used += override.duration_weeks
-    for draft in override_drafts:
-        if draft.get("replaces_rotation_id") is not None:
-            continue
-        drafted = residents.get(str(draft["resident_id"]))
-        if drafted is not None and drafted.pgy == resident.pgy:
-            used += int(draft["duration_weeks"])
-    return instance.unallocated_weeks(resident.pgy) - used
+    remaining = instance.resident_unallocated_weeks(resident_id)
+
+    # Saved values for the rotation open in this editor are replaced by its
+    # drafts, so restore their effect before applying the draft balance.
+    remaining += sum(
+        override.duration_weeks
+        for override in instance.resident_rotation_overrides
+        if override.resident_id == resident_id
+        and override.replaces_rotation_id is None
+        and _editor_manages_resident_override(instance, override, rotation.id)
+    )
+    remaining -= sum(
+        int(draft["duration_weeks"])
+        for draft in override_drafts
+        if str(draft["resident_id"]) == resident_id
+        and draft.get("replaces_rotation_id") is None
+    )
+
+    if waiver_drafts is not None:
+        remaining -= sum(
+            waiver.duration_weeks
+            for waiver in instance.resident_rotation_waivers
+            if waiver.resident_id == resident_id and waiver.rotation_id == rotation.id
+        )
+        remaining += sum(
+            int(waiver["duration_weeks"])
+            for waiver in waiver_drafts
+            if str(waiver["resident_id"]) == resident_id
+        )
+    return remaining
 
 
 def _resident_override_funding_options(
@@ -150,13 +173,25 @@ def _resident_override_funding_options(
     override_drafts: list[Draft],
     resident_id: str,
     duration_weeks: int,
+    waiver_drafts: list[Draft] | None = None,
 ) -> list[tuple[str | None, str]]:
-    """Compatible funding, elective blocks first, then unallocated time.
+    """Compatible funding, preferring the resident's unallocated time.
 
     Each entry is a ``replaces_rotation_id`` (None funds from unallocated
-    weeks) paired with its display label.
+    weeks) paired with its display label. Same-length Elective blocks are the
+    fallback when that resident has no suitable unallocated time.
     """
-    options = [
+    options: list[tuple[str | None, str]] = []
+    remaining = _resident_override_unallocated_remaining(
+        instance,
+        rotation,
+        override_drafts,
+        resident_id,
+        waiver_drafts,
+    )
+    if remaining >= duration_weeks:
+        options.append((None, f"Unallocated time ({remaining} weeks available)"))
+    options.extend(
         (elective_id, label)
         for elective_id, label in _resident_override_elective_options(
             instance,
@@ -165,14 +200,7 @@ def _resident_override_funding_options(
             resident_id,
             duration_weeks,
         ).items()
-    ]
-    remaining = _resident_override_unallocated_remaining(
-        instance,
-        override_drafts,
-        resident_id,
     )
-    if remaining >= duration_weeks:
-        options.append((None, f"Unallocated time ({remaining} weeks available)"))
     return options
 
 
@@ -189,7 +217,11 @@ def _editor_manages_resident_override(
     if resident is None:
         return False
     group = instance.rotation_group_for(resident.pgy, rotation_id)
-    return group is not None and override.rotation_id in group.rotation_ids
+    return (
+        group is not None
+        and group.anchor_rotation_id is None
+        and override.rotation_id in group.rotation_ids
+    )
 
 
 def _resident_override_group_bundle(
@@ -198,10 +230,11 @@ def _resident_override_group_bundle(
     override_drafts: list[Draft],
     resident_id: str,
     selected_duration: int,
+    waiver_drafts: list[Draft] | None = None,
 ) -> list[Draft] | None:
     resident = instance.residents_by_id[resident_id]
     group = instance.rotation_group_for(resident.pgy, rotation.id)
-    if group is None:
+    if group is None or group.anchor_rotation_id is not None:
         return None
     bundle: list[Draft] = []
     instance_id = uuid4().hex
@@ -220,6 +253,7 @@ def _resident_override_group_bundle(
                 [*override_drafts, *bundle],
                 resident_id,
                 duration,
+                waiver_drafts,
             )
             if not funding:
                 continue
@@ -243,6 +277,7 @@ def _resident_override_duration_options(
     rotation: Rotation,
     override_drafts: list[Draft],
     resident_id: str,
+    waiver_drafts: list[Draft] | None = None,
 ) -> dict[int, str]:
     resident = next(item for item in instance.residents if item.id == resident_id)
     try:
@@ -258,6 +293,7 @@ def _resident_override_duration_options(
             override_drafts,
             resident_id,
             config.duration_weeks,
+            waiver_drafts,
         )
     }
 
@@ -266,6 +302,7 @@ def _resident_override_resident_options(
     instance: SchedulerInput,
     rotation: Rotation,
     override_drafts: list[Draft],
+    waiver_drafts: list[Draft] | None = None,
 ) -> dict[str, str]:
     return {
         resident.id: (f"{resident.name} · {instance.training_level_name(resident.pgy)}")
@@ -275,6 +312,7 @@ def _resident_override_resident_options(
             rotation,
             override_drafts,
             resident.id,
+            waiver_drafts,
         )
     }
 
@@ -284,6 +322,7 @@ def _open_resident_rotation_override_dialog(
     rotation: Rotation,
     override_drafts: list[Draft],
     refresh: Callable[[], None],
+    waiver_drafts: list[Draft] | None = None,
 ) -> None:
     from nicegui import ui
 
@@ -291,9 +330,10 @@ def _open_resident_rotation_override_dialog(
         instance,
         rotation,
         override_drafts,
+        waiver_drafts,
     )
     if not residents:
-        ui.notify("No resident has Elective or unallocated time available", type="warning")
+        ui.notify("No resident has unallocated or Elective time available", type="warning")
         return
     resident_id = next(iter(residents))
     durations = _resident_override_duration_options(
@@ -301,6 +341,7 @@ def _open_resident_rotation_override_dialog(
         rotation,
         override_drafts,
         resident_id,
+        waiver_drafts,
     )
 
     def funding_option_key(replaces_id: str | None) -> str:
@@ -315,9 +356,9 @@ def _open_resident_rotation_override_dialog(
         ui.separator()
         with ui.column().classes("w-full gap-4 p-5"):
             ui.label(
-                "Adds one Mandatory block for the selected resident. A same-length "
-                "Elective block is replaced automatically, or the block is funded "
-                "from unallocated time."
+                "Adds one required service block for the selected resident. Unallocated "
+                "time is used when available; otherwise, a same-length Elective block "
+                "can be replaced."
             ).classes("rbs-type-body rbs-text-muted")
             resident_select = (
                 ui.select(
@@ -368,14 +409,10 @@ def _open_resident_rotation_override_dialog(
                 override_drafts,
                 str(resident_select.value),
                 int(duration_select.value),
+                waiver_drafts,
             )
             options = {funding_option_key(replaces_id): label for replaces_id, label in funding}
-            value = (
-                str(funding_select.value)
-                if funding_select.value in options
-                else next(iter(options), None)
-            )
-            funding_select.set_options(options, value=value)
+            funding_select.set_options(options, value=next(iter(options), None))
 
         def refresh_group_choice() -> None:
             refresh_funding()
@@ -387,7 +424,7 @@ def _open_resident_rotation_override_dialog(
             selected_resident = str(resident_select.value)
             resident = instance.residents_by_id[selected_resident]
             group = instance.rotation_group_for(resident.pgy, rotation.id)
-            if group is None:
+            if group is None or group.anchor_rotation_id is not None:
                 group_choice.value = "unmatched"
                 group_choice.set_visibility(False)
                 group_choice_help.set_visibility(False)
@@ -399,6 +436,7 @@ def _open_resident_rotation_override_dialog(
                 override_drafts,
                 selected_resident,
                 int(duration_select.value),
+                waiver_drafts,
             )
             group_choice.set_visibility(True)
             group_choice_help.set_visibility(True)
@@ -410,7 +448,7 @@ def _open_resident_rotation_override_dialog(
                 )
                 group_choice_help.set_text(
                     "A complete group cannot be added because this resident does not "
-                    "have enough compatible Elective or unallocated time to fund every member."
+                    "have enough compatible unallocated or Elective time to fund every member."
                 )
                 funding_select.set_visibility(True)
                 return
@@ -434,6 +472,7 @@ def _open_resident_rotation_override_dialog(
                 rotation,
                 override_drafts,
                 str(resident_select.value),
+                waiver_drafts,
             )
             duration_select.set_options(
                 available,
@@ -462,49 +501,36 @@ def _open_resident_rotation_override_dialog(
                         override_drafts,
                         selected_resident,
                         selected_duration,
+                        waiver_drafts,
                     )
                     if bundle is None:
                         ui.notify(
-                            "The complete group no longer has enough compatible Elective "
-                            "or unallocated time",
+                            "The complete group no longer has enough compatible unallocated "
+                            "or Elective time",
                             type="negative",
                         )
                         return
                     override_drafts.extend(bundle)
                 else:
-                    funding_value = (
-                        None if funding_select.value is None else str(funding_select.value)
-                    )
-                    if funding_value == _UNALLOCATED_FUNDING_KEY:
-                        replaces_id: str | None = None
-                        if (
-                            _resident_override_unallocated_remaining(
-                                instance,
-                                override_drafts,
-                                selected_resident,
-                            )
-                            < selected_duration
-                        ):
-                            ui.notify(
-                                "Not enough unallocated time remains",
-                                type="negative",
-                            )
-                            return
-                    else:
-                        replaces_id = funding_value
-                        electives = _resident_override_elective_options(
+                    funding_value = str(funding_select.value or "")
+                    available_funding = {
+                        funding_option_key(replaces_id): replaces_id
+                        for replaces_id, _label in _resident_override_funding_options(
                             instance,
                             rotation,
                             override_drafts,
                             selected_resident,
                             selected_duration,
+                            waiver_drafts,
                         )
-                        if replaces_id not in electives:
-                            ui.notify(
-                                "No same-length Elective block remains available",
-                                type="negative",
-                            )
-                            return
+                    }
+                    if funding_value not in available_funding:
+                        ui.notify(
+                            "No compatible unallocated or Elective time remains",
+                            type="negative",
+                        )
+                        return
+                    replaces_id = available_funding[funding_value]
                     override_drafts.append(
                         {
                             "resident_id": selected_resident,
@@ -690,9 +716,10 @@ def _resident_rotation_overrides_editor(
         rotations = instance.rotations_by_id
         with container:
             ui.label(
-                "Add a Mandatory block for one resident, funded by an Elective "
-                "block or unallocated time, or excuse one resident from a "
-                "required block — all without changing the training-level curriculum."
+                "Add a required service block for one resident, using unallocated time "
+                "when available or a same-length Elective block otherwise; or excuse one "
+                "resident from a required block — all without changing the training-level "
+                "curriculum."
             ).classes("rbs-type-body rbs-text-muted")
             if not override_drafts and not waiver_drafts:
                 ui.label("No resident-specific exceptions.").classes("rbs-type-body rbs-text-muted")
@@ -782,6 +809,7 @@ def _resident_rotation_overrides_editor(
                         rotation,
                         override_drafts,
                         render,
+                        waiver_drafts,
                     ),
                 ).props("outline no-caps")
                 add_button.set_enabled(
@@ -790,6 +818,7 @@ def _resident_rotation_overrides_editor(
                             instance,
                             rotation,
                             override_drafts,
+                            waiver_drafts,
                         )
                     )
                 )

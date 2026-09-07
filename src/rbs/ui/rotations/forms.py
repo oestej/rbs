@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from copy import deepcopy
+from dataclasses import dataclass
 from functools import partial
 
 from pydantic import ValidationError
@@ -44,6 +46,7 @@ from rbs.ui.editor_common import (
     _validation_message,
     _weeks_label,
 )
+from rbs.ui.rotations.availability import _elective_availability_editor
 from rbs.ui.rotations.ops import (
     add_mandatory_rotation,
     elective_shapes_for_rotation,
@@ -59,7 +62,6 @@ from rbs.ui.rotations.overrides import (
     _resident_rotation_overrides_view,
 )
 from rbs.ui.rotations.summary import (
-    _configured_duration_label,
     _elective_policy_summary_chips,
     _rotation_clinic_overview,
     _rotation_identity,
@@ -101,12 +103,105 @@ def _new_mandatory_rotation_draft(instance: SchedulerInput) -> Draft:
     }
 
 
+def _confirm_close_editor(
+    *,
+    subject: str,
+    save_label: str,
+    save_icon: str,
+    on_discard: Callable[[], None],
+    on_save_click: Callable[[], None],
+) -> None:
+    """Confirm leaving a rotation editor with unsaved changes.
+
+    ``on_save_click`` runs with the dialog already closed so a failed save
+    still shows its error inline in the editor that stays open.
+    """
+    from nicegui import ui
+
+    with ui.dialog() as dialog, ui.card().classes("w-full max-w-lg gap-4 p-5"):
+        ui.label("Discard unsaved changes?").classes("rbs-type-dialog-title")
+        ui.label(f"Changes to {subject} will be lost unless you save them.").classes(
+            "rbs-type-body rbs-text-muted"
+        )
+
+        def discard() -> None:
+            dialog.close()
+            on_discard()
+
+        def save_and_leave() -> None:
+            dialog.close()
+            on_save_click()
+
+        with ui.row().classes("w-full flex-nowrap justify-end gap-2"):
+            ui.button("Keep editing", on_click=dialog.close).props("flat no-caps")
+            ui.button("Discard changes", on_click=discard).props("flat no-caps color=negative")
+            ui.button(save_label, icon=save_icon, on_click=save_and_leave).props(
+                "unelevated no-caps"
+            )
+    dialog.open()
+
+
+@dataclass
+class RotationEditorGuard:
+    """Dirty state published by the rotation editors for navigation guards.
+
+    The rotations tab owns one guard: editors register their dirty check
+    while editing, and directory selection consults it before navigating
+    away. ``clear`` runs whenever the editor unmounts or discards so a
+    stale check can never fire after the edits are gone.
+    """
+
+    is_dirty: Callable[[], bool] | None = None
+    save: Callable[[], bool] | None = None
+    subject: str = "this rotation"
+    save_label: str = "Save rotation"
+    save_icon: str = "save"
+
+    def clear(self) -> None:
+        self.is_dirty = None
+        self.save = None
+
+
+def confirm_guarded_navigation(
+    guard: RotationEditorGuard | None,
+    proceed: Callable[[], None],
+) -> None:
+    """Navigate unless the rotation editor holds unsaved changes.
+
+    Clean (or unregistered) editors proceed immediately. A dirty editor
+    opens the same discard dialog as the close button: discarding clears
+    the guard before navigating so the check cannot fire twice, while a
+    failed save stays put with its error shown inline.
+    """
+    if guard is None or guard.is_dirty is None or not guard.is_dirty():
+        proceed()
+        return
+
+    def discard_and_continue() -> None:
+        guard.clear()
+        proceed()
+
+    def save_and_continue() -> None:
+        saver = guard.save
+        if saver is not None and saver():
+            proceed()
+
+    _confirm_close_editor(
+        subject=guard.subject,
+        save_label=guard.save_label,
+        save_icon=guard.save_icon,
+        on_discard=discard_and_continue,
+        on_save_click=save_and_continue,
+    )
+
+
 def _rotation_editor(
     instance: SchedulerInput,
     rotation: Rotation | None,
     *,
     on_cancel: Callable[[], None],
     on_save: SaveRotation,
+    guard: RotationEditorGuard | None = None,
 ) -> None:
     """Edit a Mandatory rotation in the master-detail workspace.
 
@@ -124,6 +219,7 @@ def _rotation_editor(
     elective_option = instance.electives.option_for(rotation.id) if rotation is not None else None
     elective_draft: Draft = {
         "repeatable": bool(elective_option and elective_option.repeatable),
+        "blackout_weeks": set(elective_option.blackout_weeks if elective_option else ()),
         "shapes": (
             elective_shapes_for_rotation(instance, rotation.id) if rotation is not None else set()
         ),
@@ -187,7 +283,7 @@ def _rotation_editor(
 
     save_error = None
 
-    def save() -> None:
+    def save() -> bool:
         try:
             if creating:
                 draft["id"] = next_mandatory_rotation_id(
@@ -205,6 +301,9 @@ def _rotation_editor(
                     counts,
                     elective_shapes=elective_shapes,
                     elective_repeatable=bool(elective_draft.get("repeatable")),
+                    elective_blackout_weeks=sorted(
+                        elective_draft.get("blackout_weeks", set())
+                    ),
                 )
             else:
                 updated = replace_standard_rotation(
@@ -215,6 +314,9 @@ def _rotation_editor(
                     resident_waivers=resident_waiver_drafts,
                     elective_shapes=elective_shapes,
                     elective_repeatable=bool(elective_draft.get("repeatable")),
+                    elective_blackout_weeks=sorted(
+                        elective_draft.get("blackout_weeks", set())
+                    ),
                     group_members_by_pgy=group_draft,
                     counts=counts,
                 )
@@ -225,11 +327,50 @@ def _rotation_editor(
                 type="positive",
             )
             on_save(updated, replacement.id)
+            return True
         except (ValidationError, ValueError) as exc:
             message = _validation_message(exc)
             if save_error is not None:
                 save_error.set_text(message)
             ui.notify(message, type="negative", multi_line=True)
+            return False
+
+    save_label = "Add rotation" if creating else "Save rotation"
+    save_icon = "add" if creating else "save"
+
+    def current_editor_state() -> dict:
+        return {
+            "draft": draft,
+            "elective": elective_draft,
+            "overrides": resident_override_drafts,
+            "waivers": resident_waiver_drafts,
+            "group": group_draft,
+            "counts": counts,
+        }
+
+    initial_editor_state: dict = {}
+
+    if creating or rotation is None:
+        subject = "the new rotation"
+    else:
+        subject = f"{rotation.name} ({rotation.code})"
+
+    def discard_to_cancel() -> None:
+        if guard is not None:
+            guard.clear()
+        on_cancel()
+
+    def request_close() -> None:
+        if current_editor_state() == initial_editor_state:
+            on_cancel()
+            return
+        _confirm_close_editor(
+            subject=subject,
+            save_label=save_label,
+            save_icon=save_icon,
+            on_discard=discard_to_cancel,
+            on_save_click=save,
+        )
 
     with master_detail.detail_card():
         with ui.row().classes(
@@ -242,13 +383,19 @@ def _rotation_editor(
                         ui.badge("Creating", color="secondary").props("outline")
             else:
                 _rotation_identity(rotation, instance=instance, editing=True)
-            with ui.button(icon="close", on_click=on_cancel).props(
-                button_props(
-                    ICON_BUTTON_PROPS,
-                    "aria-label='Cancel rotation editing'",
-                )
-            ):
-                ui.tooltip("Cancel rotation editing")
+            with ui.row().classes("items-center gap-2"):
+                ui.button(
+                    save_label,
+                    icon=save_icon,
+                    on_click=save,
+                ).props("unelevated no-caps")
+                with ui.button(icon="close", on_click=request_close).props(
+                    button_props(
+                        ICON_BUTTON_PROPS,
+                        "aria-label='Close rotation editor'",
+                    )
+                ):
+                    ui.tooltip("Close rotation editor")
         ui.separator()
         with (
             ui.tabs()
@@ -262,6 +409,11 @@ def _rotation_editor(
                 icon="groups",
             )
             clinic_tab = ui.tab("rotation_clinic", label="Clinic", icon="event_available")
+            availability_tab = (
+                ui.tab("rotation_availability", label="Availability", icon="event_busy")
+                if elective_option is not None
+                else None
+            )
             # Exceptions reference a saved rotation, so a rotation being
             # created has no Advanced tab yet.
             advanced_tab = (
@@ -310,6 +462,22 @@ def _rotation_editor(
                     clinic_editor = ui.column().classes("w-full")
                     render_clinic_editor()
 
+            if availability_tab is not None:
+                with ui.tab_panel(availability_tab).classes("p-0"):
+                    with ui.column().classes("w-full gap-4 p-5"):
+                        with ui.column().classes("gap-0"):
+                            ui.label("Elective availability").classes(
+                                "rbs-type-section-title"
+                            )
+                            ui.label(
+                                "Choose every week when this service may fill Elective time. "
+                                "Use the block controls to update a whole four-week block."
+                            ).classes("rbs-type-caption rbs-text-muted")
+                        _elective_availability_editor(
+                            instance,
+                            elective_draft["blackout_weeks"],
+                        )
+
             if advanced_tab is not None and rotation is not None:
                 with ui.tab_panel(advanced_tab).classes("p-0"):
                     with ui.column().classes("w-full gap-4 p-5"):
@@ -339,12 +507,14 @@ def _rotation_editor(
             save_error = ui.label().classes(
                 "rbs-rotation-save-error min-w-0 flex-1 rbs-type-caption rbs-text-danger"
             )
-            ui.button("Cancel", on_click=on_cancel).props("flat no-caps")
-            ui.button(
-                "Add rotation" if creating else "Save rotation",
-                icon="save" if not creating else "add",
-                on_click=save,
-            ).props("unelevated no-caps")
+
+    initial_editor_state.update(deepcopy(current_editor_state()))
+    if guard is not None:
+        guard.is_dirty = lambda: current_editor_state() != initial_editor_state
+        guard.save = save
+        guard.subject = subject
+        guard.save_label = save_label
+        guard.save_icon = save_icon
 
 
 def _core_settings(
@@ -456,6 +626,15 @@ def _staffing_and_blocks(
     from nicegui import ui
 
     capacity = draft["capacity"]
+    configured_levels = [int(rule["pgy"]) for rule in draft["pgy_rules"]]
+    expanded_levels = set(configured_levels if len(configured_levels) == 1 else ())
+
+    def remember_expansion(pgy: int, event) -> None:
+        if event.value:
+            expanded_levels.add(pgy)
+        else:
+            expanded_levels.discard(pgy)
+
     with ui.column().classes("w-full gap-4 pt-2"):
         with ui.column().classes("rbs-rotation-editor-subsection w-full gap-3 rounded p-4"):
             with ui.column().classes("gap-0"):
@@ -515,6 +694,8 @@ def _staffing_and_blocks(
                         group_members_by_pgy=group_members_by_pgy,
                         elective_draft=elective_draft,
                         on_elective_change=on_elective_change,
+                        expanded=pgy in expanded_levels,
+                        on_expansion_change=partial(remember_expansion, pgy),
                     )
 
         render_rules()
@@ -531,6 +712,8 @@ def _pgy_rule_editor(
     group_members_by_pgy: dict[int, list[str]] | None = None,
     elective_draft: Draft | None = None,
     on_elective_change: Callable[[], None] | None = None,
+    expanded: bool = False,
+    on_expansion_change: Callable | None = None,
 ) -> None:
     from nicegui import ui
 
@@ -564,7 +747,8 @@ def _pgy_rule_editor(
         level_name,
         caption=caption,
         icon="school",
-        value=rule is not None,
+        value=expanded,
+        on_value_change=on_expansion_change,
     ).classes("rbs-pgy-rule w-full"):
         enabled = ui.checkbox(
             f"Available to {level_name}",
@@ -677,12 +861,17 @@ def _pgy_rule_editor(
             prerequisites.bind_value(rule, "prerequisite_rotation_ids", forward=_as_string_list)
             earliest.bind_value(rule, "earliest_start_week", forward=_as_int)
 
-        if group_members_by_pgy is not None and draft.get("kind") == RotationKind.STANDARD.value:
+        grouping_kind = RotationKind(str(draft.get("kind")))
+        if group_members_by_pgy is not None and grouping_kind in {
+            RotationKind.STANDARD,
+            RotationKind.ELECTIVE,
+        }:
             _rotation_group_editor(
                 instance,
                 rotation_id,
                 pgy,
                 group_members_by_pgy,
+                target_kind=grouping_kind,
             )
 
         with ui.row().classes("w-full items-center justify-between gap-3 pt-2"):
@@ -718,17 +907,25 @@ def _rotation_group_editor(
     rotation_id: str,
     pgy: int,
     members_by_pgy: dict[int, list[str]],
+    *,
+    target_kind: RotationKind,
 ) -> None:
     from nicegui import ui
 
-    options = _rotation_group_member_options(instance, rotation_id, pgy)
+    options = _rotation_group_member_options(
+        instance,
+        rotation_id,
+        pgy,
+        target_kind=target_kind,
+    )
     selected = [member for member in members_by_pgy.get(pgy, []) if member != rotation_id]
     with ui.column().classes("rbs-rotation-editor-subsection w-full gap-3 rounded p-4"):
         with ui.column().classes("gap-0"):
-            ui.label("Mandatory rotation group").classes("rbs-type-control-label")
+            ui.label("Block grouping").classes("rbs-type-control-label")
             ui.label(
-                "Grouped blocks must be consecutive, with no gap. Their order is "
-                "unrestricted here; use prerequisites above when order matters."
+                "Grouped blocks must be consecutive, with no gap. Clinic and "
+                "FMED/Inpatient are one-way: every block of this service stays with "
+                "one selected companion block, but their additional blocks remain free."
             ).classes("rbs-type-caption rbs-text-muted")
         members = (
             ui.select(
@@ -744,10 +941,7 @@ def _rotation_group_editor(
 
         def update(event) -> None:
             companions = [str(item) for item in (event.value or [])]
-            if companions:
-                members_by_pgy[pgy] = [rotation_id, *companions]
-            else:
-                members_by_pgy[pgy] = []
+            members_by_pgy[pgy] = companions
 
         members.on_value_change(update)
 
@@ -756,6 +950,8 @@ def _rotation_group_member_options(
     instance: SchedulerInput,
     rotation_id: str,
     pgy: int,
+    *,
+    target_kind: RotationKind = RotationKind.STANDARD,
 ) -> dict[str, str]:
     curriculum = instance.curriculum_for(pgy)
     target_count = sum(
@@ -764,7 +960,18 @@ def _rotation_group_member_options(
     current = instance.rotation_group_for(pgy, rotation_id)
     options: list[tuple[Rotation, str]] = []
     for rotation in instance.rotations:
-        if rotation.id == rotation_id or rotation.kind is not RotationKind.STANDARD:
+        if rotation.id == rotation_id:
+            continue
+        if target_kind is RotationKind.ELECTIVE and rotation.kind not in {
+            RotationKind.CLINIC,
+            RotationKind.FMED,
+        }:
+            continue
+        if target_kind is RotationKind.STANDARD and rotation.kind not in {
+            RotationKind.STANDARD,
+            RotationKind.CLINIC,
+            RotationKind.FMED,
+        }:
             continue
         try:
             rotation.pgy_rule(pgy)
@@ -772,12 +979,16 @@ def _rotation_group_member_options(
             continue
         count = sum(block.count for block in curriculum.blocks if block.rotation_id == rotation.id)
         other_group = instance.rotation_group_for(pgy, rotation.id)
-        if (
-            target_count > 0
-            and count == target_count
-            and (other_group is None or other_group is current)
-        ):
-            options.append((rotation, rotation.name))
+        if rotation.kind is RotationKind.STANDARD:
+            if (
+                target_count > 0
+                and count == target_count
+                and (other_group is None or other_group is current)
+            ):
+                options.append((rotation, rotation.name))
+            continue
+        if count >= max(target_count, 1):
+            options.append((rotation, f"{rotation.name} · one-way companion"))
     return {
         rotation.id: f"{rotation.code} — {name}"
         for rotation, name in sorted(options, key=lambda item: rotation_display_sort_key(item[0]))
@@ -1291,7 +1502,11 @@ def _remove_required_block_config(
     _remove_index(rule["block_configs"], index, refresh)
 
 
-def _elective_repeatable_header(elective_draft: Draft) -> Callable[[], None]:
+def _elective_repeatable_header(
+    elective_draft: Draft,
+    *,
+    title: str = "Elective availability",
+) -> Callable[[], None]:
     """Render the shared repeat-takes checkbox; return its refresher.
 
     Per-shape toggles own elective eligibility, so this header only owns the
@@ -1303,7 +1518,7 @@ def _elective_repeatable_header(elective_draft: Draft) -> Callable[[], None]:
     with ui.column().classes(
         "rbs-rotation-flags rbs-mandatory-elective-availability w-full gap-3 rounded p-3"
     ):
-        ui.label("Elective availability").classes("rbs-type-control-label")
+        ui.label(title).classes("rbs-type-control-label")
         ui.label(
             "Repeat takes apply to every block shape marked Elective "
             "or Both below. Elective block sizes follow those shapes."
@@ -1339,8 +1554,6 @@ def _rotation_detail_contents(
 
     with ui.column().classes("rbs-rotation-view w-full gap-5 p-5"):
         with ui.row().classes("rbs-rotation-summary-chips w-full gap-2 flex-wrap"):
-            for rule in rotation.pgy_rules:
-                _rotation_summary_chip(instance.training_level_label(rule.pgy, compact=True))
             for group in instance.rotation_groups:
                 if rotation.id not in group.rotation_ids:
                     continue
@@ -1349,11 +1562,18 @@ def _rotation_detail_contents(
                     for member in group.rotation_ids
                     if member != rotation.id
                 )
-                _rotation_summary_chip(
-                    f"{instance.training_level_label(group.pgy, compact=True)} "
-                    f"grouped with {companions}"
-                )
-            _rotation_summary_chip(_configured_duration_label(rotation))
+                if group.anchor_rotation_id is None or group.anchor_rotation_id == rotation.id:
+                    label = (
+                        f"{instance.training_level_label(group.pgy, compact=True)} "
+                        f"grouped with {companions}"
+                    )
+                else:
+                    anchor = instance.rotation(group.anchor_rotation_id).code
+                    label = (
+                        f"{instance.training_level_label(group.pgy, compact=True)} "
+                        f"one-way companion for {anchor}"
+                    )
+                _rotation_summary_chip(label)
             combined_capacity = _capacity_range_label(
                 rotation.capacity.min_concurrent,
                 rotation.capacity.max_concurrent,

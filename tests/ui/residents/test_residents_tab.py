@@ -143,7 +143,103 @@ def test_elective_preference_tab_renders_empty_fallback_state_and_stays_active()
         "All direct Elective blocks will use Clinic (Elective fallback) on the next solve."
         in labels
     )
-    assert {"Add request", "Save preferences"} <= buttons
+    assert "Add request" not in buttons
+    assert "Save preferences" not in buttons
+    selects = [
+        element for element in created if element.__class__.__name__ == "Select"
+    ]
+    assert [select._props.get("label") for select in selects] == [
+        "Add a service and block length"
+    ]
+
+
+def test_elective_preference_changes_add_reorder_and_remove_autosave() -> None:
+    from nicegui import ui
+    from nicegui.events import ValueChangeEventArguments
+
+    from rbs.ui.residents.electives import render_elective_preferences
+
+    instance = sample_instance()
+    resident = instance.residents_by_id["resident-001"].model_copy(
+        update={"elective_preferences": []}
+    )
+    saved: list[tuple] = []
+    before = set(ui.context.client.elements)
+    render_elective_preferences(
+        instance,
+        None,
+        resident,
+        on_schedule_save=lambda *args: saved.append(args),
+        schedule_is_current=True,
+    )
+
+    def current_elements():
+        return {
+            element_id: element
+            for element_id, element in ui.context.client.elements.items()
+            if element_id not in before and not element._deleted
+        }
+
+    def find_select():
+        return next(
+            element
+            for element in current_elements().values()
+            if element.__class__.__name__ == "Select"
+        )
+
+    def fire_value_change(select, value):
+        select.value = value
+        for listener in select._event_listeners.values():
+            if listener.type == "update:model-value":
+                listener.handler(
+                    ValueChangeEventArguments(sender=select, client=select.client, value=value)
+                )
+
+    def saved_preferences(index: int):
+        updated, resident_id, _preserve = saved[index]
+        assert resident_id == resident.id
+        return updated.residents_by_id[resident.id].elective_preferences
+
+    def buttons_with_icon(icon: str):
+        return [
+            element
+            for element in current_elements().values()
+            if element.__class__.__name__ == "Button"
+            and element._props.get("icon") == icon
+        ]
+
+    # Choosing a service adds it and saves without any button.
+    fire_value_change(find_select(), "geriatrics|2")
+    assert len(saved) == 1
+    assert [(item.rotation_id, item.duration_weeks) for item in saved_preferences(0)] == [
+        ("geriatrics", 2)
+    ]
+    assert find_select().value is None
+    fire_value_change(find_select(), "night_float|2")
+    assert len(saved) == 2
+    assert [(item.rotation_id, item.duration_weeks) for item in saved_preferences(1)] == [
+        ("geriatrics", 2),
+        ("night_float", 2),
+    ]
+
+    # Reordering the stack saves as well.
+    next(
+        iter(buttons_with_icon("arrow_downward")[0]._event_listeners.values())
+    ).handler(None)
+    assert len(saved) == 3
+    assert [(item.rotation_id, item.duration_weeks) for item in saved_preferences(2)] == [
+        ("night_float", 2),
+        ("geriatrics", 2),
+    ]
+
+    # Removing a request saves the remainder.
+    next(
+        iter(buttons_with_icon("delete_outline")[0]._event_listeners.values())
+    ).handler(None)
+    assert len(saved) == 4
+    assert [(item.rotation_id, item.duration_weeks) for item in saved_preferences(3)] == [
+        ("geriatrics", 2)
+    ]
 
 
 def test_elective_preference_tab_reports_solved_fallback_blocks() -> None:
@@ -229,7 +325,9 @@ def test_resident_directory_owns_the_new_resident_action() -> None:
     assert "rbs-master-no-selection" in master_split._classes
 
 
-def test_new_resident_form_autofocuses_full_name_and_hides_time_off(monkeypatch) -> None:
+def test_new_resident_form_autofocuses_full_name_and_hides_time_off_and_clinic(
+    monkeypatch,
+) -> None:
     from nicegui import ui
     from nicegui.elements.input import Input
 
@@ -268,9 +366,12 @@ def test_new_resident_form_autofocuses_full_name_and_hides_time_off(monkeypatch)
     assert "Vacation and Other Days Off (single days)" not in labels
     assert "Vacation weeks" not in labels
     assert "Other days off" not in labels
+    assert "Continuity clinic half-days" not in labels
+    assert "No recurring resident half-days." not in labels
 
 
 def test_edit_resident_form_does_not_request_focus(monkeypatch) -> None:
+    from nicegui import ui
     from nicegui.elements.input import Input
 
     from rbs.ui.residents.tab import _resident_form
@@ -282,14 +383,66 @@ def test_edit_resident_form_does_not_request_focus(monkeypatch) -> None:
         lambda self, name, *args, **kwargs: focus_calls.append((self, name)),
     )
 
+    before = set(ui.context.client.elements)
     _resident_form(
         sample_instance(),
         resident=sample_instance().residents[0],
         on_cancel=lambda: None,
         on_save=lambda _instance, _resident_id: None,
     )
+    labels = {
+        getattr(element, "_text", None)
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    }
 
     assert focus_calls == []
+    assert "Continuity clinic half-days" in labels
+
+
+def test_resident_form_save_sits_beside_close_without_cancel_button() -> None:
+    from nicegui import ui
+
+    from rbs.ui.residents.tab import _resident_form
+
+    for resident in (sample_instance().residents[0], None):
+        before = set(ui.context.client.elements)
+        _resident_form(
+            sample_instance(),
+            resident=resident,
+            on_cancel=lambda: None,
+            on_save=lambda _instance, _resident_id: None,
+        )
+        created = {
+            element_id: element
+            for element_id, element in ui.context.client.elements.items()
+            if element_id not in before
+        }
+        buttons = [
+            element
+            for element in created.values()
+            if element.__class__.__name__ == "Button"
+        ]
+        labels = {element._props.get("label") for element in buttons}
+        expected = "Add resident" if resident is None else "Save changes"
+        assert expected in labels
+        assert "Cancel" not in labels
+
+        save_button = next(
+            element for element in buttons if element._props.get("label") == expected
+        )
+        close_button = next(
+            element
+            for element in buttons
+            if element._props.get("aria-label") == "Cancel resident editing"
+        )
+        assert save_button.parent_slot.parent is close_button.parent_slot.parent
+        siblings = [
+            element
+            for element in created.values()
+            if element.parent_slot.parent is save_button.parent_slot.parent
+        ]
+        assert siblings.index(close_button) == siblings.index(save_button) + 1
 
 
 def test_selected_resident_uses_the_compact_detail_layout() -> None:
@@ -436,9 +589,9 @@ def test_block_schedule_edit_mode_contains_add_and_lock_tools() -> None:
     )
     assert {
         "Add block",
-        "Done editing",
-        "Lock current schedule",
-        "Unlock all manual",
+        "Return to view",
+        "Lock all rotations",
+        "Unlock all rotations",
         "Unlock",
     } <= button_labels
     assert "Hardcode block" not in button_labels
@@ -450,12 +603,13 @@ def test_block_schedule_edit_mode_toggles_tools_inline() -> None:
 
     instance = sample_instance()
     editing_changes: list[bool] = []
+    saves: list[tuple] = []
     before = set(ui.context.client.elements)
     _resident_schedule_workspace(
         instance,
         None,
         instance.residents[0],
-        on_schedule_save=lambda _instance, _resident_id, _preserve: None,
+        on_schedule_save=lambda *args: saves.append(args),
         on_block_schedule_editing_change=editing_changes.append,
     )
 
@@ -485,17 +639,19 @@ def test_block_schedule_edit_mode_toggles_tools_inline() -> None:
     next(iter(edit._event_listeners.values())).handler(None)
 
     assert editing_changes == [True]
-    assert {"Done editing", "Add block"} <= {
+    assert {"Return to view", "Add block"} <= {
         element._props.get("label") for element in current_buttons()
     }
 
     done = next(
-        element for element in current_buttons() if element._props.get("label") == "Done editing"
+        element for element in current_buttons() if element._props.get("label") == "Return to view"
     )
     next(iter(done._event_listeners.values())).handler(None)
 
     assert editing_changes == [True, False]
     assert "Add block" not in {element._props.get("label") for element in current_buttons()}
+    # Returning to view is navigation only: it never saves by itself.
+    assert saves == []
 
 
 def test_block_schedule_edit_mode_interleaves_solved_and_pending_rows() -> None:
@@ -586,7 +742,7 @@ def test_block_schedule_edit_mode_interleaves_solved_and_pending_rows() -> None:
             for value in row_text(child)
         ]
 
-    assert "Working schedule" in labels
+    assert "Working schedule" not in labels
     assert "Current schedule" not in labels
     assert "Pending blocks and manual pins" not in labels
     assert [row_text(row)[:2] for row in rows] == [
@@ -675,8 +831,12 @@ def test_saving_a_manual_block_places_it_on_the_working_schedule() -> None:
         lock.exact_block and lock.rotation_id == "clinic" and lock.weeks == [7, 8]
         for lock in updated_instance.locks
     )
-    assert updated_schedule.assignment_for(resident.id, 7).rotation_id == "clinic"
+    placed = updated_schedule.assignment_for(resident.id, 7)
+    assert placed is not None
+    assert placed.rotation_id == "clinic"
+    assert placed.clinic_slots == []
     assert updated_schedule.assignment_for(resident.id, 9) is None
+    assert updated_schedule.is_working_draft
     assert updated_schedule.meta.status is SolverStatus.UNKNOWN
 
     before = set(ui.context.client.elements)
@@ -685,7 +845,8 @@ def test_saving_a_manual_block_places_it_on_the_working_schedule() -> None:
         updated_schedule,
         resident,
         on_schedule_save=lambda _instance, _resident_id, _preserve: None,
-        block_schedule_editing=True,
+        today=date(2026, 8, 10),
+        block_schedule_editing=False,
         on_block_schedule_editing_change=lambda _editing: None,
     )
     labels = {
@@ -694,8 +855,336 @@ def test_saving_a_manual_block_places_it_on_the_working_schedule() -> None:
         if element_id not in before
     }
     assert "Block · pending solve" not in labels
-    assert "Manual" in labels
-    assert "Weeks 7–8 (Aug 10–23, 2026)" in labels
+    assert "Weeks 7–8" in labels
+    assert "Clinic" in labels
+
+
+def test_block_and_clinic_schedule_headers_share_control_layout() -> None:
+    from nicegui import ui
+
+    from rbs.ui.residents.schedule import (
+        _resident_block_schedule_report,
+        _resident_clinic_schedule_report,
+    )
+
+    instance = sample_instance()
+    resident = instance.residents[0]
+    before = set(ui.context.client.elements)
+    _resident_block_schedule_report(
+        instance,
+        None,
+        resident,
+        show_completed=False,
+        on_show_completed_change=lambda _event: None,
+        editing=False,
+        on_editing_change=lambda: None,
+        on_schedule_save=lambda _instance, _resident_id, _preserve: None,
+    )
+    _resident_clinic_schedule_report(
+        instance,
+        {"value": None},
+        resident,
+        show_completed=False,
+        on_show_completed_change=lambda _event: None,
+        editing=False,
+        on_editing_change=lambda: None,
+        on_schedule_change=lambda _schedule, _resident_id, _refresh: None,
+    )
+    created = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+    checkboxes = [
+        element
+        for element in created
+        if element.__class__.__name__ == "Checkbox"
+        and getattr(element, "_text", None) == "Show completed"
+    ]
+    assert len(checkboxes) == 2
+    for checkbox in checkboxes:
+        actions = checkbox.parent_slot.parent
+        assert "ml-auto" in actions._classes
+        edit = next(
+            element
+            for element in created
+            if element.__class__.__name__ == "Button"
+            and element._props.get("label") == "Edit schedule"
+            and element.parent_slot.parent is actions
+        )
+        # Show completed comes first, then Edit schedule, in both reports.
+        assert checkbox.id < edit.id
+
+
+def test_block_dialog_rotation_select_clears_existing_text_for_typeahead() -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    resident = instance.residents[8]
+    before = set(ui.context.client.elements)
+
+    _open_resident_block_dialog(
+        instance,
+        None,
+        resident,
+        on_schedule_save=lambda *args: None,
+        on_block_schedule_save=None,
+        schedule_is_current=True,
+    )
+    rotation = next(
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+        and element.__class__.__name__ == "Select"
+        and element._props.get("label") == "Rotation"
+    )
+    # A real typeahead keeps filtering from a cleared box: the previous
+    # selection must not linger as text that new keystrokes append to.
+    assert rotation._props.get("use-input") is True
+    assert rotation._props.get("hide-selected") is True
+    assert rotation._props.get("fill-input") is True
+
+
+def test_block_dialog_greys_out_mandatory_rotations_already_scheduled() -> None:
+    from nicegui import ui
+
+    from rbs.models.enums import RotationKind, SolverEngineName, SolverStatus
+    from rbs.models.schedule import Assignment, Schedule, ScheduleMeta
+    from rbs.ui.locks import ScheduleBlock
+
+    instance = sample_instance()
+    resident = instance.residents[8]
+    schedule = Schedule(
+        meta=ScheduleMeta(
+            academic_year=instance.academic_year,
+            engine=SolverEngineName.STUB,
+            status=SolverStatus.FEASIBLE,
+        ),
+        assignments=[
+            Assignment(
+                resident_id=resident.id,
+                rotation_id="derm",
+                kind=RotationKind.STANDARD,
+                start_week=1,
+                end_week=4,
+                weeks=[1, 2, 3, 4],
+                block_start_week=1,
+                block_duration_weeks=4,
+            )
+        ],
+    )
+
+    def open_rotation_select(**kwargs):
+        before = set(ui.context.client.elements)
+        _open_resident_block_dialog(
+            instance,
+            schedule,
+            resident,
+            on_schedule_save=lambda *args: None,
+            on_block_schedule_save=None,
+            schedule_is_current=True,
+            **kwargs,
+        )
+        return next(
+            element
+            for element_id, element in ui.context.client.elements.items()
+            if element_id not in before
+            and element.__class__.__name__ == "Select"
+            and element._props.get("label") == "Rotation"
+        )
+
+    rotation = open_rotation_select()
+    options = {option["label"]: option for option in rotation._props["options"]}
+    assert options["DERM · Derm · already scheduled"].get("disable") is True
+    # Elective entries may repeat, so they always stay enabled.
+    assert all(
+        not option.get("disable") for label, option in options.items() if "(Elec" in label
+    )
+
+    # Editing the scheduled block itself keeps its own entry enabled.
+    editing = open_rotation_select(
+        initial=ScheduleBlock(
+            resident_id=resident.id,
+            rotation_id="derm",
+            start_week=1,
+            duration_weeks=4,
+        ),
+        replace_weeks=[1, 2, 3, 4],
+    )
+    assert editing.value == "derm"
+    assert all(not option.get("disable") for option in editing._props["options"])
+
+
+def test_block_dialog_greys_out_default_rotation_once_scheduled() -> None:
+    from nicegui import ui
+    from nicegui.events import ClickEventArguments
+
+    instance = sample_instance()
+    quinn = instance.residents_by_id["resident-005"]
+    saved: list[tuple] = []
+    legacy_saves: list[tuple] = []
+
+    def open_add_dialog(current_instance, schedule):
+        before = set(ui.context.client.elements)
+        _open_resident_block_dialog(
+            current_instance,
+            schedule,
+            quinn,
+            on_schedule_save=lambda *args: legacy_saves.append(args),
+            on_block_schedule_save=lambda *args: saved.append(args),
+            schedule_is_current=True,
+        )
+        selects = {
+            element._props.get("label"): element
+            for element_id, element in ui.context.client.elements.items()
+            if element_id not in before and element.__class__.__name__ == "Select"
+        }
+        save = next(
+            element
+            for element_id, element in ui.context.client.elements.items()
+            if element_id not in before
+            and element.__class__.__name__ == "Button"
+            and element._props.get("label") == "Save block"
+        )
+        return selects, save
+
+    # Behavioral Health sorts first, so a fresh dialog opens on it.
+    selects, save = open_add_dialog(instance, None)
+    assert selects["Rotation"].value == "behavioral_health"
+    listener = next(
+        listener for listener in save._event_listeners.values() if listener.type == "click"
+    )
+    listener.handler(ClickEventArguments(sender=save, client=save.client))
+
+    # Adding the block takes the atomic schedule path: it is already on the
+    # calendar with clinic left for Solve, rather than becoming a pending lock.
+    assert legacy_saves == []
+    assert len(saved) == 1
+    scheduled, draft, resident_id = saved.pop()
+    assert resident_id == quinn.id
+    placed = draft.assignment_for(quinn.id, 1)
+    assert placed is not None
+    assert placed.rotation_id == "behavioral_health"
+    assert placed.clinic_slots == []
+    assert draft.is_working_draft
+
+    # Scheduling it must grey it out afterwards instead of leaving the
+    # default selection enabled.
+    selects, _save = open_add_dialog(scheduled, draft)
+    assert selects["Rotation"].value != "behavioral_health"
+    options = {option["label"]: option for option in selects["Rotation"]._props["options"]}
+    assert options["BH · Behavioral Health · already scheduled"].get("disable") is True
+
+
+def test_block_dialog_treats_pending_blocks_as_scheduled() -> None:
+    from nicegui import ui
+
+    from rbs.ui.locks import replace_manual_block
+
+    instance = sample_instance()
+    resident = instance.residents[8]
+    pending = replace_manual_block(
+        instance,
+        resident_id=resident.id,
+        rotation_id="outpatient_gyn",
+        start_week=11,
+        duration_weeks=2,
+    )
+    before = set(ui.context.client.elements)
+    _open_resident_block_dialog(
+        pending,
+        None,
+        resident,
+        on_schedule_save=lambda *args: None,
+        on_block_schedule_save=None,
+        schedule_is_current=False,
+    )
+    rotation = next(
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+        and element.__class__.__name__ == "Select"
+        and element._props.get("label") == "Rotation"
+    )
+    options = {option["label"]: option for option in rotation._props["options"]}
+    assert options["GYN · Outpatient GYN · already scheduled"].get("disable") is True
+
+
+def test_block_dialog_disables_overlapping_weeks() -> None:
+    from nicegui import ui
+    from nicegui.events import ClickEventArguments
+
+    from rbs.models.enums import RotationKind, SolverEngineName, SolverStatus
+    from rbs.models.schedule import Assignment, Schedule, ScheduleMeta
+
+    instance = sample_instance()
+    resident = instance.residents[8]
+    schedule = Schedule(
+        meta=ScheduleMeta(
+            academic_year=instance.academic_year,
+            engine=SolverEngineName.STUB,
+            status=SolverStatus.FEASIBLE,
+        ),
+        assignments=[
+            Assignment(
+                resident_id=resident.id,
+                rotation_id="fmed",
+                kind=RotationKind.FMED,
+                start_week=7,
+                end_week=10,
+                weeks=[7, 8, 9, 10],
+                block_start_week=7,
+                block_duration_weeks=4,
+            )
+        ],
+    )
+    before = set(ui.context.client.elements)
+    saved: list[tuple] = []
+    legacy_saves: list[tuple] = []
+    _open_resident_block_dialog(
+        instance,
+        schedule,
+        resident,
+        on_schedule_save=lambda *args: legacy_saves.append(args),
+        on_block_schedule_save=lambda *args: saved.append(args),
+        schedule_is_current=True,
+    )
+    selects = {
+        element._props.get("label"): element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before and element.__class__.__name__ == "Select"
+    }
+    # Weeks 1-4 hold a manual pin and 7-10 hold the solved block.
+    occupied = {1, 2, 3, 4, 7, 8, 9, 10}
+    duration = int(selects["Block length"].value)
+    weeks = selects["Weeks"]
+    offered = list(weeks.options)
+    assert offered
+    entries = {entry["value"]: entry for entry in weeks._props["options"]}
+    assert len(entries) == len(offered)
+    for index, start in enumerate(offered):
+        overlaps = bool(set(range(start, start + duration)) & occupied)
+        assert bool(entries[index].get("disable")) is overlaps
+        assert ("occupied" in entries[index]["label"]) is overlaps
+    # The pre-selected week itself is free to pick.
+    assert weeks.value is not None
+    assert not entries[offered.index(weeks.value)].get("disable")
+
+    # A stale or forced overlapping pick is rejected instead of saved.
+    weeks.value = 7
+    save = next(
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+        and element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Save block"
+    )
+    listener = next(
+        listener for listener in save._event_listeners.values() if listener.type == "click"
+    )
+    listener.handler(ClickEventArguments(sender=save, client=save.client))
+    assert saved == []
+    assert legacy_saves == []
 
 
 def test_locked_hardcoded_block_must_be_unlocked_before_deletion() -> None:
@@ -808,9 +1297,118 @@ def test_unlocked_populated_block_can_be_deleted_from_outdated_schedule() -> Non
         if element.__class__.__name__ == "Button"
     }
 
-    assert {"Lock", "Delete", "Edit", "Add block", "Done editing"} <= buttons.keys()
+    assert {"Lock", "Delete", "Edit", "Add block", "Return to view"} <= buttons.keys()
     assert not buttons["Delete"]._props.get("disable")
     assert "Unlock" not in buttons
+
+
+def test_delete_all_unlocked_confirms_then_keeps_locked_blocks() -> None:
+    from nicegui import ui
+
+    from rbs.models.enums import RotationKind, SolverEngineName, SolverStatus
+    from rbs.models.schedule import Assignment, Schedule, ScheduleMeta
+    from rbs.ui.locks import replace_manual_block
+    from rbs.ui.residents.schedule import _resident_block_schedule_manager
+
+    instance = sample_instance()
+    resident = instance.residents[0]
+    locked = replace_manual_block(
+        instance,
+        resident_id=resident.id,
+        rotation_id="icu",
+        start_week=20,
+        duration_weeks=4,
+    )
+    schedule = Schedule(
+        meta=ScheduleMeta(
+            academic_year=locked.academic_year,
+            engine=SolverEngineName.STUB,
+            status=SolverStatus.FEASIBLE,
+        ),
+        assignments=[
+            Assignment(
+                resident_id=resident.id,
+                rotation_id="icu",
+                kind=RotationKind.STANDARD,
+                start_week=20,
+                end_week=23,
+                weeks=[20, 21, 22, 23],
+                block_start_week=20,
+                block_duration_weeks=4,
+            ),
+            Assignment(
+                resident_id=resident.id,
+                rotation_id="clinic",
+                kind=RotationKind.CLINIC,
+                start_week=24,
+                end_week=27,
+                weeks=[24, 25, 26, 27],
+                block_start_week=24,
+                block_duration_weeks=4,
+            ),
+        ],
+    )
+    before = set(ui.context.client.elements)
+    saved: list[tuple] = []
+    _resident_block_schedule_manager(
+        locked,
+        schedule,
+        resident,
+        on_schedule_save=lambda *args: None,
+        on_block_schedule_save=None,
+        on_schedule_change=lambda *args: saved.append(args),
+        schedule_is_current=False,
+    )
+
+    def find_button(label: str):
+        return next(
+            element
+            for element_id, element in ui.context.client.elements.items()
+            if element_id not in before
+            and element.__class__.__name__ == "Button"
+            and element._props.get("label") == label
+        )
+
+    delete_all = find_button("Delete all unlocked")
+    assert delete_all._props.get("disable") is not True
+    # Opening the confirmation deletes nothing by itself.
+    next(iter(delete_all._event_listeners.values())).handler(None)
+    assert saved == []
+
+    confirm = find_button("Delete all")
+    next(iter(confirm._event_listeners.values())).handler(None)
+    assert len(saved) == 1
+    updated, resident_id, refresh = saved[0]
+    assert resident_id == resident.id
+    assert refresh is True
+    assert [assignment.rotation_id for assignment in updated.assignments] == ["icu"]
+
+
+def test_delete_all_unlocked_is_hidden_without_unlocked_blocks() -> None:
+    from nicegui import ui
+
+    from rbs.ui.residents.schedule import _resident_block_schedule_manager
+
+    instance = sample_instance()
+    resident = instance.residents[0]
+    before = set(ui.context.client.elements)
+    _resident_block_schedule_manager(
+        instance,
+        None,
+        resident,
+        on_schedule_save=lambda *args: None,
+        on_block_schedule_save=None,
+        on_schedule_change=lambda *args: None,
+        schedule_is_current=False,
+    )
+    delete_all = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+        and element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Delete all unlocked"
+    ]
+    assert delete_all == []
 
 
 def test_inline_resident_schedule_is_a_chronological_report_for_one_resident() -> None:
@@ -1948,7 +2546,7 @@ def test_outdated_resident_clinic_edit_mode_renders_all_edit_controls(
     assert events_by_day["tuesday"]._props["draggable"] == "false"
     assert "Lock clinic block" in buttons
     assert "Unlock clinic block" in buttons
-    assert "Done editing" in {
+    assert "Return to view" in {
         element._props.get("label") for element in created if element.__class__.__name__ == "Button"
     }
     assert "Academic Half Day" in labels

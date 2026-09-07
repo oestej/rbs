@@ -9,7 +9,10 @@ from rbs.solver.core.context import (
     ModelBuildError,
     PlanningContext,
 )
-from rbs.solver.core.groups import add_rotation_group_constraints
+from rbs.solver.core.groups import (
+    add_anchored_rotation_group_constraints,
+    add_rotation_group_constraints,
+)
 from rbs.solver.planning import Occurrence, covers, resolve_clinic_block_band
 
 
@@ -18,6 +21,7 @@ def add_hard_constraints(context: PlanningContext) -> ElectiveMatchingState:
     matching = _elective_preferences(context)
     _elective_repeatability(context)
     add_rotation_group_constraints(context)
+    add_anchored_rotation_group_constraints(context)
     _cover_each_week(context)
     _capacity(context)
     _locks(context)
@@ -196,6 +200,12 @@ def _capacity(context: PlanningContext) -> None:
         occurrences = context.by_rotation.get(rotation.id, [])
         if not occurrences:
             continue
+        option = context.instance.electives.option_for(rotation.id)
+        blackout_weeks = (
+            set(option.blackout_weeks)
+            if option is not None and rotation.kind is RotationKind.ELECTIVE
+            else set()
+        )
         for week in context.weeks:
             literals = [
                 context.placements[occurrence.key, start]
@@ -206,7 +216,9 @@ def _capacity(context: PlanningContext) -> None:
             _add_capacity_bounds(
                 context,
                 literals,
-                minimum=rotation.capacity.min_concurrent,
+                minimum=(
+                    None if week in blackout_weeks else rotation.capacity.min_concurrent
+                ),
                 maximum=rotation.capacity.max_concurrent,
                 label=f"{rotation.id} total",
                 week=week,
@@ -222,7 +234,7 @@ def _capacity(context: PlanningContext) -> None:
                 _add_capacity_bounds(
                     context,
                     pgy_literals,
-                    minimum=rule.min_concurrent,
+                    minimum=None if week in blackout_weeks else rule.min_concurrent,
                     maximum=rule.max_concurrent,
                     label=(
                         f"{rotation.id} "

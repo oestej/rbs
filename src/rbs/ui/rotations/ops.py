@@ -55,6 +55,8 @@ __all__ = [
     "replace_fmed_pgy_rules",
     "add_manual_clinic_block",
     "remove_manual_clinic_block",
+    "add_resident_rotation_waiver",
+    "remove_resident_rotation_waiver",
     "resident_missing_mandatory_rotations",
     "resident_rotation_week_totals",
     "rotation_group_members_by_pgy",
@@ -141,6 +143,7 @@ def add_mandatory_rotation(
     eligible_elective_block_sizes: Iterable[int] | None = None,
     elective_shapes: Iterable[tuple[int, int]] | None = None,
     elective_repeatable: bool = False,
+    elective_blackout_weeks: Iterable[int] = (),
     group_members_by_pgy: dict[int, list[str]] | None = None,
 ) -> SchedulerInput:
     """Add one standard rotation, spending the level's unallocated weeks.
@@ -228,6 +231,10 @@ def add_mandatory_rotation(
                 eligible_pgys=pgys,
                 eligible_block_sizes=sizes,
                 repeatable=elective_repeatable,
+                blackout_weeks=_normalize_elective_blackout_weeks(
+                    instance,
+                    elective_blackout_weeks,
+                ),
             ).model_dump(mode="json")
         )
     for curriculum in raw["requirements"]:
@@ -286,16 +293,16 @@ def remove_mandatory_rotation(
     raw["rotations"] = [
         configured for configured in raw["rotations"] if configured["id"] != rotation_id
     ]
-    raw["rotation_groups"] = [
-        {**group, "rotation_ids": remaining}
-        for group in raw.get("rotation_groups", [])
-        if len(
-            remaining := [
-                member for member in group.get("rotation_ids", []) if member != rotation_id
-            ]
-        )
-        >= 2
-    ]
+    repaired_groups = []
+    for group in raw.get("rotation_groups", []):
+        if group.get("anchor_rotation_id") == rotation_id:
+            continue
+        remaining = [
+            member for member in group.get("rotation_ids", []) if member != rotation_id
+        ]
+        if len(remaining) >= 2:
+            repaired_groups.append({**group, "rotation_ids": remaining})
+    raw["rotation_groups"] = repaired_groups
     raw["electives"]["rotation_options"] = [
         option
         for option in raw["electives"]["rotation_options"]
@@ -352,6 +359,7 @@ def replace_standard_rotation(
     eligible_elective_block_sizes: Iterable[int] | None = None,
     elective_shapes: Iterable[tuple[int, int]] | None = None,
     elective_repeatable: bool | None = None,
+    elective_blackout_weeks: Iterable[int] | None = None,
     group_members_by_pgy: dict[int, list[str]] | None = None,
     counts: dict[tuple[int, int], int] | None = None,
 ) -> SchedulerInput:
@@ -484,6 +492,18 @@ def replace_standard_rotation(
                         if elective_repeatable is not None
                         else bool(original_option and original_option.repeatable)
                     ),
+                    blackout_weeks=_normalize_elective_blackout_weeks(
+                        instance,
+                        (
+                            elective_blackout_weeks
+                            if elective_blackout_weeks is not None
+                            else (
+                                original_option.blackout_weeks
+                                if original_option is not None
+                                else ()
+                            )
+                        ),
+                    ),
                 )
             )
         updates["electives"] = ElectiveConfiguration(
@@ -506,7 +526,11 @@ def replace_standard_rotation(
                 if resident is not None and override.group_instance_id is not None
                 else None
             )
-            if group is None or override.rotation_id not in group.rotation_ids:
+            if (
+                group is None
+                or group.anchor_rotation_id is not None
+                or override.rotation_id not in group.rotation_ids
+            ):
                 raise ValueError("resident override belongs to a different rotation")
         updates["resident_rotation_overrides"] = [
             override
@@ -548,7 +572,11 @@ def _resident_override_managed_by_rotation(
     if resident is None:
         return False
     group = instance.rotation_group_for(resident.pgy, rotation_id)
-    return group is not None and override.rotation_id in group.rotation_ids
+    return (
+        group is not None
+        and group.anchor_rotation_id is None
+        and override.rotation_id in group.rotation_ids
+    )
 
 
 def _replace_rotation_group_members(
@@ -559,9 +587,10 @@ def _replace_rotation_group_members(
     extra_rotation: Rotation | None = None,
 ) -> list[RotationGroup]:
     """Replace this rotation's level-specific group memberships atomically."""
-    known = set(instance.rotations_by_id)
+    rotations = dict(instance.rotations_by_id)
     if extra_rotation is not None:
-        known.add(extra_rotation.id)
+        rotations[extra_rotation.id] = extra_rotation
+    known = set(rotations)
     requested_pgys = {int(pgy) for pgy in members_by_pgy}
     groups = [
         group
@@ -578,11 +607,23 @@ def _replace_rotation_group_members(
             raise ValueError(
                 "rotation group references unknown rotation(s): " + ", ".join(sorted(unknown))
             )
+        owned_members = {
+            member
+            for member in members
+            if rotations[member].kind not in {RotationKind.CLINIC, RotationKind.FMED}
+        }
         conflict = next(
             (
                 group
                 for group in groups
-                if group.pgy == pgy and set(group.rotation_ids) & set(members)
+                if group.pgy == pgy
+                and {
+                    member
+                    for member in group.rotation_ids
+                    if rotations[member].kind
+                    not in {RotationKind.CLINIC, RotationKind.FMED}
+                }
+                & owned_members
             ),
             None,
         )
@@ -591,7 +632,18 @@ def _replace_rotation_group_members(
                 f"a selected rotation already belongs to another "
                 f"{instance.training_level_label(pgy, compact=True)} group"
             )
-        groups.append(RotationGroup(pgy=pgy, rotation_ids=members))
+        directional = any(
+            rotations[member].kind in {RotationKind.CLINIC, RotationKind.FMED}
+            for member in members
+            if member != rotation_id
+        )
+        groups.append(
+            RotationGroup(
+                pgy=pgy,
+                rotation_ids=members,
+                anchor_rotation_id=rotation_id if directional else None,
+            )
+        )
     return groups
 
 
@@ -792,6 +844,7 @@ def set_elective_eligibility(
     eligible_pgys: Iterable[int] | None = None,
     eligible_block_sizes: Iterable[int] | None = None,
     repeatable: bool | None = None,
+    blackout_weeks: Iterable[int] | None = None,
 ) -> SchedulerInput:
     """Enable or disable one configured service as an Elective option."""
     try:
@@ -846,6 +899,18 @@ def set_elective_eligibility(
                     if repeatable is not None
                     else bool(original_option and original_option.repeatable)
                 ),
+                blackout_weeks=_normalize_elective_blackout_weeks(
+                    instance,
+                    (
+                        blackout_weeks
+                        if blackout_weeks is not None
+                        else (
+                            original_option.blackout_weeks
+                            if original_option is not None
+                            else ()
+                        )
+                    ),
+                ),
             )
         )
     configuration = ElectiveConfiguration(
@@ -862,6 +927,8 @@ def add_elective_rotation(
     eligible_pgys: Iterable[int] | None = None,
     eligible_block_sizes: Iterable[int] | None = None,
     repeatable: bool = False,
+    blackout_weeks: Iterable[int] = (),
+    group_members_by_pgy: dict[int, list[str]] | None = None,
 ) -> SchedulerInput:
     """Add a standalone Elective service and make it eligible immediately.
 
@@ -896,12 +963,26 @@ def add_elective_rotation(
                 eligible_pgys=pgys,
                 eligible_block_sizes=sizes,
                 repeatable=repeatable,
+                blackout_weeks=_normalize_elective_blackout_weeks(
+                    instance,
+                    blackout_weeks,
+                ),
             ),
         ],
     )
+    updates: dict[str, Any] = {
+        "rotations": [*instance.rotations, normalized],
+        "electives": configuration,
+    }
+    if group_members_by_pgy is not None:
+        updates["rotation_groups"] = _replace_rotation_group_members(
+            instance,
+            normalized.id,
+            group_members_by_pgy,
+            extra_rotation=normalized,
+        )
     return instance.revised(
-        rotations=[*instance.rotations, normalized],
-        electives=configuration,
+        **updates,
     )
 
 
@@ -936,6 +1017,8 @@ def replace_elective_rotation(
     eligible_pgys: Iterable[int] | None = None,
     eligible_block_sizes: Iterable[int] | None = None,
     repeatable: bool | None = None,
+    blackout_weeks: Iterable[int] | None = None,
+    group_members_by_pgy: dict[int, list[str]] | None = None,
 ) -> SchedulerInput:
     """Replace a standalone Elective service."""
     try:
@@ -979,21 +1062,39 @@ def replace_elective_rotation(
                 if repeatable is not None
                 else bool(original_option and original_option.repeatable)
             ),
+            blackout_weeks=_normalize_elective_blackout_weeks(
+                instance,
+                (
+                    blackout_weeks
+                    if blackout_weeks is not None
+                    else (
+                        original_option.blackout_weeks if original_option is not None else ()
+                    )
+                ),
+            ),
         )
         if option.rotation_id == original_id
         else option
         for option in instance.electives.rotation_options
     ]
-    return instance.revised(
-        rotations=[
+    updates: dict[str, Any] = {
+        "rotations": [
             normalized if rotation.id == original_id else rotation
             for rotation in instance.rotations
         ],
-        electives=ElectiveConfiguration(
+        "electives": ElectiveConfiguration(
             color=instance.electives.color,
             rotation_options=options,
         ),
-    )
+    }
+    if group_members_by_pgy is not None:
+        updates["rotation_groups"] = _replace_rotation_group_members(
+            instance,
+            original_id,
+            group_members_by_pgy,
+            extra_rotation=normalized,
+        )
+    return instance.revised(**updates)
 
 
 def remove_elective_rotation(
@@ -1018,6 +1119,12 @@ def remove_elective_rotation(
         option
         for option in raw["electives"]["rotation_options"]
         if option["rotation_id"] != rotation_id
+    ]
+    raw["rotation_groups"] = [
+        group
+        for group in raw.get("rotation_groups", [])
+        if group.get("anchor_rotation_id") != rotation_id
+        and rotation_id not in group.get("rotation_ids", [])
     ]
     for configured in raw["rotations"]:
         for rule in configured["pgy_rules"]:
@@ -1139,6 +1246,22 @@ def _normalize_elective_block_sizes(
     return sizes
 
 
+def _normalize_elective_blackout_weeks(
+    instance: SchedulerInput,
+    values: Iterable[int],
+) -> list[int]:
+    """Normalize unavailable weeks and keep them inside the academic year."""
+    weeks = sorted({int(value) for value in values})
+    outside = [week for week in weeks if week < 1 or week > instance.calendar.weeks]
+    if outside:
+        labels = ", ".join(str(week) for week in outside)
+        raise ValueError(
+            f"elective blackout week(s) must be between 1 and "
+            f"{instance.calendar.weeks}: {labels}"
+        )
+    return weeks
+
+
 def _normalize_elective_pgys(
     instance: SchedulerInput,
     rotation: Rotation,
@@ -1219,6 +1342,8 @@ def replace_fmed_pgy_rules(
     replacement: Rotation,
     counts: dict[tuple[int, int], int],
     *,
+    resident_overrides: list[ResidentRotationOverride | Draft] | None = None,
+    resident_waivers: list[ResidentRotationWaiver | Draft] | None = None,
     eligible_as_elective: bool | None = None,
     eligible_elective_pgys: Iterable[int] | None = None,
     eligible_elective_block_sizes: Iterable[int] | None = None,
@@ -1294,6 +1419,7 @@ def replace_fmed_pgy_rules(
                         if elective_repeatable is not None
                         else bool(original_option and original_option.repeatable)
                     ),
+                    blackout_weeks=[],
                 )
             )
         elective_configuration = ElectiveConfiguration(
@@ -1307,9 +1433,12 @@ def replace_fmed_pgy_rules(
         counts,
         expected_kind=RotationKind.FMED,
         requirement_label="FMED",
+        resident_overrides=resident_overrides,
+        resident_waivers=resident_waivers,
         elective_configuration=elective_configuration,
         elective_shapes=elective_shapes,
         elective_repeatable=elective_repeatable,
+        elective_blackout_weeks=(),
     )
 
 
@@ -1321,9 +1450,12 @@ def _replace_required_rotation_rules(
     *,
     expected_kind: RotationKind,
     requirement_label: str,
+    resident_overrides: list[ResidentRotationOverride | Draft] | None = None,
+    resident_waivers: list[ResidentRotationWaiver | Draft] | None = None,
     elective_configuration: ElectiveConfiguration | None = None,
     elective_shapes: Iterable[tuple[int, int]] | None = None,
     elective_repeatable: bool | None = None,
+    elective_blackout_weeks: Iterable[int] | None = None,
 ) -> SchedulerInput:
     """Replace required-block rules, spending or freeing unallocated weeks.
 
@@ -1406,6 +1538,18 @@ def _replace_required_rotation_rules(
                         if elective_repeatable is not None
                         else bool(original_option and original_option.repeatable)
                     ),
+                    blackout_weeks=_normalize_elective_blackout_weeks(
+                        instance,
+                        (
+                            elective_blackout_weeks
+                            if elective_blackout_weeks is not None
+                            else (
+                                original_option.blackout_weeks
+                                if original_option is not None
+                                else ()
+                            )
+                        ),
+                    ),
                 )
             )
         raw["electives"] = ElectiveConfiguration(
@@ -1442,6 +1586,36 @@ def _replace_required_rotation_rules(
         raw["requirements"],
         instance.residents_by_id,
     )
+
+    if resident_overrides is not None:
+        normalized_overrides = [
+            override
+            if isinstance(override, ResidentRotationOverride)
+            else ResidentRotationOverride.model_validate(override)
+            for override in resident_overrides
+        ]
+        if any(override.rotation_id != original_id for override in normalized_overrides):
+            raise ValueError("resident override belongs to a different rotation")
+        raw["resident_rotation_overrides"] = [
+            override
+            for override in raw.get("resident_rotation_overrides", [])
+            if override["rotation_id"] != original_id
+        ] + [override.model_dump(mode="json") for override in normalized_overrides]
+
+    if resident_waivers is not None:
+        normalized_waivers = [
+            waiver
+            if isinstance(waiver, ResidentRotationWaiver)
+            else ResidentRotationWaiver.model_validate(waiver)
+            for waiver in resident_waivers
+        ]
+        if any(waiver.rotation_id != original_id for waiver in normalized_waivers):
+            raise ValueError("resident waiver belongs to a different rotation")
+        raw["resident_rotation_waivers"] = [
+            waiver
+            for waiver in raw.get("resident_rotation_waivers", [])
+            if waiver["rotation_id"] != original_id
+        ] + [waiver.model_dump(mode="json") for waiver in normalized_waivers]
 
     return SchedulerInput.from_payload(raw)
 
@@ -1577,7 +1751,7 @@ def add_manual_clinic_block(
     instance: SchedulerInput,
     block: ManualClinicBlock | Draft,
 ) -> SchedulerInput:
-    """Add a fixed resident Clinic block and validate its replacement."""
+    """Add a fixed resident Clinic block and validate its funding."""
     added = (
         block if isinstance(block, ManualClinicBlock) else ManualClinicBlock.model_validate(block)
     )
@@ -1594,6 +1768,33 @@ def remove_manual_clinic_block(
     blocks = list(instance.manual_clinic_blocks)
     blocks.pop(index)
     return instance.revised(manual_clinic_blocks=blocks)
+
+
+def add_resident_rotation_waiver(
+    instance: SchedulerInput,
+    waiver: ResidentRotationWaiver | Draft,
+) -> SchedulerInput:
+    """Excuse one resident from one direct curriculum block."""
+    added = (
+        waiver
+        if isinstance(waiver, ResidentRotationWaiver)
+        else ResidentRotationWaiver.model_validate(waiver)
+    )
+    return instance.revised(
+        resident_rotation_waivers=[*instance.resident_rotation_waivers, added]
+    )
+
+
+def remove_resident_rotation_waiver(
+    instance: SchedulerInput,
+    index: int,
+) -> SchedulerInput:
+    """Remove a resident waiver by its position in the case."""
+    if not 0 <= index < len(instance.resident_rotation_waivers):
+        raise ValueError("resident rotation waiver not found")
+    waivers = list(instance.resident_rotation_waivers)
+    waivers.pop(index)
+    return instance.revised(resident_rotation_waivers=waivers)
 
 
 def _rotation_summary_category(kind: RotationKind) -> str:
@@ -1695,7 +1896,8 @@ def resident_rotation_week_totals(
         if block.resident_id != resident_id:
             continue
         totals["clinic"] += block.duration_weeks
-        totals["elective"] -= block.duration_weeks
+        if block.replaces_rotation_id is not None:
+            totals["elective"] -= block.duration_weeks
     for override in instance.resident_rotation_overrides:
         if override.resident_id != resident_id:
             continue
@@ -1705,6 +1907,7 @@ def resident_rotation_week_totals(
     for waiver in instance.resident_rotation_waivers:
         if waiver.resident_id != resident_id:
             continue
-        totals["mandatory"] -= waiver.duration_weeks
+        category = _rotation_summary_category(instance.rotation(waiver.rotation_id).kind)
+        totals[category] -= waiver.duration_weeks
 
     return totals

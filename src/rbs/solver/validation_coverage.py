@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from rbs.models.enums import SolverStatus
+from rbs.models.enums import RotationKind, SolverStatus
 from rbs.models.instance import SolverProblem
 from rbs.models.rotation import RotationBlockConfig
 from rbs.models.schedule import Schedule
@@ -105,9 +105,21 @@ def _validate_rotation_capacities(
     errors: list[str],
 ) -> None:
     for rotation in instance.rotations:
+        option = instance.electives.option_for(rotation.id)
+        blackout_weeks = (
+            set(option.blackout_weeks)
+            if option is not None and rotation.kind is RotationKind.ELECTIVE
+            else set()
+        )
         for week in expected_weeks:
             present = by_week_rotation.get((week, rotation.id), set())
-            _validate_rotation_capacity(rotation, week, present, successful, errors)
+            _validate_rotation_capacity(
+                rotation,
+                week,
+                present,
+                successful and week not in blackout_weeks,
+                errors,
+            )
             for rule in rotation.pgy_rules:
                 pgy_count = sum(
                     instance.residents_by_id[resident_id].pgy == rule.pgy for resident_id in present
@@ -118,7 +130,7 @@ def _validate_rotation_capacities(
                     week,
                     rule,
                     pgy_count,
-                    successful,
+                    successful and week not in blackout_weeks,
                     errors,
                 )
 

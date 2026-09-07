@@ -21,9 +21,12 @@ from rbs.ui.clinic.ops import (
     set_academic_half_day_override,
 )
 from rbs.ui.clinic.tab import (
+    _manual_clinic_resident_options,
+    _manual_funding_options,
     _open_clinic_block_rules_dialog,
     _open_clinic_editor_dialog,
     _open_manual_clinic_block_dialog,
+    _open_manual_clinic_waiver_dialog,
     render_clinic_tab,
 )
 from rbs.ui.editor_common import (
@@ -50,9 +53,11 @@ from rbs.ui.rotations.editor import (
 from rbs.ui.rotations.ops import (
     add_mandatory_rotation,
     add_manual_clinic_block,
+    add_resident_rotation_waiver,
     next_mandatory_rotation_id,
     remove_mandatory_rotation,
     remove_manual_clinic_block,
+    remove_resident_rotation_waiver,
     replace_clinic_block_rules,
     replace_fmed_pgy_rules,
     replace_rotation_color,
@@ -62,6 +67,7 @@ from rbs.ui.rotations.ops import (
     rotation_editor_state,
     rotation_from_editor_state,
     rotation_group_members_by_pgy,
+    set_elective_allocation,
     special_rotations,
     standard_rotations,
 )
@@ -1037,6 +1043,11 @@ def test_fmed_pgy_rule_editor_exposes_required_block_controls() -> None:
     ]
     text = {getattr(element, "_text", None) for element in created}
     labels = {element._props.get("label") for element in created}
+    tabs = {
+        element._props.get("label")
+        for element in created
+        if element.__class__.__name__ == "Tab"
+    }
     block_counts = [
         element.value
         for element in created
@@ -1055,9 +1066,32 @@ def test_fmed_pgy_rule_editor_exposes_required_block_controls() -> None:
         "Maximum PGY 3 residents in clinic at one time",
     } <= labels
     assert "Inpatient clinic concurrency" in text
+    assert tabs == {"General", "Training-level rules", "Clinic", "Resident overrides"}
     assert sorted(block_counts) == [1, 2, 2, 2]
     assert "Rotation code" not in labels
     assert "Rotation name" not in labels
+    tab_bar = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Tabs"
+        and "rbs-fmed-rules-tabs" in getattr(element, "_classes", [])
+    )
+    assert tab_bar._props.get("inline-label") is True
+    dialog_card = next(
+        element
+        for element in created
+        if "rbs-fmed-rules-dialog" in getattr(element, "_classes", [])
+    )
+    assert dialog_card._style["width"] == "calc(100vw - 48px)"
+    assert dialog_card._style["max-width"] == "1600px"
+    exception_buttons = {
+        element._props.get("label"): element
+        for element in created
+        if element.__class__.__name__ == "Button"
+        and element._props.get("label") in {"Add resident override", "Waive requirement"}
+    }
+    assert set(exception_buttons) == {"Add resident override", "Waive requirement"}
+    assert all(button.enabled for button in exception_buttons.values())
 
 
 def test_fmed_rules_dialog_owns_the_block_color() -> None:
@@ -1192,7 +1226,7 @@ def test_rotation_summary_is_the_first_and_default_workspace_tab() -> None:
     assert "Missing mandatory" in markup
     assert markup.index("Mandatory") < markup.index("Missing mandatory")
     assert "Time Off (included)" in markup
-    assert "✅ 52 weeks" in markup
+    assert ">52 weeks</td>" in markup
     assert markup.count('<col class="time">') == 5
     assert all(
         sum(resident_rotation_week_totals(sample_instance(), resident.id).values()) == 52
@@ -1849,6 +1883,88 @@ def test_manual_clinic_block_replaces_elective_and_round_trips() -> None:
     assert remove_manual_clinic_block(updated, 0).manual_clinic_blocks == []
 
 
+def test_manual_clinic_block_can_use_resident_unallocated_time() -> None:
+    freed, _rotation = _free_night_float_pgy1_weeks(sample_instance())
+    before = resident_rotation_week_totals(freed, "resident-001")
+
+    updated = add_manual_clinic_block(
+        freed,
+        {
+            "resident_id": "resident-001",
+            "rotation_id": "clinic",
+            "start_week": 1,
+            "duration_weeks": 2,
+            "replaces_rotation_id": None,
+        },
+    )
+
+    manual = updated.manual_clinic_blocks[0]
+    assert manual.replaces_rotation_id is None
+    assert updated.resident_unallocated_weeks("resident-001") == 0
+    after = resident_rotation_week_totals(updated, "resident-001")
+    assert after["clinic"] == before["clinic"] + 2
+    assert after["elective"] == before["elective"]
+    occurrence = next(
+        item
+        for item in expand_occurrences(updated, require_configured_electives=False)
+        if item.resident_id == "resident-001" and "manual-clinic" in item.key
+    )
+    assert occurrence.fixed_start_week == 1
+
+    with pytest.raises(ValidationError, match="resident additions use 4 unallocated weeks"):
+        add_manual_clinic_block(
+            updated,
+            {
+                "resident_id": "resident-001",
+                "rotation_id": "clinic",
+                "start_week": 3,
+                "duration_weeks": 2,
+                "replaces_rotation_id": None,
+            },
+        )
+
+
+def test_clinic_resident_exemption_frees_time_for_a_manual_block() -> None:
+    instance = sample_instance()
+    before = resident_rotation_week_totals(instance, "resident-001")
+
+    exempted = add_resident_rotation_waiver(
+        instance,
+        {
+            "resident_id": "resident-001",
+            "rotation_id": "clinic",
+            "duration_weeks": 2,
+        },
+    )
+
+    assert exempted.resident_unallocated_weeks("resident-001") == 2
+    exempted_totals = resident_rotation_week_totals(exempted, "resident-001")
+    assert exempted_totals["clinic"] == before["clinic"] - 2
+
+    repositioned = add_manual_clinic_block(
+        exempted,
+        {
+            "resident_id": "resident-001",
+            "rotation_id": "clinic",
+            "start_week": 1,
+            "duration_weeks": 2,
+            "replaces_rotation_id": None,
+        },
+    )
+    assert repositioned.resident_unallocated_weeks("resident-001") == 0
+    assert resident_rotation_week_totals(repositioned, "resident-001")["clinic"] == before[
+        "clinic"
+    ]
+
+    with pytest.raises(ValidationError, match="only 0 are available"):
+        remove_resident_rotation_waiver(repositioned, 0)
+
+    without_block = remove_manual_clinic_block(repositioned, 0)
+    restored = remove_resident_rotation_waiver(without_block, 0)
+    assert restored.resident_rotation_waivers == []
+    assert restored.resident_unallocated_weeks("resident-001") == 0
+
+
 def test_standalone_clinic_tab_uses_tabs_and_structured_site_cards() -> None:
     from nicegui import ui
 
@@ -1888,7 +2004,7 @@ def test_standalone_clinic_tab_uses_tabs_and_structured_site_cards() -> None:
         if element.__class__.__name__ == "Button" and element._props.get("label") == "Add clinic"
     )
 
-    assert tabs == ["Clinics", "Block rules", "Manual blocks (0)"]
+    assert tabs == ["Clinics", "Block rules", "Resident exceptions (0)"]
     assert panels._props.get("model-value") == "clinic_sites"
     assert {"max-w-7xl", "mx-auto"} <= set(clinic_page._classes)
     assert site_grid is not None
@@ -1896,7 +2012,7 @@ def test_standalone_clinic_tab_uses_tabs_and_structured_site_cards() -> None:
     assert {card._style.get("--rbs-clinic-color") for card in site_cards} == {
         site.color for site in sample_instance().clinic_policy.sites
     }
-    assert {"Clinic", "Clinic sites", "Clinic block rules", "Manual Clinic blocks"} <= labels
+    assert {"Clinic", "Clinic sites", "Clinic block rules", "Resident Clinic exceptions"} <= labels
     assert {"Target", "Weekly sessions", "Max residents", "Exceptions", "Primary"} <= labels
     assert add_clinic._props.get("unelevated") is True
     assert "Constrained by clinic capacity only" in labels
@@ -1905,6 +2021,11 @@ def test_standalone_clinic_tab_uses_tabs_and_structured_site_cards() -> None:
     assert any(
         element.__class__.__name__ == "Button"
         and element._props.get("label") == "Schedule clinic block"
+        for element in created
+    )
+    assert any(
+        element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Exempt resident"
         for element in created
     )
 
@@ -2011,12 +2132,13 @@ def test_clinic_block_rules_dialog_uses_clinic_name_and_compact_pgy_controls() -
     assert not any(element._props.get("label") == "Earliest start week" for element in created)
 
 
-def test_manual_clinic_dialog_chooses_elective_without_a_selector() -> None:
+def test_manual_clinic_dialog_prefers_unallocated_time() -> None:
     from nicegui import ui
 
+    freed, _rotation = _free_night_float_pgy1_weeks(sample_instance())
     before = set(ui.context.client.elements)
     _open_manual_clinic_block_dialog(
-        sample_instance(),
+        freed,
         on_save=lambda _instance, _rotation_id: None,
     )
     created = [
@@ -2026,10 +2148,61 @@ def test_manual_clinic_dialog_chooses_elective_without_a_selector() -> None:
     ]
     labels = {element._props.get("label") for element in created}
     text = {getattr(element, "_text", None) for element in created}
+    funding = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Select" and element._props.get("label") == "Funded by"
+    )
+    resident = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Select" and element._props.get("label") == "Resident"
+    )
     assert "Elective block replaced" not in labels
-    assert "Elective is preferred by default." not in text
-    assert not any(
-        isinstance(label, str) and label.startswith("Elective is selected first") for label in text
+    resident.set_value("resident-001")
+    assert funding.value == "unallocated"
+    assert funding._props["options"][0]["label"].startswith("Unallocated time")
+    assert any(
+        isinstance(label, str) and "uses the resident's unallocated time" in label for label in text
+    )
+
+    options = _manual_funding_options(freed, "resident-001", 2)
+    assert next(iter(options)) == "unallocated"
+    assert "elective" in options
+
+    unallocated_only = set_elective_allocation(freed, 1, {})
+    assert _manual_funding_options(unallocated_only, "resident-001", 2) == {
+        "unallocated": "Unallocated time (4 weeks available)"
+    }
+    assert "resident-001" in _manual_clinic_resident_options(unallocated_only)
+
+
+def test_clinic_resident_exemption_is_available_on_manual_blocks_screen() -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    before = set(ui.context.client.elements)
+    _open_manual_clinic_waiver_dialog(
+        instance,
+        on_save=lambda _instance, _rotation_id: None,
+    )
+    created = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+    text = {getattr(element, "_text", None) for element in created}
+    labels = {
+        element._props.get("label")
+        for element in created
+        if element.__class__.__name__ == "Select"
+    }
+
+    assert "Exempt resident from Clinic" in text
+    assert {"Resident", "Clinic requirement", "Block length"} <= labels
+    assert any(
+        isinstance(label, str) and "freed weeks become that resident's unallocated time" in label
+        for label in text
     )
 
 
@@ -2091,6 +2264,29 @@ def test_standard_rotation_editor_can_clear_level_specific_grouping() -> None:
 
     assert updated.rotation_group_for(1, rotation.id) is None
     assert updated.rotation_group_for(2, rotation.id) is None
+
+
+def test_mandatory_rotation_can_group_one_way_with_clinic_and_fmed() -> None:
+    instance = sample_instance()
+    rotation = instance.rotation("night_float")
+
+    updated = replace_standard_rotation(
+        instance,
+        rotation.id,
+        rotation,
+        group_members_by_pgy={
+            1: ["clinic", "fmed"],
+            2: ["clinic"],
+            3: [],
+        },
+    )
+
+    pgy1 = updated.anchored_rotation_group_for(1, rotation.id)
+    pgy2 = updated.anchored_rotation_group_for(2, rotation.id)
+    assert pgy1 is not None
+    assert pgy1.rotation_ids == ["night_float", "clinic", "fmed"]
+    assert pgy2 is not None
+    assert pgy2.rotation_ids == ["night_float", "clinic"]
 
 
 def test_rotation_editor_normalizes_code_to_uppercase() -> None:
@@ -2362,6 +2558,62 @@ def test_fmed_day_edits_save_through_dedicated_editor() -> None:
     )
 
 
+def test_fmed_rules_save_named_resident_additions_and_exemptions() -> None:
+    instance = set_elective_allocation(sample_instance(), 2, {2: 3})
+    assert instance.unallocated_weeks(2) == 2
+    rotation = instance.rotation("fmed")
+    counts = {
+        (rule.pgy, config.duration_weeks): sum(
+            block.count
+            for block in instance.curriculum_for(rule.pgy).blocks
+            if block.rotation_id == rotation.id
+            and block.duration_weeks == config.duration_weeks
+        )
+        for rule in rotation.pgy_rules
+        for config in rule.block_configs
+    }
+
+    updated = replace_fmed_pgy_rules(
+        instance,
+        rotation.id,
+        rotation,
+        counts,
+        resident_overrides=[
+            {
+                "resident_id": "resident-009",
+                "rotation_id": rotation.id,
+                "duration_weeks": 2,
+                "replaces_rotation_id": None,
+            }
+        ],
+        resident_waivers=[
+            {
+                "resident_id": "resident-009",
+                "rotation_id": rotation.id,
+                "duration_weeks": 4,
+            }
+        ],
+    )
+
+    assert [override.resident_id for override in updated.resident_rotation_overrides] == [
+        "resident-009"
+    ]
+    assert updated.resident_rotation_overrides[0].replaces_rotation_id is None
+    assert updated.resident_unallocated_weeks("resident-009") == 4
+    assert [waiver.resident_id for waiver in updated.resident_rotation_waivers] == [
+        "resident-009"
+    ]
+    resident_fmed = [
+        occurrence
+        for occurrence in expand_occurrences(updated, require_configured_electives=False)
+        if occurrence.resident_id == "resident-009"
+        and occurrence.rotation_id == rotation.id
+        and not occurrence.elective
+    ]
+    assert sum(item.duration_weeks == 2 for item in resident_fmed) == 2
+    assert sum(item.duration_weeks == 4 for item in resident_fmed) == 1
+
+
 def test_fmed_rules_dialog_shows_eligible_clinic_days() -> None:
     from nicegui import ui
 
@@ -2448,7 +2700,7 @@ def _free_night_float_pgy1_weeks(instance):
     return freed, rotation
 
 
-def test_resident_override_can_replace_unallocated_time() -> None:
+def test_resident_override_can_use_unallocated_time() -> None:
     freed, rotation = _free_night_float_pgy1_weeks(sample_instance())
     before = resident_rotation_week_totals(freed, "resident-001")
 
@@ -2468,6 +2720,7 @@ def test_resident_override_can_replace_unallocated_time() -> None:
 
     override = updated.resident_rotation_overrides[0]
     assert override.replaces_rotation_id is None
+    assert updated.resident_unallocated_weeks("resident-001") == 0
     assert updated.scheduling_case().resident_rotation_overrides == [override]
     after = resident_rotation_week_totals(updated, "resident-001")
     assert after["mandatory"] == before["mandatory"] + 2
@@ -2504,7 +2757,31 @@ def test_resident_override_can_replace_unallocated_time() -> None:
         )
 
 
+def test_unallocated_override_budget_is_managed_per_resident() -> None:
+    freed, rotation = _free_night_float_pgy1_weeks(sample_instance())
+    resident_ids = [resident.id for resident in freed.residents if resident.pgy == 1][:2]
+
+    updated = replace_standard_rotation(
+        freed,
+        rotation.id,
+        rotation,
+        resident_overrides=[
+            {
+                "resident_id": resident_id,
+                "rotation_id": rotation.id,
+                "duration_weeks": 2,
+                "replaces_rotation_id": None,
+            }
+            for resident_id in resident_ids
+        ],
+    )
+
+    assert all(updated.resident_unallocated_weeks(resident_id) == 0 for resident_id in resident_ids)
+
+
 def test_resident_waiver_skips_a_mandatory_block() -> None:
+    from nicegui import ui
+
     instance = sample_instance()
     rotation = instance.rotation("night_float")
     before = resident_rotation_week_totals(instance, "resident-001")
@@ -2546,6 +2823,16 @@ def test_resident_waiver_skips_a_mandatory_block() -> None:
         and not occurrence.elective
     ]
     assert after_occurrences == []
+
+    before_elements = set(ui.context.client.elements)
+    _rotation_detail_contents(updated, updated.rotation("night_float"))
+    detail_text = {
+        getattr(element, "_text", None)
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before_elements
+    }
+    assert "Individual exceptions" in detail_text
+    assert any(isinstance(label, str) and "excused · skips" in label for label in detail_text)
 
     with pytest.raises(ValidationError, match="are available"):
         replace_standard_rotation(
@@ -2663,14 +2950,17 @@ def test_grouped_resident_override_requires_a_complete_linked_bundle() -> None:
     assert unmatched_extra.rotation_group_instance_id is None
 
 
-def test_override_funding_options_include_unallocated_time() -> None:
-    from rbs.ui.rotations.overrides import _resident_override_funding_options
+def test_override_funding_prefers_unallocated_time() -> None:
+    from rbs.ui.rotations.overrides import (
+        _resident_override_funding_options,
+        _resident_override_resident_options,
+    )
 
     freed, rotation = _free_night_float_pgy1_weeks(sample_instance())
     funding = _resident_override_funding_options(freed, rotation, [], "resident-001", 2)
 
-    assert funding[0][0] == "elective"
-    assert (None, "Unallocated time (2 weeks available)") in funding
+    assert funding[0] == (None, "Unallocated time (2 weeks available)")
+    assert funding[1][0] == "elective"
 
     spent = [
         {
@@ -2682,8 +2972,38 @@ def test_override_funding_options_include_unallocated_time() -> None:
         }
     ]
     assert _resident_override_funding_options(freed, rotation, spent, "resident-001", 2) == [
-        (funding[0][0], funding[0][1])
+        (funding[1][0], funding[1][1])
     ]
+
+    unallocated_only = set_elective_allocation(freed, 1, {})
+    assert _resident_override_funding_options(
+        unallocated_only,
+        rotation,
+        [],
+        "resident-001",
+        2,
+    ) == [(None, "Unallocated time (4 weeks available)")]
+    assert "resident-001" in _resident_override_resident_options(
+        unallocated_only,
+        rotation,
+        [],
+    )
+
+    waived_funding = _resident_override_funding_options(
+        sample_instance(),
+        rotation,
+        [],
+        "resident-001",
+        2,
+        [
+            {
+                "resident_id": "resident-001",
+                "rotation_id": rotation.id,
+                "duration_weeks": 2,
+            }
+        ],
+    )
+    assert waived_funding[0] == (None, "Unallocated time (2 weeks available)")
 
 
 def test_override_dialog_offers_a_funded_by_choice() -> None:
@@ -2709,8 +3029,15 @@ def test_override_dialog_offers_a_funded_by_choice() -> None:
         for element in created
         if element.__class__.__name__ == "Select" and element._props.get("label") == "Funded by"
     )
+    resident = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Select" and element._props.get("label") == "Resident"
+    )
 
     assert funding._props["options"]
+    resident.set_value("resident-001")
+    assert funding.value == "unallocated"
 
 
 def test_waiver_dialog_and_editor_round_trip_a_draft() -> None:
@@ -3191,3 +3518,478 @@ def test_standard_rotation_editor_shows_blocks_per_resident() -> None:
         for element in created
         if element.__class__.__name__ == "Checkbox"
     )
+
+
+def _fire_click(element) -> None:
+    from nicegui.events import ClickEventArguments
+
+    listener = next(
+        registered
+        for registered in element._event_listeners.values()
+        if registered.type == "click"
+    )
+    listener.handler(ClickEventArguments(sender=element, client=element.client))
+
+
+def _editor_elements_since(before: set) -> list:
+    from nicegui import ui
+
+    return [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+
+
+def _editor_close_button(created: list):
+    return next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Button"
+        and element._props.get("icon") == "close"
+        and not element._props.get("label")
+    )
+
+
+def test_mandatory_editor_keeps_save_beside_close_without_cancel() -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    before = set(ui.context.client.elements)
+    _rotation_editor(
+        instance,
+        instance.rotation("icu"),
+        on_cancel=lambda: None,
+        on_save=lambda _instance, _rotation_id: None,
+    )
+    created = _editor_elements_since(before)
+    button_labels = {
+        element._props.get("label") for element in created if element.__class__.__name__ == "Button"
+    }
+
+    assert "Cancel" not in button_labels
+    save = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Save rotation"
+    )
+    close = _editor_close_button(created)
+    assert save.parent_slot.parent is close.parent_slot.parent
+
+
+def test_mandatory_editor_close_without_changes_skips_confirmation() -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    cancels: list = []
+    before = set(ui.context.client.elements)
+    _rotation_editor(
+        instance,
+        instance.rotation("icu"),
+        on_cancel=lambda: cancels.append(True),
+        on_save=lambda _instance, _rotation_id: None,
+    )
+    created = _editor_elements_since(before)
+    clicked = set(ui.context.client.elements)
+    _fire_click(_editor_close_button(created))
+
+    assert cancels == [True]
+    assert not any(
+        element.__class__.__name__ == "Dialog" for element in _editor_elements_since(clicked)
+    )
+
+
+def test_mandatory_editor_close_with_changes_confirms_before_discarding() -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    cancels: list = []
+    before = set(ui.context.client.elements)
+    _rotation_editor(
+        instance,
+        instance.rotation("icu"),
+        on_cancel=lambda: cancels.append(True),
+        on_save=lambda _instance, _rotation_id: None,
+    )
+    created = _editor_elements_since(before)
+    name = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Input" and element._props.get("label") == "Rotation name"
+    )
+    name.set_value("Intensive Care Renamed")
+    clicked = set(ui.context.client.elements)
+    _fire_click(_editor_close_button(created))
+
+    assert cancels == []
+    confirm = _editor_elements_since(clicked)
+    assert any(element.__class__.__name__ == "Dialog" for element in confirm)
+    assert "Discard unsaved changes?" in {getattr(element, "_text", None) for element in confirm}
+    discard = next(
+        element
+        for element in confirm
+        if element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Discard changes"
+    )
+    _fire_click(discard)
+
+    assert cancels == [True]
+
+
+def _item_texts(element) -> list[str]:
+    texts = [element._text] if getattr(element, "_text", None) else []
+    for slot in element.slots.values():
+        for child in slot.children:
+            texts.extend(_item_texts(child))
+    return [str(text) for text in texts]
+
+
+def _directory_item_for(created: list, name: str, *, elective_option: bool = False):
+    matches = [
+        element
+        for element in created
+        if element.__class__.__name__ == "Item" and name in _item_texts(element)
+    ]
+    if elective_option:
+        matches = [
+            element
+            for element in matches
+            if any("service" in text.casefold() for text in _item_texts(element))
+        ]
+    else:
+        matches = [
+            element
+            for element in matches
+            if not any("service" in text.casefold() for text in _item_texts(element))
+        ]
+    assert matches, f"no directory item found for {name!r}"
+    return matches[0]
+
+
+def test_guarded_navigation_proceeds_when_editor_is_clean() -> None:
+    from nicegui import ui
+
+    from rbs.ui.rotations.forms import RotationEditorGuard, confirm_guarded_navigation
+
+    proceeded: list = []
+    guard = RotationEditorGuard()
+    before = set(ui.context.client.elements)
+    confirm_guarded_navigation(guard, lambda: proceeded.append("night_float"))
+
+    assert proceeded == ["night_float"]
+    assert not any(
+        element.__class__.__name__ == "Dialog" for element in _editor_elements_since(before)
+    )
+
+
+def test_guarded_navigation_confirms_and_discards_changes_on_one_line() -> None:
+    from nicegui import ui
+
+    from rbs.ui.rotations.forms import RotationEditorGuard, confirm_guarded_navigation
+
+    proceeded: list = []
+    guard = RotationEditorGuard(
+        is_dirty=lambda: True,
+        save=lambda: True,
+        subject="ICU — Intensive Care",
+        save_label="Save rotation",
+        save_icon="save",
+    )
+    before = set(ui.context.client.elements)
+    confirm_guarded_navigation(guard, lambda: proceeded.append("night_float"))
+
+    assert proceeded == []
+    confirm = _editor_elements_since(before)
+    assert any(element.__class__.__name__ == "Dialog" for element in confirm)
+    keep = next(
+        element
+        for element in confirm
+        if element.__class__.__name__ == "Button" and element._props.get("label") == "Keep editing"
+    )
+    discard = next(
+        element
+        for element in confirm
+        if element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Discard changes"
+    )
+    save_button = next(
+        element
+        for element in confirm
+        if element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Save rotation"
+    )
+    actions = save_button.parent_slot.parent
+    assert keep.parent_slot.parent is actions
+    assert discard.parent_slot.parent is actions
+    assert "flex-nowrap" in getattr(actions, "_classes", [])
+    _fire_click(discard)
+
+    assert proceeded == ["night_float"]
+    assert guard.is_dirty is None
+
+
+@pytest.mark.parametrize(
+    ("saved_ok", "expected"),
+    [(False, []), (True, ["night_float"])],
+)
+def test_guarded_navigation_save_continues_only_on_success(saved_ok: bool, expected: list) -> None:
+    from nicegui import ui
+
+    from rbs.ui.rotations.forms import RotationEditorGuard, confirm_guarded_navigation
+
+    proceeded: list = []
+    guard = RotationEditorGuard(
+        is_dirty=lambda: True,
+        save=lambda: saved_ok,
+        subject="ICU — Intensive Care",
+        save_label="Save rotation",
+        save_icon="save",
+    )
+    before = set(ui.context.client.elements)
+    confirm_guarded_navigation(guard, lambda: proceeded.append("night_float"))
+    confirm = _editor_elements_since(before)
+    save_button = next(
+        element
+        for element in confirm
+        if element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Save rotation"
+    )
+    _fire_click(save_button)
+
+    assert proceeded == expected
+
+
+def test_mandatory_directory_click_without_changes_navigates_directly() -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    selections: list = []
+    before = set(ui.context.client.elements)
+    render_rotations_tab(
+        instance,
+        selected_rotation_id="icu",
+        on_select=selections.append,
+        on_save=lambda _instance, _rotation_id: None,
+        active_section="standard_rotations",
+    )
+    created = _editor_elements_since(before)
+    clicked = set(ui.context.client.elements)
+    _fire_click(_directory_item_for(created, "Night Float"))
+
+    assert selections == ["night_float"]
+    assert not any(
+        element.__class__.__name__ == "Dialog" for element in _editor_elements_since(clicked)
+    )
+
+
+def test_mandatory_directory_click_with_changes_confirms_before_leaving() -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    selections: list = []
+    before = set(ui.context.client.elements)
+    render_rotations_tab(
+        instance,
+        selected_rotation_id="icu",
+        on_select=selections.append,
+        on_save=lambda _instance, _rotation_id: None,
+        active_section="standard_rotations",
+    )
+    created = _editor_elements_since(before)
+    edit = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Button" and element._props.get("label") == "Edit"
+    )
+    _fire_click(edit)
+    refreshed = _editor_elements_since(before)
+    name = next(
+        element
+        for element in refreshed
+        if element.__class__.__name__ == "Input" and element._props.get("label") == "Rotation name"
+    )
+    name.set_value("Intensive Care Renamed")
+    clicked = set(ui.context.client.elements)
+    _fire_click(_directory_item_for(refreshed, "Night Float"))
+
+    assert selections == []
+    confirm = _editor_elements_since(clicked)
+    assert "Discard unsaved changes?" in {getattr(element, "_text", None) for element in confirm}
+    discard = next(
+        element
+        for element in confirm
+        if element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Discard changes"
+    )
+    _fire_click(discard)
+
+    assert selections == ["night_float"]
+
+
+def test_section_switch_preserves_dirty_editor() -> None:
+    """Switching sections hides panels without destroying the editor.
+
+    The tab change only records the section server-side, so unsaved edits
+    survive the switch and still prompt on close or directory navigation.
+    """
+    from nicegui import ui
+    from nicegui.events import ValueChangeEventArguments
+
+    instance = sample_instance()
+    selections: list = []
+    sections: list = []
+    before = set(ui.context.client.elements)
+    render_rotations_tab(
+        instance,
+        selected_rotation_id="icu",
+        on_select=selections.append,
+        on_save=lambda _instance, _rotation_id: None,
+        active_section="standard_rotations",
+        on_section_change=lambda event: sections.append(event.value),
+    )
+    created = _editor_elements_since(before)
+    edit = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Button" and element._props.get("label") == "Edit"
+    )
+    _fire_click(edit)
+    refreshed = _editor_elements_since(before)
+    name = next(
+        element
+        for element in refreshed
+        if element.__class__.__name__ == "Input" and element._props.get("label") == "Rotation name"
+    )
+    name.set_value("Intensive Care Renamed")
+    section_tabs = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Tabs"
+        and "rbs-configuration-tabs" in getattr(element, "_classes", [])
+    )
+    switched = set(ui.context.client.elements)
+    event = ValueChangeEventArguments(
+        sender=section_tabs,
+        client=section_tabs.client,
+        value="elective_configuration",
+        previous_value="standard_rotations",
+    )
+    for handler in list(section_tabs._change_handlers):
+        handler(event)
+
+    assert sections[-1] == "elective_configuration"
+    assert selections == []
+    assert not any(
+        element.__class__.__name__ == "Dialog" for element in _editor_elements_since(switched)
+    )
+    _fire_click(_editor_close_button(refreshed))
+
+    assert selections == []
+    assert "Discard unsaved changes?" in {
+        getattr(element, "_text", None) for element in _editor_elements_since(switched)
+    }
+
+
+def test_directory_click_with_two_dirty_editors_confirms_twice() -> None:
+    """Editors can stay dirty in both sections; navigation checks each guard."""
+    from nicegui import ui
+
+    instance = sample_instance()
+    selections: list = []
+    before = set(ui.context.client.elements)
+    render_rotations_tab(
+        instance,
+        selected_rotation_id="night_float",
+        on_select=selections.append,
+        on_save=lambda _instance, _rotation_id: None,
+        active_section="standard_rotations",
+    )
+    created = _editor_elements_since(before)
+    edits = [
+        element
+        for element in created
+        if element.__class__.__name__ == "Button" and element._props.get("label") == "Edit"
+    ]
+    assert len(edits) == 2
+    for edit in edits:
+        _fire_click(edit)
+    names = [
+        element
+        for element in _editor_elements_since(before)
+        if element.__class__.__name__ == "Input" and element._props.get("label") == "Rotation name"
+    ]
+    assert len(names) == 2
+    for index, name in enumerate(names):
+        name.set_value(f"Night Float {index}")
+    clicked = set(ui.context.client.elements)
+    _fire_click(_directory_item_for(_editor_elements_since(before), "ICU"))
+
+    assert selections == []
+    confirm = _editor_elements_since(clicked)
+    assert any(element.__class__.__name__ == "Dialog" for element in confirm)
+    assert "Changes to Night Float (NF) will be lost unless you save them." in {
+        getattr(element, "_text", None) for element in confirm
+    }
+    assert any(
+        element.__class__.__name__ == "Card" and "max-w-lg" in getattr(element, "_classes", [])
+        for element in confirm
+    )
+    after_first = set(ui.context.client.elements)
+    _fire_click(
+        next(
+            element
+            for element in confirm
+            if element.__class__.__name__ == "Button"
+            and element._props.get("label") == "Discard changes"
+        )
+    )
+
+    assert selections == []
+    second = _editor_elements_since(after_first)
+    assert any(element.__class__.__name__ == "Dialog" for element in second)
+    _fire_click(
+        next(
+            element
+            for element in second
+            if element.__class__.__name__ == "Button"
+            and element._props.get("label") == "Discard changes"
+        )
+    )
+
+    assert selections == ["icu"]
+
+
+def test_mandatory_editor_close_with_changes_can_keep_editing() -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    cancels: list = []
+    saves: list = []
+    before = set(ui.context.client.elements)
+    _rotation_editor(
+        instance,
+        instance.rotation("icu"),
+        on_cancel=lambda: cancels.append(True),
+        on_save=lambda updated, rotation_id: saves.append((updated, rotation_id)),
+    )
+    created = _editor_elements_since(before)
+    name = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Input" and element._props.get("label") == "Rotation name"
+    )
+    name.set_value("Intensive Care Renamed")
+    clicked = set(ui.context.client.elements)
+    _fire_click(_editor_close_button(created))
+
+    confirm = _editor_elements_since(clicked)
+    keep = next(
+        element
+        for element in confirm
+        if element.__class__.__name__ == "Button" and element._props.get("label") == "Keep editing"
+    )
+    _fire_click(keep)
+
+    assert cancels == []
+    assert saves == []

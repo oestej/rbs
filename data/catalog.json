@@ -1,5 +1,5 @@
 {
-  "schema_version": 6,
+  "schema_version": 8,
   "calendar_weeks": 52,
   "electives": {
     "color": "#326800",
@@ -13,7 +13,8 @@
         "eligible_block_sizes": [
           2
         ],
-        "repeatable": true
+        "repeatable": true,
+        "blackout_weeks": []
       },
       {
         "rotation_id": "fmed",
@@ -23,7 +24,8 @@
         "eligible_block_sizes": [
           2
         ],
-        "repeatable": true
+        "repeatable": true,
+        "blackout_weeks": []
       },
       {
         "rotation_id": "geriatrics",
@@ -34,7 +36,8 @@
         "eligible_block_sizes": [
           2
         ],
-        "repeatable": true
+        "repeatable": true,
+        "blackout_weeks": []
       },
       {
         "rotation_id": "palliative_care",
@@ -45,7 +48,8 @@
         "eligible_block_sizes": [
           2
         ],
-        "repeatable": true
+        "repeatable": true,
+        "blackout_weeks": []
       }
     ]
   },
@@ -2590,6 +2594,7 @@
   "rotation_groups": [
     {
       "pgy": 1,
+      "anchor_rotation_id": null,
       "rotation_ids": [
         "outpatient_gyn",
         "inpatient_ld"
@@ -2597,6 +2602,7 @@
     },
     {
       "pgy": 2,
+      "anchor_rotation_id": null,
       "rotation_ids": [
         "outpatient_gyn",
         "inpatient_ld"

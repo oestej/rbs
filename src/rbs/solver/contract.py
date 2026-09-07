@@ -18,7 +18,7 @@ from rbs.models.instance import SolverConfig, SolverProblem
 from rbs.models.schedule import Schedule
 
 SOLVE_PROTOCOL = "rbs.solve"
-SOLVE_PROTOCOL_VERSION = 4
+SOLVE_PROTOCOL_VERSION = 5
 
 
 class SolveRequest(StrictModel):
@@ -29,7 +29,7 @@ class SolveRequest(StrictModel):
     """
 
     protocol: Literal["rbs.solve"] = SOLVE_PROTOCOL
-    version: Literal[4] = SOLVE_PROTOCOL_VERSION
+    version: Literal[5] = SOLVE_PROTOCOL_VERSION
     request_id: str = Field(default_factory=lambda: str(uuid4()), min_length=1, max_length=128)
     problem: SolverProblem
     options: SolverConfig
@@ -67,7 +67,7 @@ class SolveError(StrictModel):
 
 class SolveSuccess(StrictModel):
     protocol: Literal["rbs.solve"] = SOLVE_PROTOCOL
-    version: Literal[4] = SOLVE_PROTOCOL_VERSION
+    version: Literal[5] = SOLVE_PROTOCOL_VERSION
     request_id: str | None = None
     status: Literal["ok"] = "ok"
     solution: Schedule
@@ -75,7 +75,7 @@ class SolveSuccess(StrictModel):
 
 class SolveFailure(StrictModel):
     protocol: Literal["rbs.solve"] = SOLVE_PROTOCOL
-    version: Literal[4] = SOLVE_PROTOCOL_VERSION
+    version: Literal[5] = SOLVE_PROTOCOL_VERSION
     request_id: str | None = None
     status: Literal["error"] = "error"
     error: SolveError

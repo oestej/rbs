@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import Field, model_validator
 
@@ -22,13 +22,23 @@ if TYPE_CHECKING:
 class ConstraintCatalog(StrictModel):
     """Versioned block constraints that can be imported and stored independently."""
 
-    schema_version: Literal[6] = 6
+    schema_version: Literal[8] = 8
     calendar_weeks: int = Field(default=52, ge=1)
     rotations: list[Rotation]
     requirements: list[PGYCurriculum] = Field(min_length=1)
     rotation_groups: list[RotationGroup] = Field(default_factory=list)
     electives: ElectiveConfiguration
     clinic_policy: ClinicPolicy
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_v7(cls, value: Any) -> Any:
+        """Upgrade catalogs written before directional rotation groups existed."""
+        if not isinstance(value, dict) or value.get("schema_version") != 7:
+            return value
+        migrated = dict(value)
+        migrated["schema_version"] = 8
+        return migrated
 
     @model_validator(mode="after")
     def check_integrity(self) -> ConstraintCatalog:
@@ -51,7 +61,7 @@ class ConstraintCatalog(StrictModel):
     @classmethod
     def from_instance(cls, instance: SolverProblem) -> ConstraintCatalog:
         return cls(
-            schema_version=6,
+            schema_version=8,
             calendar_weeks=instance.calendar.weeks,
             rotations=instance.rotations,
             requirements=instance.requirements,
@@ -96,9 +106,15 @@ def validate_catalog_integrity(
         by_rotation,
         elective_pgys,
         known_levels,
+        calendar_weeks,
     )
     _validate_clinic_references(rotations, set(clinic_policy.site_ids))
-    _validate_rotation_groups(rotation_groups, by_rotation, requirements)
+    _validate_rotation_groups(
+        rotation_groups,
+        by_rotation,
+        requirements,
+        electives,
+    )
 
     pgys = [item.pgy for item in requirements]
     if len(pgys) != len(set(pgys)):
@@ -161,23 +177,27 @@ def _validate_rotation_groups(
     groups: list[RotationGroup],
     by_rotation: dict[str, Rotation],
     requirements: list[PGYCurriculum],
+    electives: ElectiveConfiguration,
 ) -> None:
-    """Validate unordered group membership against direct Mandatory requirements."""
+    """Validate symmetric and directional grouping policies.
+
+    Symmetric groups retain the original equal-count Mandatory semantics.
+    Directional groups are anchored by a Mandatory or elective service. Their
+    Clinic/FMED companions must exist for the level, but may have surplus
+    occurrences which are not forced into a group.
+    """
     curricula = {curriculum.pgy: curriculum for curriculum in requirements}
     grouped: set[tuple[int, str]] = set()
     for group in groups:
         curriculum = curricula.get(group.pgy)
         if curriculum is None:
             raise ValueError(f"rotation group references unknown training-level key {group.pgy}")
+        rotations: dict[str, Rotation] = {}
         counts: dict[str, int] = {}
         for rotation_id in group.rotation_ids:
             rotation = by_rotation.get(rotation_id)
             if rotation is None:
                 raise ValueError(f"rotation group references unknown rotation {rotation_id!r}")
-            if rotation.kind is not RotationKind.STANDARD:
-                raise ValueError(
-                    f"rotation groups may contain only Mandatory rotations: {rotation_id!r}"
-                )
             try:
                 rotation.pgy_rule(group.pgy)
             except KeyError as exc:
@@ -185,6 +205,37 @@ def _validate_rotation_groups(
                     f"rotation group member {rotation_id!r} is unavailable to "
                     f"{curriculum.short_code}"
                 ) from exc
+            rotations[rotation_id] = rotation
+            count = sum(
+                block.count for block in curriculum.blocks if block.rotation_id == rotation_id
+            )
+            counts[rotation_id] = count
+
+        anchor_id = group.anchor_rotation_id
+        if anchor_id is None:
+            _validate_symmetric_rotation_group(
+                rotations,
+                counts,
+                curriculum,
+            )
+            owned_ids = set(group.rotation_ids)
+        else:
+            _validate_anchored_rotation_group(
+                group,
+                rotations,
+                counts,
+                curriculum,
+                electives,
+            )
+            # Clinic and FMED are one-way companions and may be reused by
+            # other policies. The solver still reserves distinct occurrences.
+            owned_ids = {
+                rotation_id
+                for rotation_id, rotation in rotations.items()
+                if rotation.kind not in {RotationKind.CLINIC, RotationKind.FMED}
+            }
+
+        for rotation_id in owned_ids:
             key = (group.pgy, rotation_id)
             if key in grouped:
                 raise ValueError(
@@ -192,21 +243,96 @@ def _validate_rotation_groups(
                     "more than one rotation group"
                 )
             grouped.add(key)
-            count = sum(
-                block.count for block in curriculum.blocks if block.rotation_id == rotation_id
+
+
+def _validate_symmetric_rotation_group(
+    rotations: dict[str, Rotation],
+    counts: dict[str, int],
+    curriculum: PGYCurriculum,
+) -> None:
+    for rotation_id, rotation in rotations.items():
+        if rotation.kind is not RotationKind.STANDARD:
+            raise ValueError(
+                "symmetric rotation groups may contain only Mandatory rotations: "
+                f"{rotation_id!r}"
             )
+        if counts[rotation_id] == 0:
+            raise ValueError(
+                f"{curriculum.short_code} rotation group member {rotation_id!r} "
+                "must be a direct Mandatory requirement"
+            )
+    if len(set(counts.values())) != 1:
+        detail = ", ".join(f"{rotation_id}={count}" for rotation_id, count in counts.items())
+        raise ValueError(
+            f"{curriculum.short_code} rotation group members must have equal "
+            f"occurrence counts ({detail})"
+        )
+
+
+def _validate_anchored_rotation_group(
+    group: RotationGroup,
+    rotations: dict[str, Rotation],
+    counts: dict[str, int],
+    curriculum: PGYCurriculum,
+    electives: ElectiveConfiguration,
+) -> None:
+    anchor_id = group.anchor_rotation_id
+    if anchor_id is None:  # pragma: no cover - caller splits the two shapes
+        return
+    anchor = rotations[anchor_id]
+    if anchor.kind not in {RotationKind.STANDARD, RotationKind.ELECTIVE}:
+        raise ValueError(
+            "a one-way rotation group must be anchored by a Mandatory or elective "
+            f"rotation: {anchor_id!r}"
+        )
+    option = electives.option_for(anchor_id)
+    anchor_count = counts[anchor_id]
+    if anchor.kind is RotationKind.ELECTIVE and (
+        option is None or group.pgy not in option.eligible_pgys
+    ):
+        raise ValueError(
+            f"{curriculum.short_code} one-way group anchor {anchor_id!r} must be "
+            "an available elective"
+        )
+    if anchor.kind is RotationKind.STANDARD and not anchor_count and (
+        option is None or group.pgy not in option.eligible_pgys
+    ):
+        raise ValueError(
+            f"{curriculum.short_code} one-way group anchor {anchor_id!r} must be "
+            "a direct Mandatory requirement or an available elective"
+        )
+
+    special_companions = 0
+    for rotation_id in group.rotation_ids:
+        if rotation_id == anchor_id:
+            continue
+        rotation = rotations[rotation_id]
+        count = counts[rotation_id]
+        if rotation.kind in {RotationKind.CLINIC, RotationKind.FMED}:
+            special_companions += 1
             if count == 0:
                 raise ValueError(
-                    f"{curriculum.short_code} rotation group member {rotation_id!r} "
-                    "must be a direct Mandatory requirement"
+                    f"{curriculum.short_code} one-way group companion {rotation_id!r} "
+                    "must be a direct Clinic or FMED requirement"
                 )
-            counts[rotation_id] = count
-        if len(set(counts.values())) != 1:
-            detail = ", ".join(f"{rotation_id}={count}" for rotation_id, count in counts.items())
+            if anchor_count and count < anchor_count:
+                raise ValueError(
+                    f"{curriculum.short_code} one-way group has {anchor_count} required "
+                    f"{anchor_id!r} blocks but only {count} {rotation_id!r} blocks"
+                )
+            continue
+        if rotation.kind is not RotationKind.STANDARD:
             raise ValueError(
-                f"{curriculum.short_code} rotation group members must have equal "
-                f"occurrence counts ({detail})"
+                "one-way rotation group companions must be Mandatory, Clinic, or FMED "
+                f"rotations: {rotation_id!r}"
             )
+        if anchor.kind is not RotationKind.STANDARD or not anchor_count or count != anchor_count:
+            raise ValueError(
+                f"{curriculum.short_code} Mandatory companions in a one-way group "
+                "must match the anchor's direct occurrence count"
+            )
+    if not special_companions:
+        raise ValueError("a one-way rotation group must include Clinic or FMED")
 
 
 def _elective_pgys_by_duration(
@@ -227,6 +353,7 @@ def _validate_elective_options(
     by_rotation: dict[str, Rotation],
     elective_pgys: dict[int, set[int]],
     known_levels: set[int],
+    calendar_weeks: int,
 ) -> None:
     known = set(by_rotation)
     unknown = set(electives.eligible_rotation_ids) - known
@@ -252,6 +379,7 @@ def _validate_elective_options(
             by_rotation[option.rotation_id],
             elective_pgys,
             known_levels,
+            calendar_weeks,
         )
 
 
@@ -260,6 +388,7 @@ def _validate_elective_option(
     rotation: Rotation,
     elective_pgys: dict[int, set[int]],
     known_levels: set[int],
+    calendar_weeks: int,
 ) -> None:
     if not option.eligible_pgys:
         raise ValueError(
@@ -302,6 +431,13 @@ def _validate_elective_option(
         raise ValueError(
             f"eligible elective rotation {option.rotation_id!r} has no matching "
             f"Elective block configuration for training level(s): {labels}"
+        )
+    outside_calendar = [week for week in option.blackout_weeks if week > calendar_weeks]
+    if outside_calendar:
+        labels = ", ".join(str(week) for week in outside_calendar)
+        raise ValueError(
+            f"eligible elective rotation {option.rotation_id!r} has blackout "
+            f"week(s) outside the {calendar_weeks}-week calendar: {labels}"
         )
 
 

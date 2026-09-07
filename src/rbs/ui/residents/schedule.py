@@ -64,6 +64,7 @@ SaveResidentSchedule = Callable[[SchedulerInput, str, bool], None]
 SaveResidentScheduleResult = Callable[[Schedule, str, bool], None]
 SaveResidentBlockSchedule = Callable[[SchedulerInput, Schedule, str], None]
 ChangeResidentScheduleEditing = Callable[[bool], None]
+OpenPdfExport = Callable[[bytes, str], None]
 
 _CLINIC_DRAG_START_JS = """
 (event) => {
@@ -137,6 +138,7 @@ def _resident_schedule_workspace(
     on_schedule_editing_change: ChangeResidentScheduleEditing | None = None,
     active_section: str = "resident_block_schedule",
     on_section_change=None,
+    on_pdf_open: OpenPdfExport | None = None,
 ):
     from nicegui import ui
 
@@ -174,11 +176,11 @@ def _resident_schedule_workspace(
                     today=today,
                 ),
             )
-            ui.download.content(
-                pdf,
-                resident_schedule_pdf_filename(resident, instance.academic_year),
-                "application/pdf",
-            )
+            filename = resident_schedule_pdf_filename(resident, instance.academic_year)
+            if on_pdf_open is not None:
+                on_pdf_open(pdf, filename)
+            else:
+                ui.download.content(pdf, filename, "application/pdf")
             get_logger("documents").info(
                 "schedule.exported",
                 source="resident_pdf",
@@ -413,7 +415,7 @@ def _resident_block_schedule_manager(
                 ),
             ).props("unelevated no-caps")
             lock_all = ui.button(
-                "Lock current schedule",
+                "Lock all rotations",
                 icon="lock",
                 on_click=lambda: save_action(
                     lambda: lock_resident_schedule(
@@ -431,7 +433,7 @@ def _resident_block_schedule_manager(
                 for lock in instance.locks
             )
             unlock_all = ui.button(
-                "Unlock all manual",
+                "Unlock all rotations",
                 icon="lock_open",
                 on_click=lambda: save_action(
                     lambda: unlock_resident_schedule(instance, resident.id),
@@ -440,6 +442,61 @@ def _resident_block_schedule_manager(
                 ),
             ).props("flat no-caps")
             unlock_all.set_enabled(manual_count > 0)
+            unlocked_blocks = [
+                block
+                for block in blocks
+                if not block_overlapping_lock_sources(instance, block)
+            ]
+
+            if unlocked_blocks:
+
+                def delete_all_unlocked() -> None:
+                    if schedule is None or on_schedule_change is None:
+                        return
+                    try:
+                        updated = schedule
+                        for block in unlocked_blocks:
+                            updated = clear_schedule_block(updated, block)
+                        count = len(unlocked_blocks)
+                        noun = "block" if count == 1 else "blocks"
+                        ui.notify(
+                            f"{count} unlocked {noun} deleted; solve required",
+                            type="warning",
+                        )
+                        on_schedule_change(updated, resident.id, True)
+                    except (ValidationError, ValueError) as exc:
+                        ui.notify(str(exc), type="negative", multi_line=True)
+                    finally:
+                        confirm_dialog.close()
+
+                with (
+                    ui.dialog() as confirm_dialog,
+                    ui.card().classes("w-full max-w-xl p-0 gap-0"),
+                ):
+                    with ui.row().classes("w-full items-center justify-between gap-3 px-5 py-4"):
+                        ui.label("Delete all unlocked blocks?").classes("rbs-type-dialog-title")
+                        ui.button(icon="close", on_click=confirm_dialog.close).props(
+                            "flat round dense aria-label='Close delete confirmation'"
+                        )
+                    ui.separator()
+                    with ui.column().classes("w-full gap-4 p-5"):
+                        ui.label(
+                            f"Delete {len(unlocked_blocks)} unlocked "
+                            f"{'block' if len(unlocked_blocks) == 1 else 'blocks'} "
+                            f"from {resident.name}'s working schedule? Locked blocks "
+                            "are kept. A new Solve will be required afterwards."
+                        ).classes("rbs-type-body rbs-text-muted")
+                    ui.separator()
+                    with ui.row().classes("w-full justify-end gap-3 p-4"):
+                        ui.button("Cancel", on_click=confirm_dialog.close).props("flat no-caps")
+                        ui.button("Delete all", on_click=delete_all_unlocked).props(
+                            "unelevated no-caps color=negative"
+                        )
+                ui.button(
+                    "Delete all unlocked",
+                    icon="delete_outline",
+                    on_click=confirm_dialog.open,
+                ).props("flat no-caps color=negative")
 
         timeline = sorted(
             [(block.start_week, 0, "block", block) for block in blocks]
@@ -448,7 +505,6 @@ def _resident_block_schedule_manager(
             key=lambda item: (item[0], item[1]),
         )
         if timeline:
-            ui.label("Working schedule").classes("rbs-type-control-label")
             for _start_week, _priority, item_type, item in timeline:
                 if item_type == "gap":
                     _resident_schedule_gap_row(instance, item)
@@ -501,10 +557,10 @@ def _resident_block_management_row(
     manual = "manual" in sources
     automatic = THROUGH_TODAY_SOURCE in sources
     if manual and automatic:
-        status = "Manual + automatic"
+        status = "Locked + automatic"
         status_color = "primary"
     elif manual:
-        status = "Manual"
+        status = "Locked"
         status_color = "primary"
     elif automatic:
         status = "Automatic"
@@ -791,6 +847,50 @@ def _resident_block_duration_options(
     }
 
 
+def _resident_block_occupied_weeks(
+    instance: SchedulerInput,
+    schedule: Schedule | None,
+    resident: Resident,
+    *,
+    ignore_weeks: set[int] | None = None,
+) -> set[int]:
+    """Weeks already holding this resident's blocks or manual pins.
+
+    Blocks pending solve count: they will occupy these weeks once solved.
+    ``ignore_weeks`` frees the placement currently being edited.
+    """
+    ignore = set(ignore_weeks or [])
+    occupied: set[int] = set()
+    if schedule is not None:
+        occupied.update(int(week) for week in schedule.week_grid.get(resident.id, {}))
+    for lock in instance.locks:
+        if lock.resident_id == resident.id:
+            occupied.update(lock.weeks)
+    return occupied - ignore
+
+
+def _flag_disabled_select_options(select, options: dict, disabled: set) -> None:
+    """Grey out menu entries Quasar must skip for mouse, keyboard, and typeahead.
+
+    NiceGUI only forwards value/label pairs and rebuilds them from labels on
+    update, so patch the forwarded entries directly while suspending that
+    rebuild.
+    """
+    if not disabled:
+        return
+    from nicegui.element import Element
+
+    order = list(options)
+    with select._props.suspend_updates():
+        select._props["options"] = [
+            {**entry, "disable": True}
+            if order[entry["value"]] in disabled
+            else entry
+            for entry in select._props["options"]
+        ]
+    Element.update(select)
+
+
 def _resident_block_start_options(
     instance: SchedulerInput,
     resident: Resident,
@@ -852,6 +952,81 @@ def _open_resident_block_dialog(
         if initial_option is not None and initial_option in rotation_options
         else next(iter(rotation_options), None)
     )
+    # Mandatory rotations the resident already has on their schedule cannot be
+    # added again, so their menu entries are greyed out below. Blocks pending
+    # solve count as scheduled, elective options may repeat and are never
+    # greyed out, and the entry being edited stays enabled so the dialog
+    # keeps a valid selection.
+    scheduled_mandatory_ids = {
+        block.rotation_id
+        for block in schedule_blocks(schedule, resident_id=resident.id)
+        if not block.elective
+    } | {
+        lock.rotation_id
+        for lock in instance.locks
+        if lock.source == "manual"
+        and lock.resident_id == resident.id
+        and lock.exact_block
+        and not lock.elective
+    }
+    greyed_rotation_options = {
+        option
+        for option in rotation_options
+        # Adding a new block has no entry being edited, so only an edit
+        # keeps its own rotation enabled.
+        if (initial is None or option != initial_rotation)
+        and not _parse_rotation_option(str(option))[1]
+        and _parse_rotation_option(str(option))[0] in scheduled_mandatory_ids
+    }
+    rotation_options = {
+        option: (
+            f"{label} · already scheduled" if option in greyed_rotation_options else label
+        )
+        for option, label in rotation_options.items()
+    }
+    if initial is None and initial_rotation in greyed_rotation_options:
+        # A new block must not open pre-selected on an entry that cannot be
+        # picked; fall through to the first rotation still available.
+        initial_rotation = next(
+            (
+                option
+                for option in rotation_options
+                if option not in greyed_rotation_options
+            ),
+            initial_rotation,
+        )
+    # Weeks already holding this resident's blocks or manual pins are
+    # disabled in the week menu: the editor must not stack overlapping
+    # rotations. The placement being edited is freed first so its own
+    # weeks stay available.
+    editing_weeks = set(replace_weeks or [])
+    if initial is not None:
+        editing_weeks.update(initial.weeks)
+    if original is not None:
+        editing_weeks.update(original.weeks)
+    blocked_weeks = _resident_block_occupied_weeks(
+        instance,
+        schedule,
+        resident,
+        ignore_weeks=editing_weeks,
+    )
+
+    def disabled_starts_for(starts: dict[int, str], duration_weeks: int) -> set[int]:
+        """Start weeks whose range overlaps weeks already on the schedule."""
+        return {
+            start
+            for start in starts
+            if set(range(start, start + duration_weeks)) & blocked_weeks
+        }
+
+    def label_starts(starts: dict[int, str], disabled: set[int]) -> dict[int, str]:
+        return {
+            start: (f"{label} · occupied" if start in disabled else label)
+            for start, label in starts.items()
+        }
+
+    def first_enabled_start(starts: dict[int, str], disabled: set[int]) -> int | None:
+        return next((start for start in starts if start not in disabled), None)
     if initial_rotation is None:
         ui.notify("This resident has no configured rotations", type="warning")
         return
@@ -874,10 +1049,13 @@ def _open_resident_block_dialog(
         initial_rotation,
         initial_duration,
     )
+    disabled_start_options = disabled_starts_for(start_options, initial_duration)
     initial_start = (
         initial.start_week
-        if initial is not None and initial.start_week in start_options
-        else next(iter(start_options), None)
+        if initial is not None
+        and initial.start_week in start_options
+        and initial.start_week not in disabled_start_options
+        else first_enabled_start(start_options, disabled_start_options)
     )
 
     title = "Edit block" if initial is not None else "Add block"
@@ -901,9 +1079,16 @@ def _open_resident_block_dialog(
                     rotation_options,
                     value=initial_rotation,
                     label="Rotation",
+                    # with_input keeps the box a real typeahead: the previous
+                    # selection no longer lingers as text, so typing ahead
+                    # starts from a cleared box instead of appending to it.
+                    with_input=True,
                 )
-                .props("outlined options-dense use-input")
+                .props("outlined options-dense")
                 .classes("w-full")
+            )
+            _flag_disabled_select_options(
+                rotation_select, rotation_select.options, greyed_rotation_options
             )
             with ui.row().classes("w-full items-end gap-4 flex-wrap"):
                 duration_select = (
@@ -917,15 +1102,18 @@ def _open_resident_block_dialog(
                 )
                 start_select = (
                     ui.select(
-                        start_options,
+                        label_starts(start_options, disabled_start_options),
                         value=initial_start,
                         label="Weeks",
                     )
                     .props("outlined options-dense use-input")
                     .classes("min-w-72 flex-1")
                 )
+                _flag_disabled_select_options(
+                    start_select, start_select.options, disabled_start_options
+                )
             grouping_exempt = ui.checkbox(
-                "Allow this block to be unmatched from its mandatory group",
+                "Allow this block to be unmatched from its configured group",
                 value=bool(original and original.grouping_exempt),
             )
             grouping_exempt_help = ui.label(
@@ -938,7 +1126,7 @@ def _open_resident_block_dialog(
             selected_rotation_id, elective = _parse_rotation_option(rotation_option)
             grouped = (
                 not elective
-                and instance.rotation_group_for(
+                and instance.rotation_group_requiring(
                     resident.pgy,
                     selected_rotation_id,
                 )
@@ -968,12 +1156,16 @@ def _open_resident_block_dialog(
                 rotation_option,
                 duration,
             )
+            disabled = disabled_starts_for(starts, duration)
             start_select.set_options(
-                starts,
+                label_starts(starts, disabled),
                 value=(
-                    start_select.value if start_select.value in starts else next(iter(starts), None)
+                    start_select.value
+                    if start_select.value in starts and start_select.value not in disabled
+                    else first_enabled_start(starts, disabled)
                 ),
             )
+            _flag_disabled_select_options(start_select, start_select.options, disabled)
 
         rotation_select.on_value_change(refresh_fields)
         duration_select.on_value_change(refresh_fields)
@@ -992,9 +1184,20 @@ def _open_resident_block_dialog(
                     ):
                         raise ValueError("select a rotation, block length, and week range")
                     rotation_option = str(rotation_select.value)
+                    if rotation_option in greyed_rotation_options:
+                        raise ValueError(
+                            "that rotation is already on this resident's "
+                            "schedule; choose another rotation"
+                        )
                     rotation_id, elective = _parse_rotation_option(rotation_option)
                     duration = int(duration_select.value)
                     start_week = int(start_select.value)
+                    chosen_weeks = set(range(start_week, start_week + duration))
+                    if chosen_weeks & blocked_weeks:
+                        raise ValueError(
+                            "those weeks overlap another block on this "
+                            "resident's schedule; choose non-overlapping weeks"
+                        )
                     updated = replace_manual_block(
                         instance,
                         resident_id=resident.id,
@@ -1027,23 +1230,30 @@ def _open_resident_block_dialog(
                     schedule_unchanged = matches_current and (
                         replaced_schedule_block is None or replaced_schedule_block == manual_block
                     )
-                    dialog.close()
-                    ui.notify("Block saved", type="positive")
-                    if schedule_unchanged or on_block_schedule_save is None:
+                    if schedule_unchanged:
+                        dialog.close()
+                        ui.notify("Block saved", type="positive")
                         on_schedule_save(
                             updated,
                             resident.id,
-                            bool(schedule_is_current and schedule_unchanged),
+                            bool(schedule_is_current),
                         )
                     else:
+                        if on_block_schedule_save is None:
+                            raise ValueError(
+                                "this block cannot be applied to the working schedule"
+                            )
+                        draft_schedule = replace_schedule_block(
+                            updated,
+                            schedule,
+                            manual_block,
+                            replaced_block=replaced_schedule_block,
+                        )
+                        dialog.close()
+                        ui.notify("Block saved · solve required", type="positive")
                         on_block_schedule_save(
                             updated,
-                            replace_schedule_block(
-                                updated,
-                                schedule,
-                                manual_block,
-                                replaced_block=replaced_schedule_block,
-                            ),
+                            draft_schedule,
                             resident.id,
                         )
                 except (ValidationError, ValueError) as exc:
@@ -1081,14 +1291,8 @@ def _resident_block_schedule_report(
     )
     with ui.column().classes("rbs-resident-schedule-content w-full min-w-0 gap-3 p-5"):
         with ui.row().classes("w-full items-center justify-between gap-3"):
-            if editing:
-                ui.label(
-                    "Add a block or use the row actions to edit, delete, lock, or unlock "
-                    "blocks. Assignment changes may require a new Solve."
-                ).classes("rbs-resident-block-edit-hint rbs-type-caption rbs-text-muted")
-            else:
-                ui.space()
-            with ui.row().classes("items-center gap-2"):
+            ui.space()
+            with ui.row().classes("items-center gap-2 ml-auto"):
                 if not editing:
                     ui.checkbox(
                         "Show completed",
@@ -1097,8 +1301,8 @@ def _resident_block_schedule_report(
                     ).props("dense")
                 if on_schedule_save is not None:
                     edit_button = ui.button(
-                        "Done editing" if editing else "Edit schedule",
-                        icon="check" if editing else "edit_calendar",
+                        "Return to view" if editing else "Edit schedule",
+                        icon="visibility" if editing else "edit_calendar",
                         on_click=on_editing_change,
                     ).props("outline dense no-caps")
                     edit_button.set_enabled(can_edit)
@@ -1230,19 +1434,19 @@ def _resident_clinic_schedule_report(
                 ).classes("rbs-resident-clinic-edit-hint rbs-type-caption rbs-text-muted")
             else:
                 ui.space()
-            with ui.row().classes("items-center gap-2"):
-                if on_schedule_change is not None:
-                    edit_button = ui.button(
-                        "Done editing" if editing else "Edit schedule",
-                        icon="check" if editing else "edit_calendar",
-                        on_click=on_editing_change,
-                    ).props("outline dense no-caps")
-                    edit_button.set_enabled(can_edit)
+            with ui.row().classes("items-center gap-2 ml-auto"):
                 ui.checkbox(
                     "Show completed",
                     value=show_completed,
                     on_change=on_show_completed_change,
                 ).props("dense")
+                if on_schedule_change is not None:
+                    edit_button = ui.button(
+                        "Return to view" if editing else "Edit schedule",
+                        icon="visibility" if editing else "edit_calendar",
+                        on_click=on_editing_change,
+                    ).props("outline dense no-caps")
+                    edit_button.set_enabled(can_edit)
         if not report_rows:
             if current_schedule is None or current_schedule.is_empty():
                 title = "No clinic schedule available"

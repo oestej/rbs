@@ -57,14 +57,14 @@ class SolverIntegrityMixin:
             if lock.grouping_exempt:
                 if (
                     lock.elective
-                    or self.rotation_group_for(
+                    or self.rotation_group_requiring(
                         resident.pgy,
                         lock.rotation_id,
                     )
                     is None
                 ):
                     raise ValueError(
-                        "a grouping-exempt lock must target a grouped Mandatory rotation"
+                        "a grouping-exempt lock must target a rotation required to stay grouped"
                     )
             allowed = self.rotation_ids_for_pgy(resident.pgy)
             if lock.rotation_id not in allowed:
@@ -82,6 +82,17 @@ class SolverIntegrityMixin:
                 raise ValueError(
                     f"lock: {lock.rotation_id!r} is not an eligible Elective rotation "
                     "or Clinic fallback"
+                )
+            option = self.electives.option_for(lock.rotation_id) if lock.elective else None
+            blackout_overlap = (
+                sorted(set(lock.weeks).intersection(option.blackout_weeks))
+                if option is not None
+                else []
+            )
+            if blackout_overlap:
+                raise ValueError(
+                    f"lock: {lock.rotation_id!r} is unavailable during blackout "
+                    f"week(s) {blackout_overlap}"
                 )
             available = self.available_weeks(
                 resident.pgy,
@@ -173,15 +184,20 @@ class SolverIntegrityMixin:
                 raise ValueError(
                     f"manual clinic block references unknown rotation {manual.rotation_id!r}"
                 )
-            if manual.replaces_rotation_id not in rotation_ids:
-                raise ValueError(
-                    f"manual clinic block replaces unknown rotation {manual.replaces_rotation_id!r}"
-                )
-            if manual.rotation_id == manual.replaces_rotation_id:
-                raise ValueError("manual clinic block must replace a different rotation")
-            replacement_rotation = self.rotation(manual.replaces_rotation_id)
-            if replacement_rotation.kind is not RotationKind.ELECTIVE:
-                raise ValueError("manual Clinic blocks must replace Elective blocks")
+            if manual.replaces_rotation_id is not None:
+                if manual.replaces_rotation_id not in rotation_ids:
+                    raise ValueError(
+                        "manual clinic block replaces unknown rotation "
+                        f"{manual.replaces_rotation_id!r}"
+                    )
+                if manual.rotation_id == manual.replaces_rotation_id:
+                    raise ValueError("manual clinic block must replace a different rotation")
+                replacement_rotation = self.rotation(manual.replaces_rotation_id)
+                if replacement_rotation.kind is not RotationKind.ELECTIVE:
+                    raise ValueError(
+                        "when a replacement is selected, manual Clinic blocks must "
+                        "replace Elective blocks"
+                    )
 
             clinic_rotation = self.rotation(manual.rotation_id)
             if clinic_rotation.kind is not RotationKind.CLINIC:
@@ -234,34 +250,35 @@ class SolverIntegrityMixin:
                     f"manual clinic block for {resident.id} exceeds its vacation limit"
                 )
 
-            curriculum = self.curriculum_for(resident.pgy)
-            matching_requirement = next(
-                (
-                    block
-                    for block in curriculum.blocks
-                    if block.rotation_id == manual.replaces_rotation_id
-                    and block.duration_weeks == manual.duration_weeks
-                ),
-                None,
-            )
-            if matching_requirement is None:
-                raise ValueError(
-                    "manual clinic block: "
-                    f"{self.training_level_label(resident.pgy, compact=True)} has no direct "
-                    f"{manual.duration_weeks}-week {manual.replaces_rotation_id!r} "
-                    "requirement to replace"
+            if manual.replaces_rotation_id is not None:
+                curriculum = self.curriculum_for(resident.pgy)
+                matching_requirement = next(
+                    (
+                        block
+                        for block in curriculum.blocks
+                        if block.rotation_id == manual.replaces_rotation_id
+                        and block.duration_weeks == manual.duration_weeks
+                    ),
+                    None,
                 )
-            consumption_key = (
-                resident.id,
-                manual.replaces_rotation_id,
-                manual.duration_weeks,
-            )
-            consumed[consumption_key] = consumed.get(consumption_key, 0) + 1
-            if consumed[consumption_key] > matching_requirement.count:
-                raise ValueError(
-                    f"manual clinic blocks replace more {manual.replaces_rotation_id!r} "
-                    f"blocks than {resident.id} has"
+                if matching_requirement is None:
+                    raise ValueError(
+                        "manual clinic block: "
+                        f"{self.training_level_label(resident.pgy, compact=True)} has no direct "
+                        f"{manual.duration_weeks}-week {manual.replaces_rotation_id!r} "
+                        "requirement to replace"
+                    )
+                consumption_key = (
+                    resident.id,
+                    manual.replaces_rotation_id,
+                    manual.duration_weeks,
                 )
+                consumed[consumption_key] = consumed.get(consumption_key, 0) + 1
+                if consumed[consumption_key] > matching_requirement.count:
+                    raise ValueError(
+                        f"manual clinic blocks replace more {manual.replaces_rotation_id!r} "
+                        f"blocks than {resident.id} has"
+                    )
 
             for week in range(manual.start_week, end_week + 1):
                 occupied_key = (resident.id, week)
@@ -295,8 +312,10 @@ class SolverIntegrityMixin:
                     f"{override.replaces_rotation_id!r}"
                 )
             rotation = self.rotation(override.rotation_id)
-            if rotation.kind is not RotationKind.STANDARD:
-                raise ValueError("resident rotation overrides can only add Mandatory rotations")
+            if rotation.kind not in {RotationKind.STANDARD, RotationKind.FMED}:
+                raise ValueError(
+                    "resident rotation overrides can only add Mandatory or FMED rotations"
+                )
             try:
                 rotation.block_config(resident.pgy, override.duration_weeks)
             except KeyError as exc:
@@ -310,7 +329,8 @@ class SolverIntegrityMixin:
             replacement = self.rotation(override.replaces_rotation_id)
             if replacement.kind is not RotationKind.ELECTIVE:
                 raise ValueError(
-                    "resident Mandatory rotation overrides must replace Elective blocks"
+                    "when a resident override replaces a block, it must replace an "
+                    "Elective block"
                 )
             if not any(
                 block.rotation_id == override.replaces_rotation_id
@@ -347,7 +367,9 @@ class SolverIntegrityMixin:
             matching = [
                 group
                 for group in self.rotation_groups
-                if group.pgy == resident.pgy and member_ids <= set(group.rotation_ids)
+                if group.pgy == resident.pgy
+                and group.anchor_rotation_id is None
+                and member_ids <= set(group.rotation_ids)
             ]
             if len(matching) != 1 or member_ids != set(matching[0].rotation_ids):
                 raise ValueError(
@@ -390,13 +412,14 @@ class SolverIntegrityMixin:
     def _check_resident_replacement_inventory(self) -> None:
         residents = self.residents_by_id
         consumed: dict[tuple[str, str, int], int] = {}
-        replacements = [
+        replacements: list[tuple[str, str, int]] = [
             (
                 block.resident_id,
                 block.replaces_rotation_id,
                 block.duration_weeks,
             )
             for block in self.manual_clinic_blocks
+            if block.replaces_rotation_id is not None
         ]
         replacements.extend(
             (
@@ -424,25 +447,38 @@ class SolverIntegrityMixin:
             )
             if used > available:
                 raise ValueError(
-                    f"resident overrides and waivers consume {used} {duration_weeks}-week "
+                    f"resident additions and waivers consume {used} {duration_weeks}-week "
                     f"{rotation_id!r} blocks for {resident_id}, but only "
                     f"{available} are available"
                 )
-        unallocated_use: dict[int, int] = {}
-        for override in self.resident_rotation_overrides:
-            if override.replaces_rotation_id is not None:
-                continue
-            resident = residents.get(override.resident_id)
+        unallocated_use: dict[str, int] = {}
+        unallocated_additions = [
+            (block.resident_id, block.duration_weeks)
+            for block in self.manual_clinic_blocks
+            if block.replaces_rotation_id is None
+        ]
+        unallocated_additions.extend(
+            (override.resident_id, override.duration_weeks)
+            for override in self.resident_rotation_overrides
+            if override.replaces_rotation_id is None
+        )
+        for resident_id, duration_weeks in unallocated_additions:
+            resident = residents.get(resident_id)
             if resident is None:
                 continue
-            unallocated_use[resident.pgy] = (
-                unallocated_use.get(resident.pgy, 0) + override.duration_weeks
+            unallocated_use[resident.id] = (
+                unallocated_use.get(resident.id, 0) + duration_weeks
             )
-        for pgy, weeks in sorted(unallocated_use.items()):
-            available = self.unallocated_weeks(pgy)
+        for resident_id, weeks in sorted(unallocated_use.items()):
+            resident = residents[resident_id]
+            available = self.unallocated_weeks(resident.pgy) + sum(
+                waiver.duration_weeks
+                for waiver in self.resident_rotation_waivers
+                if waiver.resident_id == resident_id
+            )
             if weeks > available:
                 raise ValueError(
-                    f"resident overrides use {weeks} unallocated weeks for "
-                    f"{self.training_level_label(pgy, compact=True)}, but only "
+                    f"resident additions use {weeks} unallocated weeks for "
+                    f"{resident.name}, but only "
                     f"{available} are available"
                 )

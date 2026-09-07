@@ -90,7 +90,7 @@ already exist in `rbs.cloud` and surface in the UI behind `rbs ui --cloud`.
 
 The UI never calls CP-SAT directly. It shells out to `rbs-solver` with one
 JSON document on stdin and reads one back on stdout
-(`protocol: "rbs.solve"`, version 4). Set `RBS_SOLVER_COMMAND` to swap the
+(`protocol: "rbs.solve"`, version 5). Set `RBS_SOLVER_COMMAND` to swap the
 executable; the desktop bundle ships its own so no system Python is needed.
 
 ```text

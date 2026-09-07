@@ -171,7 +171,7 @@ def test_rbsc_round_trip_replaces_and_restores_the_complete_database(tmp_path) -
     exported = json.loads(payload)
 
     assert exported["format"] == "rbsc"
-    assert exported["schema_version"] == 7
+    assert exported["schema_version"] == 9
     assert exported["current_workspace_id"] == second.id
     assert exported["app_metadata"]["portable_test_marker"] == "preserved"
     assert {row["id"] for row in exported["workspaces"]} == {first.id, second.id}
@@ -210,7 +210,7 @@ def test_rbsc_round_trip_replaces_and_restores_the_complete_database(tmp_path) -
     assert reexported == exported
 
 
-def test_rbsc_v7_omits_application_preferences_and_derived_locks(tmp_path) -> None:
+def test_rbsc_v9_omits_application_preferences_and_derived_locks(tmp_path) -> None:
     from rbs.models.instance import SchedulerInput
 
     raw = sample_instance().model_dump(mode="json")
@@ -226,7 +226,7 @@ def test_rbsc_v7_omits_application_preferences_and_derived_locks(tmp_path) -> No
     exported = json.loads(store.export_workspace_rbsc(workspace.id))
     case = exported["workspaces"][0]["case"]
 
-    assert exported["schema_version"] == 7
+    assert exported["schema_version"] == 9
     assert "color_scheme" not in case
     assert "solver" not in case
     assert "lock_through_today" not in case
@@ -241,7 +241,7 @@ def test_rbsc_v7_omits_application_preferences_and_derived_locks(tmp_path) -> No
     assert not imported.instance.lock_through_today
 
 
-def test_rbsc_v7_coalesces_catalogs_that_differ_only_by_colors(tmp_path) -> None:
+def test_rbsc_v9_coalesces_catalogs_that_differ_only_by_colors(tmp_path) -> None:
     from rbs.models.instance import SchedulerInput
 
     source = Store(tmp_path / "source.sqlite")
@@ -783,5 +783,50 @@ def test_persisted_v1_catalogs_are_rejected_on_load(tmp_path) -> None:
 
     store.init()
 
-    with pytest.raises(ValidationError, match="Input should be 6"):
+    with pytest.raises(ValidationError, match="Input should be 8"):
         store.get(workspace_id)
+
+
+def test_persisted_v7_catalogs_are_upgraded_on_load(tmp_path) -> None:
+    path = tmp_path / "v7-catalog.sqlite"
+    store = Store(path)
+    store.init()
+    instance = sample_instance()
+    legacy = instance.constraint_catalog().model_dump(mode="json")
+    legacy["schema_version"] = 7
+    for group in legacy["rotation_groups"]:
+        group.pop("anchor_rotation_id")
+
+    with store.connect() as connection:
+        catalog_id = connection.execute(
+            """
+            INSERT INTO catalogs
+                (name, schema_version, content_hash, catalog_json, created_at, updated_at)
+            VALUES ('Legacy v7', 7, 'legacy-v7-hash', ?, 'now', 'now')
+            """,
+            (json.dumps(legacy),),
+        ).lastrowid
+        workspace_id = connection.execute(
+            """
+            INSERT INTO workspaces
+                (name, academic_year, catalog_id, instance_json, schedule_json,
+                 instance_revision, schedule_revision, created_at, updated_at)
+            VALUES ('Legacy workspace', ?, ?, ?, NULL, 1, NULL, 'now', 'now')
+            """,
+            (
+                instance.academic_year,
+                catalog_id,
+                dumps(instance.scheduling_case()),
+            ),
+        ).lastrowid
+
+    reloaded = Store(path)
+    loaded = reloaded.ensure_sample()
+
+    assert loaded.id == workspace_id
+    assert loaded.instance.electives.rotation_options
+    assert all(
+        group.anchor_rotation_id is None
+        for group in loaded.instance.rotation_groups
+    )
+    assert reloaded.get_catalog(catalog_id).catalog.schema_version == 8

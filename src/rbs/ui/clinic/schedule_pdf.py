@@ -38,6 +38,7 @@ from rbs.ui.clinic.board import (
     special_events_for_slot,
 )
 from rbs.ui.grid import visible_week_numbers, week_monday
+from rbs.ui.pdf_pages import with_export_timestamp
 from rbs.ui.print_tokens import (
     PRINT_BODY_LEADING,
     PRINT_BODY_LOOSE_LEADING,
@@ -150,7 +151,8 @@ def build_clinic_schedule_pdf(
     def footer(canvas, doc) -> None:
         _page_footer(canvas, doc, site_name)
 
-    document.build(story, onFirstPage=footer, onLaterPages=footer)
+    draw_page = with_export_timestamp(footer)
+    document.build(story, onFirstPage=draw_page, onLaterPages=draw_page)
     return buffer.getvalue()
 
 
