@@ -29,6 +29,9 @@
   save them. Each section tracks its own edits, so simultaneous edits in
   Mandatory and Electives are each confirmed, and switching sections
   leaves unsaved edits in place.
+- **Residents:** The resident editor now keeps Save changes (or Add
+  resident) in the header next to the close button instead of Save and
+  Cancel actions at the bottom.
 
 ### Fixed
 

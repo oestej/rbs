@@ -400,6 +400,51 @@ def test_edit_resident_form_does_not_request_focus(monkeypatch) -> None:
     assert "Continuity clinic half-days" in labels
 
 
+def test_resident_form_save_sits_beside_close_without_cancel_button() -> None:
+    from nicegui import ui
+
+    from rbs.ui.residents.tab import _resident_form
+
+    for resident in (sample_instance().residents[0], None):
+        before = set(ui.context.client.elements)
+        _resident_form(
+            sample_instance(),
+            resident=resident,
+            on_cancel=lambda: None,
+            on_save=lambda _instance, _resident_id: None,
+        )
+        created = {
+            element_id: element
+            for element_id, element in ui.context.client.elements.items()
+            if element_id not in before
+        }
+        buttons = [
+            element
+            for element in created.values()
+            if element.__class__.__name__ == "Button"
+        ]
+        labels = {element._props.get("label") for element in buttons}
+        expected = "Add resident" if resident is None else "Save changes"
+        assert expected in labels
+        assert "Cancel" not in labels
+
+        save_button = next(
+            element for element in buttons if element._props.get("label") == expected
+        )
+        close_button = next(
+            element
+            for element in buttons
+            if element._props.get("aria-label") == "Cancel resident editing"
+        )
+        assert save_button.parent_slot.parent is close_button.parent_slot.parent
+        siblings = [
+            element
+            for element in created.values()
+            if element.parent_slot.parent is save_button.parent_slot.parent
+        ]
+        assert siblings.index(close_button) == siblings.index(save_button) + 1
+
+
 def test_selected_resident_uses_the_compact_detail_layout() -> None:
     from nicegui import ui
 

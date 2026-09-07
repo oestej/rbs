@@ -17,7 +17,6 @@ from rbs.ui.buttons import (
     ICON_BUTTON_PROPS,
     PRIMARY_BUTTON_PROPS,
     SECONDARY_BUTTON_PROPS,
-    TERTIARY_BUTTON_PROPS,
     button_props,
 )
 from rbs.ui.residents.ops import (
@@ -359,19 +358,55 @@ def _resident_form(
     initial_vacations = resident.vacation_weeks if resident is not None else []
     initial_days_off = resident.days_off if resident is not None else []
     initial_clinic_half_days = resident.clinic_half_days if resident is not None else []
+    save_label = "Add resident" if creating else "Save changes"
+    save_icon = "person_add" if creating else "save"
+    controls: dict = {}
+
+    def save() -> None:
+        try:
+            name = controls["name"]
+            pgy = controls["pgy"]
+            fallback_pgy = controls["default_pgy"]
+            saved_resident = Resident(
+                id=resident.id if resident is not None else next_resident_id(instance),
+                name=name.value or "",
+                pgy=int(pgy.value or fallback_pgy),
+                vacation_weeks=controls.get("vacation_weeks", initial_vacations),
+                days_off=controls.get("days_off", initial_days_off),
+                clinic_half_days=controls.get("clinic_half_days", initial_clinic_half_days),
+                elective_preferences=(
+                    resident.elective_preferences if resident is not None else []
+                ),
+            )
+            if resident is None:
+                updated = add_resident(instance, saved_resident)
+                message = f"Added {saved_resident.name}"
+            else:
+                updated = replace_resident(instance, resident.id, saved_resident)
+                message = f"Saved {saved_resident.name}"
+            ui.notify(message, type="positive")
+            on_save(updated, saved_resident.id)
+        except (ValidationError, ValueError) as exc:
+            ui.notify(str(exc), type="negative", multi_line=True)
 
     with master_detail.detail_card():
         with ui.row().classes("w-full items-center justify-between gap-4 p-5"):
             with ui.column().classes("gap-0"):
                 ui.label(title).classes("rbs-type-page-title")
                 ui.label(subtitle).classes("rbs-text-muted")
-            with ui.button(icon="close", on_click=on_cancel).props(
-                button_props(
-                    ICON_BUTTON_PROPS,
-                    "aria-label='Cancel resident editing'",
-                )
-            ):
-                ui.tooltip("Cancel resident editing")
+            with ui.row().classes("items-center gap-2"):
+                ui.button(
+                    save_label,
+                    icon=save_icon,
+                    on_click=save,
+                ).props(PRIMARY_BUTTON_PROPS)
+                with ui.button(icon="close", on_click=on_cancel).props(
+                    button_props(
+                        ICON_BUTTON_PROPS,
+                        "aria-label='Cancel resident editing'",
+                    )
+                ):
+                    ui.tooltip("Cancel resident editing")
         ui.separator()
         with ui.column().classes("w-full gap-5 p-5"):
             with ui.column().classes("w-full gap-3"):
@@ -397,8 +432,10 @@ def _resident_form(
                         .classes("w-full md:w-56")
                     )
 
-            vacation_weeks = initial_vacations
-            days_off = initial_days_off
+            controls["name"] = name
+            controls["pgy"] = pgy
+            controls["default_pgy"] = default_pgy
+
             if not creating:
                 with ui.column().classes("rbs-resident-form-section w-full gap-3 rounded p-4"):
                     with ui.column().classes("gap-0"):
@@ -408,11 +445,12 @@ def _resident_form(
                         ui.label("Add whole vacation weeks or individual full days away.").classes(
                             "rbs-type-caption rbs-text-muted"
                         )
-                    vacation_weeks = _vacation_week_editor(instance, initial_vacations)
+                    controls["vacation_weeks"] = _vacation_week_editor(
+                        instance, initial_vacations
+                    )
                     ui.separator()
-                    days_off = _days_off_editor(instance, initial_days_off)
+                    controls["days_off"] = _days_off_editor(instance, initial_days_off)
 
-            clinic_half_days = initial_clinic_half_days
             if not creating:
                 with ui.column().classes("rbs-resident-form-section w-full gap-3 rounded p-4"):
                     with ui.column().classes("gap-0"):
@@ -422,42 +460,10 @@ def _resident_form(
                             "every eligible week. They are omitted while the resident is on "
                             "an Away rotation."
                         ).classes("rbs-type-caption rbs-text-muted")
-                    clinic_half_days = _resident_clinic_half_day_editor(
+                    controls["clinic_half_days"] = _resident_clinic_half_day_editor(
                         instance,
                         initial_clinic_half_days,
                     )
-
-            def save() -> None:
-                try:
-                    saved_resident = Resident(
-                        id=resident.id if resident is not None else next_resident_id(instance),
-                        name=name.value or "",
-                        pgy=int(pgy.value or default_pgy),
-                        vacation_weeks=vacation_weeks,
-                        days_off=days_off,
-                        clinic_half_days=clinic_half_days,
-                        elective_preferences=(
-                            resident.elective_preferences if resident is not None else []
-                        ),
-                    )
-                    if resident is None:
-                        updated = add_resident(instance, saved_resident)
-                        message = f"Added {saved_resident.name}"
-                    else:
-                        updated = replace_resident(instance, resident.id, saved_resident)
-                        message = f"Saved {saved_resident.name}"
-                    ui.notify(message, type="positive")
-                    on_save(updated, saved_resident.id)
-                except (ValidationError, ValueError) as exc:
-                    ui.notify(str(exc), type="negative", multi_line=True)
-
-            with ui.row().classes("items-center gap-2"):
-                ui.button(
-                    "Add resident" if creating else "Save changes",
-                    icon="person_add" if creating else "save",
-                    on_click=save,
-                ).props(PRIMARY_BUTTON_PROPS)
-                ui.button("Cancel", on_click=on_cancel).props(TERTIARY_BUTTON_PROPS)
 
 
 def _empty_resident_detail(missing_id: str | None) -> None:
