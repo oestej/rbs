@@ -187,6 +187,18 @@ def test_elective_blackout_weeks_are_normalized_preserved_and_calendar_bounded()
         )
 
 
+def test_fmed_elective_availability_is_always_year_round() -> None:
+    raw = sample_instance().model_dump(mode="json")
+    option = next(
+        item for item in raw["electives"]["rotation_options"] if item["rotation_id"] == "fmed"
+    )
+    option["blackout_weeks"] = [9, 10, 11, 12]
+
+    instance = SchedulerInput.model_validate(raw)
+
+    assert instance.elective_blackout_weeks("fmed") == ()
+
+
 def test_mandatory_elective_sizes_derive_from_training_level_rules() -> None:
     instance = _instance_with_two_elective_block_sizes()
 
@@ -261,7 +273,7 @@ def test_fmed_as_elective_keeps_custom_kind_and_shared_capacity_identity() -> No
     assert instance.eligible_elective_block_sizes("fmed") == (2,)
 
 
-def test_fmed_rules_dialog_owns_elective_availability() -> None:
+def test_fmed_rules_dialog_owns_elective_shapes_without_blackout_controls() -> None:
     from nicegui import ui
 
     instance = sample_instance()
@@ -285,6 +297,16 @@ def test_fmed_rules_dialog_owns_elective_availability() -> None:
         if element.__class__.__name__ == "Checkbox"
     }
     toggles = [element for element in created if element.__class__.__name__ == "Toggle"]
+    tabs = {
+        element._props.get("label")
+        for element in created
+        if element.__class__.__name__ == "Tab"
+    }
+    buttons = {
+        element._props.get("label")
+        for element in created
+        if element.__class__.__name__ == "Button"
+    }
     size_controls = [
         element
         for element in created
@@ -305,6 +327,15 @@ def test_fmed_rules_dialog_owns_elective_availability() -> None:
         for text in checkboxes
     )
     assert checkboxes["Can be taken more than once as an elective"].value is True
+    assert "Availability" not in tabs
+    assert "Elective repeat rules" in {
+        getattr(element, "_text", None) for element in created
+    }
+    assert "Elective availability" not in {
+        getattr(element, "_text", None) for element in created
+    }
+    assert "Black out all weeks" not in buttons
+    assert not any(str(text).startswith("Week ") for text in checkboxes)
     # Sizes follow Training-level rules; no manual size control remains.
     assert size_controls == []
     assert instance.eligible_elective_block_sizes("fmed") == (2,)
@@ -1186,3 +1217,173 @@ def test_newly_eligible_year_still_needs_elective_time_to_rank() -> None:
     resident = next(item for item in updated.residents if item.pgy == 3)
     assert updated.direct_elective_block_counts_for_pgy(3) == {}
     assert "palliative_care|2" not in elective_preference_options(updated, resident)
+
+
+def _elective_editor_close_button(created: list):
+    return next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Button"
+        and element._props.get("icon") == "close"
+        and not element._props.get("label")
+    )
+
+
+def test_elective_editor_keeps_save_beside_close_without_cancel() -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    before = set(ui.context.client.elements)
+    _elective_rotation_editor(
+        instance,
+        instance.rotation("palliative_care"),
+        on_cancel=lambda: None,
+        on_save=lambda _instance, _rotation_id: None,
+    )
+    created = _created_since(before)
+    button_labels = {
+        element._props.get("label") for element in created if element.__class__.__name__ == "Button"
+    }
+
+    assert "Cancel" not in button_labels
+    save = _button(created, "Save elective")
+    close = _elective_editor_close_button(created)
+    assert save.parent_slot.parent is close.parent_slot.parent
+
+
+def test_elective_editor_close_without_changes_skips_confirmation() -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    cancels: list = []
+    before = set(ui.context.client.elements)
+    _elective_rotation_editor(
+        instance,
+        instance.rotation("palliative_care"),
+        on_cancel=lambda: cancels.append(True),
+        on_save=lambda _instance, _rotation_id: None,
+    )
+    created = _created_since(before)
+    clicked = set(ui.context.client.elements)
+    _click(_elective_editor_close_button(created))
+
+    assert cancels == [True]
+    assert not any(
+        element.__class__.__name__ == "Dialog" for element in _created_since(clicked)
+    )
+
+
+def _item_texts(element) -> list[str]:
+    texts = [element._text] if getattr(element, "_text", None) else []
+    for slot in element.slots.values():
+        for child in slot.children:
+            texts.extend(_item_texts(child))
+    return [str(text) for text in texts]
+
+
+def _start_editing_standalone_elective(before: set) -> None:
+    """Click Edit buttons until the standalone elective editor is mounted.
+
+    The full tab renders the Mandatory detail next to the Elective detail,
+    so more than one Edit button exists; the wrong one opens the Mandatory
+    editor and is closed again cleanly (it holds no changes).
+    """
+    from nicegui import ui
+
+    created = _created_since(before)
+    edits = [
+        element
+        for element in created
+        if element.__class__.__name__ == "Button" and element._props.get("label") == "Edit"
+    ]
+    assert edits
+    for edit in edits:
+        marked = set(ui.context.client.elements)
+        _click(edit)
+        opened = _created_since(marked)
+        labels = {
+            element._props.get("label")
+            for element in opened
+            if element.__class__.__name__ == "Button"
+        }
+        if "Save elective" in labels:
+            return
+        close = next(
+            element
+            for element in opened
+            if element.__class__.__name__ == "Button"
+            and element._props.get("icon") == "close"
+            and not element._props.get("label")
+        )
+        _click(close)
+    raise AssertionError("the standalone elective editor did not open")
+
+
+def test_elective_directory_click_with_changes_confirms_before_leaving() -> None:
+    from nicegui import ui
+
+    instance = add_elective_rotation(sample_instance(), _standalone_elective())
+    selections: list = []
+    before = set(ui.context.client.elements)
+    render_rotations_tab(
+        instance,
+        selected_rotation_id="addiction_medicine_elective",
+        on_select=selections.append,
+        on_save=lambda _instance, _rotation_id: None,
+        active_section="elective_configuration",
+    )
+    _start_editing_standalone_elective(before)
+    created = _created_since(before)
+    name = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Input" and element._props.get("label") == "Rotation name"
+    )
+    name.set_value("Addiction Medicine Renamed")
+    target = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Item"
+        and "Night Float" in _item_texts(element)
+        and any("service" in text.casefold() for text in _item_texts(element))
+    )
+    clicked = set(ui.context.client.elements)
+    _click(target)
+
+    assert selections == []
+    confirm = _created_since(clicked)
+    assert "Discard unsaved changes?" in {getattr(element, "_text", None) for element in confirm}
+    _click(_button(confirm, "Discard changes"))
+
+    assert selections == ["night_float"]
+
+
+def test_elective_editor_close_with_changes_confirms_before_discarding() -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    cancels: list = []
+    before = set(ui.context.client.elements)
+    _elective_rotation_editor(
+        instance,
+        instance.rotation("palliative_care"),
+        on_cancel=lambda: cancels.append(True),
+        on_save=lambda _instance, _rotation_id: None,
+    )
+    created = _created_since(before)
+    name = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Input" and element._props.get("label") == "Rotation name"
+    )
+    name.set_value("Palliative Care Renamed")
+    clicked = set(ui.context.client.elements)
+    _click(_elective_editor_close_button(created))
+
+    assert cancels == []
+    confirm = _created_since(clicked)
+    assert any(element.__class__.__name__ == "Dialog" for element in confirm)
+    assert "Discard unsaved changes?" in {getattr(element, "_text", None) for element in confirm}
+    _click(_button(confirm, "Discard changes"))
+
+    assert cancels == [True]

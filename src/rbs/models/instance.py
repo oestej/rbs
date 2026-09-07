@@ -519,6 +519,28 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
         """
         return self.calendar.weeks - self.curriculum_for(pgy).required_weeks()
 
+    def resident_unallocated_weeks(self, resident_id: str) -> int:
+        """Unscheduled weeks left after this resident's waivers and additions."""
+        resident = self.residents_by_id.get(resident_id)
+        if resident is None:
+            raise KeyError(resident_id)
+        released = sum(
+            waiver.duration_weeks
+            for waiver in self.resident_rotation_waivers
+            if waiver.resident_id == resident_id
+        )
+        used = sum(
+            override.duration_weeks
+            for override in self.resident_rotation_overrides
+            if override.resident_id == resident_id and override.replaces_rotation_id is None
+        )
+        used += sum(
+            block.duration_weeks
+            for block in self.manual_clinic_blocks
+            if block.resident_id == resident_id and block.replaces_rotation_id is None
+        )
+        return self.unallocated_weeks(resident.pgy) + released - used
+
     @property
     def training_level_ids(self) -> tuple[int, ...]:
         """Configured training-level keys in their user-defined display order."""

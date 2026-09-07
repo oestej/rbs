@@ -63,18 +63,41 @@ def check_solve_readiness(instance: SolverProblem) -> ReadinessResult:
     staffed = {resident.pgy for resident in instance.residents}
     issues: list[ReadinessIssue] = []
 
-    for pgy, weeks in sorted(unallocated_weeks_by_level(instance).items()):
-        if pgy not in staffed:
+    for pgy in sorted(staffed):
+        weeks = instance.unallocated_weeks(pgy)
+        residents = [resident for resident in instance.residents if resident.pgy == pgy]
+        remaining = []
+        for resident in residents:
+            resident_weeks = instance.resident_unallocated_weeks(resident.id)
+            if resident_weeks > 0:
+                remaining.append((resident, resident_weeks))
+        if not remaining:
             continue
         level = instance.training_level_label(pgy, compact=True)
+        if len(remaining) == len(residents) and all(
+            resident_weeks == weeks for _resident, resident_weeks in remaining
+        ):
+            message = (
+                f"{level} has {weeks} unscheduled {'week' if weeks == 1 else 'weeks'} to allocate"
+            )
+        else:
+            by_weeks: dict[int, list[str]] = defaultdict(list)
+            for resident, resident_weeks in remaining:
+                by_weeks[resident_weeks].append(resident.name)
+            detail = "; ".join(
+                f"{resident_weeks} "
+                f"{'week' if resident_weeks == 1 else 'weeks'}: " + ", ".join(names)
+                for resident_weeks, names in sorted(by_weeks.items())
+            )
+            message = f"{level} has unscheduled resident time remaining ({detail})"
         issues.append(
             ReadinessIssue(
                 code="unallocated_weeks",
-                message=(
-                    f"{level} has {weeks} unscheduled "
-                    f"{'week' if weeks == 1 else 'weeks'} to allocate"
+                message=message,
+                suggestions=(
+                    "Add named-resident rotations that use the remaining unallocated time.",
+                    "Or allocate the remaining weeks for the whole training level under Rotations.",
                 ),
-                suggestions=("Allocate the remaining weeks under Rotations.",),
                 pgy=pgy,
             )
         )

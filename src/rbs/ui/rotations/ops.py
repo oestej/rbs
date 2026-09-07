@@ -55,6 +55,8 @@ __all__ = [
     "replace_fmed_pgy_rules",
     "add_manual_clinic_block",
     "remove_manual_clinic_block",
+    "add_resident_rotation_waiver",
+    "remove_resident_rotation_waiver",
     "resident_missing_mandatory_rotations",
     "resident_rotation_week_totals",
     "rotation_group_members_by_pgy",
@@ -1282,12 +1284,13 @@ def replace_fmed_pgy_rules(
     replacement: Rotation,
     counts: dict[tuple[int, int], int],
     *,
+    resident_overrides: list[ResidentRotationOverride | Draft] | None = None,
+    resident_waivers: list[ResidentRotationWaiver | Draft] | None = None,
     eligible_as_elective: bool | None = None,
     eligible_elective_pgys: Iterable[int] | None = None,
     eligible_elective_block_sizes: Iterable[int] | None = None,
     elective_shapes: Iterable[tuple[int, int]] | None = None,
     elective_repeatable: bool | None = None,
-    elective_blackout_weeks: Iterable[int] | None = None,
 ) -> SchedulerInput:
     """Replace editable FMED staffing, block, and clinic rules.
 
@@ -1358,18 +1361,7 @@ def replace_fmed_pgy_rules(
                         if elective_repeatable is not None
                         else bool(original_option and original_option.repeatable)
                     ),
-                    blackout_weeks=_normalize_elective_blackout_weeks(
-                        instance,
-                        (
-                            elective_blackout_weeks
-                            if elective_blackout_weeks is not None
-                            else (
-                                original_option.blackout_weeks
-                                if original_option is not None
-                                else ()
-                            )
-                        ),
-                    ),
+                    blackout_weeks=[],
                 )
             )
         elective_configuration = ElectiveConfiguration(
@@ -1383,10 +1375,12 @@ def replace_fmed_pgy_rules(
         counts,
         expected_kind=RotationKind.FMED,
         requirement_label="FMED",
+        resident_overrides=resident_overrides,
+        resident_waivers=resident_waivers,
         elective_configuration=elective_configuration,
         elective_shapes=elective_shapes,
         elective_repeatable=elective_repeatable,
-        elective_blackout_weeks=elective_blackout_weeks,
+        elective_blackout_weeks=(),
     )
 
 
@@ -1398,6 +1392,8 @@ def _replace_required_rotation_rules(
     *,
     expected_kind: RotationKind,
     requirement_label: str,
+    resident_overrides: list[ResidentRotationOverride | Draft] | None = None,
+    resident_waivers: list[ResidentRotationWaiver | Draft] | None = None,
     elective_configuration: ElectiveConfiguration | None = None,
     elective_shapes: Iterable[tuple[int, int]] | None = None,
     elective_repeatable: bool | None = None,
@@ -1533,6 +1529,36 @@ def _replace_required_rotation_rules(
         instance.residents_by_id,
     )
 
+    if resident_overrides is not None:
+        normalized_overrides = [
+            override
+            if isinstance(override, ResidentRotationOverride)
+            else ResidentRotationOverride.model_validate(override)
+            for override in resident_overrides
+        ]
+        if any(override.rotation_id != original_id for override in normalized_overrides):
+            raise ValueError("resident override belongs to a different rotation")
+        raw["resident_rotation_overrides"] = [
+            override
+            for override in raw.get("resident_rotation_overrides", [])
+            if override["rotation_id"] != original_id
+        ] + [override.model_dump(mode="json") for override in normalized_overrides]
+
+    if resident_waivers is not None:
+        normalized_waivers = [
+            waiver
+            if isinstance(waiver, ResidentRotationWaiver)
+            else ResidentRotationWaiver.model_validate(waiver)
+            for waiver in resident_waivers
+        ]
+        if any(waiver.rotation_id != original_id for waiver in normalized_waivers):
+            raise ValueError("resident waiver belongs to a different rotation")
+        raw["resident_rotation_waivers"] = [
+            waiver
+            for waiver in raw.get("resident_rotation_waivers", [])
+            if waiver["rotation_id"] != original_id
+        ] + [waiver.model_dump(mode="json") for waiver in normalized_waivers]
+
     return SchedulerInput.from_payload(raw)
 
 
@@ -1667,7 +1693,7 @@ def add_manual_clinic_block(
     instance: SchedulerInput,
     block: ManualClinicBlock | Draft,
 ) -> SchedulerInput:
-    """Add a fixed resident Clinic block and validate its replacement."""
+    """Add a fixed resident Clinic block and validate its funding."""
     added = (
         block if isinstance(block, ManualClinicBlock) else ManualClinicBlock.model_validate(block)
     )
@@ -1684,6 +1710,33 @@ def remove_manual_clinic_block(
     blocks = list(instance.manual_clinic_blocks)
     blocks.pop(index)
     return instance.revised(manual_clinic_blocks=blocks)
+
+
+def add_resident_rotation_waiver(
+    instance: SchedulerInput,
+    waiver: ResidentRotationWaiver | Draft,
+) -> SchedulerInput:
+    """Excuse one resident from one direct curriculum block."""
+    added = (
+        waiver
+        if isinstance(waiver, ResidentRotationWaiver)
+        else ResidentRotationWaiver.model_validate(waiver)
+    )
+    return instance.revised(
+        resident_rotation_waivers=[*instance.resident_rotation_waivers, added]
+    )
+
+
+def remove_resident_rotation_waiver(
+    instance: SchedulerInput,
+    index: int,
+) -> SchedulerInput:
+    """Remove a resident waiver by its position in the case."""
+    if not 0 <= index < len(instance.resident_rotation_waivers):
+        raise ValueError("resident rotation waiver not found")
+    waivers = list(instance.resident_rotation_waivers)
+    waivers.pop(index)
+    return instance.revised(resident_rotation_waivers=waivers)
 
 
 def _rotation_summary_category(kind: RotationKind) -> str:
@@ -1785,7 +1838,8 @@ def resident_rotation_week_totals(
         if block.resident_id != resident_id:
             continue
         totals["clinic"] += block.duration_weeks
-        totals["elective"] -= block.duration_weeks
+        if block.replaces_rotation_id is not None:
+            totals["elective"] -= block.duration_weeks
     for override in instance.resident_rotation_overrides:
         if override.resident_id != resident_id:
             continue
@@ -1795,6 +1849,7 @@ def resident_rotation_week_totals(
     for waiver in instance.resident_rotation_waivers:
         if waiver.resident_id != resident_id:
             continue
-        totals["mandatory"] -= waiver.duration_weeks
+        category = _rotation_summary_category(instance.rotation(waiver.rotation_id).kind)
+        totals[category] -= waiver.duration_weeks
 
     return totals

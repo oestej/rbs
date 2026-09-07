@@ -371,6 +371,75 @@ def test_manual_clinic_block_replaces_elective_at_fixed_start() -> None:
     ) == [1]
 
 
+def test_manual_clinic_block_uses_unallocated_time_at_fixed_start() -> None:
+    instance = sample_instance()
+    raw = instance.model_dump(mode="json")
+    pgy1 = next(curriculum for curriculum in raw["requirements"] if curriculum["pgy"] == 1)
+    pgy1["blocks"] = [
+        block
+        for block in pgy1["blocks"]
+        if not (
+            block["rotation_id"] == "night_float"
+            and block["duration_weeks"] == 2
+        )
+    ]
+    raw["manual_clinic_blocks"] = [
+        {
+            "resident_id": "resident-001",
+            "rotation_id": "clinic",
+            "start_week": 1,
+            "duration_weeks": 2,
+            "replaces_rotation_id": None,
+        }
+    ]
+    instance = type(instance).model_validate(raw)
+
+    occurrences = [
+        occurrence
+        for occurrence in expand_occurrences(instance)
+        if occurrence.resident_id == "resident-001"
+    ]
+    manual = next(occurrence for occurrence in occurrences if "manual-clinic" in occurrence.key)
+
+    assert manual.fixed_start_week == 1
+    assert sum(occurrence.duration_weeks for occurrence in occurrences) == 52
+    assert any(occurrence.elective for occurrence in occurrences)
+
+
+def test_clinic_exemption_can_fund_a_fixed_manual_block() -> None:
+    from ortools.sat.python import cp_model
+
+    instance = sample_instance()
+    raw = instance.model_dump(mode="json")
+    raw["resident_rotation_waivers"] = [
+        {
+            "resident_id": "resident-001",
+            "rotation_id": "clinic",
+            "duration_weeks": 2,
+        }
+    ]
+    raw["manual_clinic_blocks"] = [
+        {
+            "resident_id": "resident-001",
+            "rotation_id": "clinic",
+            "start_week": 1,
+            "duration_weeks": 2,
+            "replaces_rotation_id": None,
+        }
+    ]
+    instance = type(instance).model_validate(raw)
+
+    problem = compile_problem(instance, instance.solver, cp_model)
+    manual = next(
+        occurrence
+        for occurrence in problem.context.occurrences
+        if occurrence.resident_id == "resident-001" and "manual-clinic" in occurrence.key
+    )
+
+    assert manual.fixed_start_week == 1
+    assert problem.context.starts[manual.key] == (1,)
+
+
 def test_resident_mandatory_override_adds_placeable_block_and_consumes_elective() -> None:
     instance = sample_instance()
     raw = instance.model_dump(mode="json")

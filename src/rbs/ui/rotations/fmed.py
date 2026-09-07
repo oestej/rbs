@@ -17,7 +17,6 @@ from rbs.ui.editor_common import (
     _optional_float,
     _validation_message,
 )
-from rbs.ui.rotations.availability import _elective_availability_editor
 from rbs.ui.rotations.forms import (
     _elective_repeatable_header,
     _rotation_detail_contents,
@@ -29,6 +28,10 @@ from rbs.ui.rotations.ops import (
     replace_rotation_color,
     rotation_editor_state,
     rotation_from_editor_state,
+)
+from rbs.ui.rotations.overrides import (
+    _editor_manages_resident_override,
+    _resident_rotation_overrides_editor,
 )
 from rbs.ui.rotations.summary import _rotation_kind_label
 from rbs.ui.rotations.types import (
@@ -114,9 +117,18 @@ def _open_fmed_pgy_rules_dialog(
     elective_option = instance.electives.option_for(rotation.id)
     elective_draft: Draft = {
         "repeatable": bool(elective_option and elective_option.repeatable),
-        "blackout_weeks": set(elective_option.blackout_weeks if elective_option else ()),
         "shapes": elective_shapes_for_rotation(instance, rotation.id),
     }
+    resident_override_drafts = [
+        override.model_dump(mode="json")
+        for override in instance.resident_rotation_overrides
+        if _editor_manages_resident_override(instance, override, rotation.id)
+    ]
+    resident_waiver_drafts = [
+        waiver.model_dump(mode="json")
+        for waiver in instance.resident_rotation_waivers
+        if waiver.rotation_id == rotation.id
+    ]
     counts = {
         (rule.pgy, config.duration_weeks): sum(
             block.count
@@ -131,53 +143,120 @@ def _open_fmed_pgy_rules_dialog(
     # color change?" directly. replace_fmed_pgy_rules rewrites requirements and
     # elective options whether or not they moved, so comparing the resulting
     # instances could not tell a color-only edit from any other.
-    baseline = deepcopy((draft, elective_draft, counts))
+    baseline = deepcopy(
+        (
+            draft,
+            elective_draft,
+            counts,
+            resident_override_drafts,
+            resident_waiver_drafts,
+        )
+    )
 
     with (
         ui.dialog() as dialog,
         ui.card()
         .classes("rbs-fmed-rules-dialog p-0 gap-0")
         .style(
-            "width:calc(100vw - 64px);max-width:960px;height:calc(100vh - 64px);max-height:900px"
+            "width:calc(100vw - 48px);max-width:1600px;"
+            "height:calc(100vh - 48px);max-height:1000px"
         ),
     ):
-        with ui.row().classes("w-full items-center justify-between gap-3 px-5 py-4"):
-            ui.label(f"Edit FMED rules · {rotation.name}").classes("rbs-type-dialog-title")
+        with ui.row().classes("rbs-fmed-rules-header w-full items-center gap-5 px-5 py-4"):
+            ui.label(f"Edit FMED rules · {rotation.name}").classes(
+                "rbs-fmed-rules-title rbs-type-dialog-title whitespace-nowrap"
+            )
+            with (
+                ui.tabs()
+                .props("dense no-caps inline-label align=left mobile-arrows outside-arrows")
+                .classes("rbs-fmed-rules-tabs min-w-0") as tabs
+            ):
+                general_tab = ui.tab("fmed_rules_general", label="General", icon="tune")
+                pgy_tab = ui.tab(
+                    "fmed_rules_pgy",
+                    label="Training-level rules",
+                    icon="groups",
+                )
+                clinic_tab = ui.tab(
+                    "fmed_rules_clinic",
+                    label="Clinic",
+                    icon="event_available",
+                )
+                overrides_tab = ui.tab(
+                    "fmed_rules_overrides",
+                    label="Resident overrides",
+                    icon="person_add",
+                )
+            ui.space()
             ui.button(icon="close", on_click=dialog.close).props(
                 "flat round dense aria-label='Close FMED rules'"
             )
-        ui.separator()
-        with ui.scroll_area().classes("w-full flex-1 min-h-0"):
-            with ui.column().classes("w-full gap-4 p-5"):
-                rotation_color_palette(
-                    color_draft,
-                    instance.color_scheme.palette,
-                )
-                refresh_repeatable = _elective_repeatable_header(elective_draft)
-                _fmed_clinic_concurrency_editor(instance, draft)
-                _fmed_clinic_days_editor(instance, draft)
-                _staffing_and_blocks(
-                    instance,
-                    draft,
-                    rotation_id,
-                    requirement_counts=counts,
-                    elective_draft=elective_draft,
-                    on_elective_change=refresh_repeatable,
-                )
-                if elective_option is not None:
-                    with ui.column().classes(
-                        "rbs-rotation-editor-subsection w-full gap-3 rounded p-4"
-                    ):
-                        with ui.column().classes("gap-0"):
-                            ui.label("Elective availability").classes(
-                                "rbs-type-section-title"
-                            )
+        with (
+            ui.tab_panels(tabs, value=general_tab)
+            .props("animated")
+            .classes("rbs-fmed-rules-panels w-full flex-1 min-h-0")
+        ):
+            with ui.tab_panel(general_tab).classes("h-full p-0"):
+                with ui.scroll_area().classes("h-full w-full"):
+                    with ui.column().classes("w-full gap-5 p-6"):
+                        with ui.column().classes("gap-1"):
+                            ui.label("General FMED settings").classes("rbs-type-section-title")
                             ui.label(
-                                "Choose every week when FMED may fill Elective time."
+                                "Choose how this service appears on block schedules."
                             ).classes("rbs-type-caption rbs-text-muted")
-                        _elective_availability_editor(
+                        rotation_color_palette(
+                            color_draft,
+                            instance.color_scheme.palette,
+                        )
+
+            with ui.tab_panel(pgy_tab).classes("h-full p-0"):
+                with ui.scroll_area().classes("h-full w-full"):
+                    with ui.column().classes("w-full gap-4 p-6"):
+                        with ui.column().classes("gap-1"):
+                            ui.label("Training-level rules").classes("rbs-type-section-title")
+                            ui.label(
+                                "Configure staffing limits, block formats, requirements, "
+                                "and elective eligibility for each training level."
+                            ).classes("rbs-type-caption rbs-text-muted")
+                        refresh_repeatable = _elective_repeatable_header(
+                            elective_draft,
+                            title="Elective repeat rules",
+                        )
+                        _staffing_and_blocks(
                             instance,
-                            elective_draft["blackout_weeks"],
+                            draft,
+                            rotation_id,
+                            requirement_counts=counts,
+                            elective_draft=elective_draft,
+                            on_elective_change=refresh_repeatable,
+                        )
+
+            with ui.tab_panel(clinic_tab).classes("h-full p-0"):
+                with ui.scroll_area().classes("h-full w-full"):
+                    with ui.column().classes("w-full gap-4 p-6"):
+                        with ui.column().classes("gap-1"):
+                            ui.label("Continuity clinic").classes("rbs-type-section-title")
+                            ui.label(
+                                "Set attendance limits and the clinic sessions available "
+                                "to residents while they are on this service."
+                            ).classes("rbs-type-caption rbs-text-muted")
+                        _fmed_clinic_concurrency_editor(instance, draft)
+                        _fmed_clinic_days_editor(instance, draft)
+
+            with ui.tab_panel(overrides_tab).classes("h-full p-0"):
+                with ui.scroll_area().classes("h-full w-full"):
+                    with ui.column().classes("w-full gap-4 p-6"):
+                        with ui.column().classes("gap-1"):
+                            ui.label("Resident overrides").classes("rbs-type-section-title")
+                            ui.label(
+                                "Add or excuse a named resident without changing the "
+                                "training-level rules for everyone else."
+                            ).classes("rbs-type-caption rbs-text-muted")
+                        _resident_rotation_overrides_editor(
+                            instance,
+                            rotation,
+                            resident_override_drafts,
+                            resident_waiver_drafts,
                         )
         ui.separator()
         with ui.row().classes("w-full justify-end gap-3 p-4"):
@@ -198,16 +277,21 @@ def _open_fmed_pgy_rules_dialog(
                         rotation_id,
                         replacement,
                         counts,
+                        resident_overrides=resident_override_drafts,
+                        resident_waivers=resident_waiver_drafts,
                         elective_shapes=set(elective_draft.get("shapes", set())),
                         elective_repeatable=bool(elective_draft.get("repeatable")),
-                        elective_blackout_weeks=sorted(
-                            elective_draft.get("blackout_weeks", set())
-                        ),
                     )
                     dialog.close()
                     ui.notify("FMED rules updated", type="positive")
                     # A color-only edit leaves a solved schedule valid.
-                    rules_changed = (draft, elective_draft, counts) != baseline
+                    rules_changed = (
+                        draft,
+                        elective_draft,
+                        counts,
+                        resident_override_drafts,
+                        resident_waiver_drafts,
+                    ) != baseline
                     if not rules_changed and on_color_save is not None:
                         on_color_save(updated, selected_rotation_id)
                     else:

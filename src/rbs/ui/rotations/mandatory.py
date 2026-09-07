@@ -17,6 +17,7 @@ from rbs.ui.buttons import (
 )
 from rbs.ui.editor_common import _validation_message
 from rbs.ui.rotations.forms import (
+    RotationEditorGuard,
     _rotation_detail_contents,
     _rotation_editor,
 )
@@ -36,12 +37,15 @@ def _rotation_detail_panel(
     missing_id: str | None,
     on_select: SelectRotation,
     on_save: SaveRotation,
+    guard: RotationEditorGuard | None = None,
 ) -> None:
     editing = False
     panel = master_detail.detail_panel()
 
     def render_panel() -> None:
         nonlocal editing
+        if guard is not None:
+            guard.clear()
         panel.clear()
         with panel:
             if creating:
@@ -50,6 +54,7 @@ def _rotation_detail_panel(
                     None,
                     on_cancel=partial(on_select, None),
                     on_save=on_save,
+                    guard=guard,
                 )
             elif rotation is not None and editing:
 
@@ -63,6 +68,7 @@ def _rotation_detail_panel(
                     rotation,
                     on_cancel=stop_editing,
                     on_save=on_save,
+                    guard=guard,
                 )
             elif rotation is not None:
 

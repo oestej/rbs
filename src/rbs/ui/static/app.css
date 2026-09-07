@@ -1684,6 +1684,7 @@
 }
 
 .rbs-clinic-rules-dialog,
+.rbs-fmed-rules-dialog,
 .rbs-manual-clinic-dialog {
   overflow: hidden;
 }
@@ -1982,34 +1983,41 @@
   background: var(--rbs-surface-subtle);
 }
 
-.rbs-clinic-editor-header {
+.rbs-clinic-editor-header,
+.rbs-fmed-rules-header {
   flex: 0 0 auto;
   flex-wrap: nowrap;
   border-bottom: 1px solid var(--rbs-border-subtle);
 }
 
-.rbs-clinic-editor-title {
+.rbs-clinic-editor-title,
+.rbs-fmed-rules-title {
   max-width: 360px;
   flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.rbs-clinic-editor-tabs {
+.rbs-clinic-editor-tabs,
+.rbs-fmed-rules-tabs {
   min-height: 52px;
   flex: 0 1 auto;
   align-self: stretch;
   background: transparent;
 }
 
-.rbs-clinic-editor-tabs .q-tab {
+.rbs-clinic-editor-tabs .q-tab,
+.rbs-fmed-rules-tabs .q-tab {
   min-height: 52px;
   padding: 0 var(--rbs-space-4);
 }
 
 .rbs-clinic-editor-panels,
 .rbs-clinic-editor-panels .q-panel,
-.rbs-clinic-editor-panels .q-tab-panel {
+.rbs-clinic-editor-panels .q-tab-panel,
+.rbs-fmed-rules-panels,
+.rbs-fmed-rules-panels .q-panel,
+.rbs-fmed-rules-panels .q-tab-panel {
   height: 100%;
   min-height: 0;
 }
@@ -2248,7 +2256,8 @@
     order: 1;
   }
 
-  .rbs-clinic-editor-header {
+  .rbs-clinic-editor-header,
+  .rbs-fmed-rules-header {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
@@ -2256,25 +2265,29 @@
     padding: var(--rbs-space-3) !important;
   }
 
-  .rbs-clinic-editor-title {
+  .rbs-clinic-editor-title,
+  .rbs-fmed-rules-title {
     grid-column: 1;
     grid-row: 1;
     width: 100%;
     max-width: none;
   }
 
-  .rbs-clinic-editor-tabs {
+  .rbs-clinic-editor-tabs,
+  .rbs-fmed-rules-tabs {
     grid-column: 1 / -1;
     grid-row: 2;
     width: 100%;
     max-width: 100%;
   }
 
-  .rbs-clinic-editor-header > .q-space {
+  .rbs-clinic-editor-header > .q-space,
+  .rbs-fmed-rules-header > .q-space {
     display: none;
   }
 
-  .rbs-clinic-editor-header > .q-btn:last-child {
+  .rbs-clinic-editor-header > .q-btn:last-child,
+  .rbs-fmed-rules-header > .q-btn:last-child {
     grid-column: 2;
     grid-row: 1;
   }

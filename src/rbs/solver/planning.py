@@ -93,6 +93,9 @@ def expand_occurrences(
         ]
         replacements: dict[tuple[str, int], int] = defaultdict(int)
         for manual in manual_blocks:
+            # Unallocated-funded fixed Clinic blocks remove no curriculum block.
+            if manual.replaces_rotation_id is None:
+                continue
             replacements[manual.replaces_rotation_id, manual.duration_weeks] += 1
         for override in resident_overrides:
             # Unallocated-funded extras remove no curriculum block.

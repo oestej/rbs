@@ -42,6 +42,7 @@ from rbs.ui.rotations.fmed import (
     _set_fmed_pgy_clinic_limit,
 )
 from rbs.ui.rotations.forms import (
+    RotationEditorGuard,
     _apply_away_selection,
     _apply_clinic_sites,
     _block_config_editor,
@@ -62,6 +63,7 @@ from rbs.ui.rotations.forms import (
     _set_required_block_count,
     _set_unique_clinic_slots,
     _staffing_and_blocks,
+    confirm_guarded_navigation,
 )
 from rbs.ui.rotations.mandatory import (
     _confirm_remove_mandatory_rotation,
@@ -153,6 +155,8 @@ __all__ = [
     "_open_resident_rotation_override_dialog",
     "_resident_rotation_overrides_editor",
     "_rotation_editor",
+    "RotationEditorGuard",
+    "confirm_guarded_navigation",
     "_core_settings",
     "_staffing_and_blocks",
     "_pgy_rule_editor",
@@ -228,6 +232,20 @@ def render_rotations_tab(
         (rotation for rotation in rotations if rotation.id == selected_rotation_id),
         None,
     )
+    # One guard per detail panel: editors can stay open (and dirty) in both
+    # sections at once, since switching sections only hides the panels.
+    # Navigation checks each guard in turn so no dirty editor is skipped.
+    mandatory_guard = RotationEditorGuard()
+    elective_guard = RotationEditorGuard()
+
+    def guarded_select(rotation_id: str | None) -> None:
+        confirm_guarded_navigation(
+            mandatory_guard,
+            lambda: confirm_guarded_navigation(
+                elective_guard,
+                partial(on_select, rotation_id),
+            ),
+        )
 
     with page_shells.configuration(
         "Rotations",
@@ -274,7 +292,7 @@ def render_rotations_tab(
                         instance,
                         rotations,
                         selected_rotation_id=selected_rotation_id,
-                        on_select=on_select,
+                        on_select=guarded_select,
                     )
                     _rotation_detail_panel(
                         instance,
@@ -285,8 +303,9 @@ def render_rotations_tab(
                             if selected_rotation_id and selected is None and not creating
                             else None
                         ),
-                        on_select=on_select,
+                        on_select=guarded_select,
                         on_save=on_save,
+                        guard=mandatory_guard,
                     )
             with ui.tab_panel(fmed_tab).classes("p-0 pt-4"):
                 _dedicated_rotation_cards(
@@ -300,9 +319,10 @@ def render_rotations_tab(
                 _elective_configuration(
                     instance,
                     selected_rotation_id=selected_rotation_id,
-                    on_select=on_select,
+                    on_select=guarded_select,
                     on_save=on_save,
                     on_color_save=on_color_save or on_save,
+                    guard=elective_guard,
                 )
             with ui.tab_panel(special_tab).classes("p-0 pt-4"):
                 _special_configuration(

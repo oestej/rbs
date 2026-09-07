@@ -216,6 +216,14 @@ def apply_elective_option_defaults(
                 update={
                     "eligible_pgys": pgys,
                     "eligible_block_sizes": sizes,
+                    # FMED elective takes follow the service's ordinary
+                    # year-round rules; per-week blackouts are intentionally
+                    # reserved for other elective services.
+                    "blackout_weeks": (
+                        []
+                        if rotation is not None and rotation.kind is RotationKind.FMED
+                        else option.blackout_weeks
+                    ),
                 }
             )
         )

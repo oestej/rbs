@@ -415,7 +415,7 @@ def _resident_block_schedule_manager(
                 ),
             ).props("unelevated no-caps")
             lock_all = ui.button(
-                "Lock current schedule",
+                "Lock all rotations",
                 icon="lock",
                 on_click=lambda: save_action(
                     lambda: lock_resident_schedule(
@@ -433,7 +433,7 @@ def _resident_block_schedule_manager(
                 for lock in instance.locks
             )
             unlock_all = ui.button(
-                "Unlock all manual",
+                "Unlock all rotations",
                 icon="lock_open",
                 on_click=lambda: save_action(
                     lambda: unlock_resident_schedule(instance, resident.id),
@@ -448,54 +448,55 @@ def _resident_block_schedule_manager(
                 if not block_overlapping_lock_sources(instance, block)
             ]
 
-            def delete_all_unlocked() -> None:
-                if schedule is None or on_schedule_change is None:
-                    return
-                try:
-                    updated = schedule
-                    for block in unlocked_blocks:
-                        updated = clear_schedule_block(updated, block)
-                    count = len(unlocked_blocks)
-                    noun = "block" if count == 1 else "blocks"
-                    ui.notify(
-                        f"{count} unlocked {noun} deleted; solve required",
-                        type="warning",
-                    )
-                    on_schedule_change(updated, resident.id, True)
-                except (ValidationError, ValueError) as exc:
-                    ui.notify(str(exc), type="negative", multi_line=True)
-                finally:
-                    confirm_dialog.close()
+            if unlocked_blocks:
 
-            with (
-                ui.dialog() as confirm_dialog,
-                ui.card().classes("w-full max-w-xl p-0 gap-0"),
-            ):
-                with ui.row().classes("w-full items-center justify-between gap-3 px-5 py-4"):
-                    ui.label("Delete all unlocked blocks?").classes("rbs-type-dialog-title")
-                    ui.button(icon="close", on_click=confirm_dialog.close).props(
-                        "flat round dense aria-label='Close delete confirmation'"
-                    )
-                ui.separator()
-                with ui.column().classes("w-full gap-4 p-5"):
-                    ui.label(
-                        f"Delete {len(unlocked_blocks)} unlocked "
-                        f"{'block' if len(unlocked_blocks) == 1 else 'blocks'} "
-                        f"from {resident.name}'s working schedule? Locked blocks "
-                        "are kept. A new Solve will be required afterwards."
-                    ).classes("rbs-type-body rbs-text-muted")
-                ui.separator()
-                with ui.row().classes("w-full justify-end gap-3 p-4"):
-                    ui.button("Cancel", on_click=confirm_dialog.close).props("flat no-caps")
-                    ui.button("Delete all", on_click=delete_all_unlocked).props(
-                        "unelevated no-caps color=negative"
-                    )
-            delete_all = ui.button(
-                "Delete all unlocked",
-                icon="delete_outline",
-                on_click=confirm_dialog.open,
-            ).props("flat no-caps color=negative")
-            delete_all.set_enabled(bool(unlocked_blocks))
+                def delete_all_unlocked() -> None:
+                    if schedule is None or on_schedule_change is None:
+                        return
+                    try:
+                        updated = schedule
+                        for block in unlocked_blocks:
+                            updated = clear_schedule_block(updated, block)
+                        count = len(unlocked_blocks)
+                        noun = "block" if count == 1 else "blocks"
+                        ui.notify(
+                            f"{count} unlocked {noun} deleted; solve required",
+                            type="warning",
+                        )
+                        on_schedule_change(updated, resident.id, True)
+                    except (ValidationError, ValueError) as exc:
+                        ui.notify(str(exc), type="negative", multi_line=True)
+                    finally:
+                        confirm_dialog.close()
+
+                with (
+                    ui.dialog() as confirm_dialog,
+                    ui.card().classes("w-full max-w-xl p-0 gap-0"),
+                ):
+                    with ui.row().classes("w-full items-center justify-between gap-3 px-5 py-4"):
+                        ui.label("Delete all unlocked blocks?").classes("rbs-type-dialog-title")
+                        ui.button(icon="close", on_click=confirm_dialog.close).props(
+                            "flat round dense aria-label='Close delete confirmation'"
+                        )
+                    ui.separator()
+                    with ui.column().classes("w-full gap-4 p-5"):
+                        ui.label(
+                            f"Delete {len(unlocked_blocks)} unlocked "
+                            f"{'block' if len(unlocked_blocks) == 1 else 'blocks'} "
+                            f"from {resident.name}'s working schedule? Locked blocks "
+                            "are kept. A new Solve will be required afterwards."
+                        ).classes("rbs-type-body rbs-text-muted")
+                    ui.separator()
+                    with ui.row().classes("w-full justify-end gap-3 p-4"):
+                        ui.button("Cancel", on_click=confirm_dialog.close).props("flat no-caps")
+                        ui.button("Delete all", on_click=delete_all_unlocked).props(
+                            "unelevated no-caps color=negative"
+                        )
+                ui.button(
+                    "Delete all unlocked",
+                    icon="delete_outline",
+                    on_click=confirm_dialog.open,
+                ).props("flat no-caps color=negative")
 
         timeline = sorted(
             [(block.start_week, 0, "block", block) for block in blocks]
@@ -504,7 +505,6 @@ def _resident_block_schedule_manager(
             key=lambda item: (item[0], item[1]),
         )
         if timeline:
-            ui.label("Working schedule").classes("rbs-type-control-label")
             for _start_week, _priority, item_type, item in timeline:
                 if item_type == "gap":
                     _resident_schedule_gap_row(instance, item)
@@ -1291,13 +1291,7 @@ def _resident_block_schedule_report(
     )
     with ui.column().classes("rbs-resident-schedule-content w-full min-w-0 gap-3 p-5"):
         with ui.row().classes("w-full items-center justify-between gap-3"):
-            if editing:
-                ui.label(
-                    "Add a block or use the row actions to edit, delete, lock, or unlock "
-                    "blocks. Assignment changes may require a new Solve."
-                ).classes("rbs-resident-block-edit-hint rbs-type-caption rbs-text-muted")
-            else:
-                ui.space()
+            ui.space()
             with ui.row().classes("items-center gap-2 ml-auto"):
                 if not editing:
                     ui.checkbox(

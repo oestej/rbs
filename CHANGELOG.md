@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Rotations:** The FMED rule editor now uses a large, near-full-window dialog
+  with horizontal tabs for general, training-level, clinic, and named-resident
+  override settings. FMED elective takes are always available year-round rather
+  than carrying separate blackout rules.
+- **Rotations:** All named-resident rotation additions, including fixed Clinic
+  blocks and Mandatory or FMED services, prefer that resident's unallocated
+  time before replacing a same-length Elective block. The Clinic resident
+  exceptions screen also supports exempting a named resident from a direct
+  Clinic requirement.
+- **Rotations:** The Mandatory and standalone Elective editors now keep
+  Save in the header next to the close button instead of Cancel and Save
+  actions at the bottom. Closing, or picking another rotation, with
+  unsaved changes asks whether to keep editing, discard the changes, or
+  save them. Each section tracks its own edits, so simultaneous edits in
+  Mandatory and Electives are each confirmed, and switching sections
+  leaves unsaved edits in place.
+
 ### Fixed
 
 - **Residents:** Adding or changing a block now saves it as an immediate
@@ -32,7 +51,8 @@
   save.
 - **Residents:** The block schedule editor has a "Delete all unlocked"
   button with a confirmation step that deletes unlocked blocks together
-  while keeping locked blocks. A new Solve is required afterwards.
+  while keeping locked blocks. A new Solve is required afterwards. The
+  button is hidden when the resident has no unlocked blocks.
 - **Residents:** Elective preferences no longer need Add or Save buttons.
   Choosing a service in the (now clearly marked) add menu appends it at
   once, and reordering or removing requests saves automatically.

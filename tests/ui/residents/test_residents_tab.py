@@ -545,8 +545,8 @@ def test_block_schedule_edit_mode_contains_add_and_lock_tools() -> None:
     assert {
         "Add block",
         "Return to view",
-        "Lock current schedule",
-        "Unlock all manual",
+        "Lock all rotations",
+        "Unlock all rotations",
         "Unlock",
     } <= button_labels
     assert "Hardcode block" not in button_labels
@@ -697,7 +697,7 @@ def test_block_schedule_edit_mode_interleaves_solved_and_pending_rows() -> None:
             for value in row_text(child)
         ]
 
-    assert "Working schedule" in labels
+    assert "Working schedule" not in labels
     assert "Current schedule" not in labels
     assert "Pending blocks and manual pins" not in labels
     assert [row_text(row)[:2] for row in rows] == [

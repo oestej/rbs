@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from copy import deepcopy
+from dataclasses import dataclass
 from functools import partial
 
 from pydantic import ValidationError
@@ -102,12 +104,105 @@ def _new_mandatory_rotation_draft(instance: SchedulerInput) -> Draft:
     }
 
 
+def _confirm_close_editor(
+    *,
+    subject: str,
+    save_label: str,
+    save_icon: str,
+    on_discard: Callable[[], None],
+    on_save_click: Callable[[], None],
+) -> None:
+    """Confirm leaving a rotation editor with unsaved changes.
+
+    ``on_save_click`` runs with the dialog already closed so a failed save
+    still shows its error inline in the editor that stays open.
+    """
+    from nicegui import ui
+
+    with ui.dialog() as dialog, ui.card().classes("w-full max-w-lg gap-4 p-5"):
+        ui.label("Discard unsaved changes?").classes("rbs-type-dialog-title")
+        ui.label(f"Changes to {subject} will be lost unless you save them.").classes(
+            "rbs-type-body rbs-text-muted"
+        )
+
+        def discard() -> None:
+            dialog.close()
+            on_discard()
+
+        def save_and_leave() -> None:
+            dialog.close()
+            on_save_click()
+
+        with ui.row().classes("w-full flex-nowrap justify-end gap-2"):
+            ui.button("Keep editing", on_click=dialog.close).props("flat no-caps")
+            ui.button("Discard changes", on_click=discard).props("flat no-caps color=negative")
+            ui.button(save_label, icon=save_icon, on_click=save_and_leave).props(
+                "unelevated no-caps"
+            )
+    dialog.open()
+
+
+@dataclass
+class RotationEditorGuard:
+    """Dirty state published by the rotation editors for navigation guards.
+
+    The rotations tab owns one guard: editors register their dirty check
+    while editing, and directory selection consults it before navigating
+    away. ``clear`` runs whenever the editor unmounts or discards so a
+    stale check can never fire after the edits are gone.
+    """
+
+    is_dirty: Callable[[], bool] | None = None
+    save: Callable[[], bool] | None = None
+    subject: str = "this rotation"
+    save_label: str = "Save rotation"
+    save_icon: str = "save"
+
+    def clear(self) -> None:
+        self.is_dirty = None
+        self.save = None
+
+
+def confirm_guarded_navigation(
+    guard: RotationEditorGuard | None,
+    proceed: Callable[[], None],
+) -> None:
+    """Navigate unless the rotation editor holds unsaved changes.
+
+    Clean (or unregistered) editors proceed immediately. A dirty editor
+    opens the same discard dialog as the close button: discarding clears
+    the guard before navigating so the check cannot fire twice, while a
+    failed save stays put with its error shown inline.
+    """
+    if guard is None or guard.is_dirty is None or not guard.is_dirty():
+        proceed()
+        return
+
+    def discard_and_continue() -> None:
+        guard.clear()
+        proceed()
+
+    def save_and_continue() -> None:
+        saver = guard.save
+        if saver is not None and saver():
+            proceed()
+
+    _confirm_close_editor(
+        subject=guard.subject,
+        save_label=guard.save_label,
+        save_icon=guard.save_icon,
+        on_discard=discard_and_continue,
+        on_save_click=save_and_continue,
+    )
+
+
 def _rotation_editor(
     instance: SchedulerInput,
     rotation: Rotation | None,
     *,
     on_cancel: Callable[[], None],
     on_save: SaveRotation,
+    guard: RotationEditorGuard | None = None,
 ) -> None:
     """Edit a Mandatory rotation in the master-detail workspace.
 
@@ -189,7 +284,7 @@ def _rotation_editor(
 
     save_error = None
 
-    def save() -> None:
+    def save() -> bool:
         try:
             if creating:
                 draft["id"] = next_mandatory_rotation_id(
@@ -233,11 +328,50 @@ def _rotation_editor(
                 type="positive",
             )
             on_save(updated, replacement.id)
+            return True
         except (ValidationError, ValueError) as exc:
             message = _validation_message(exc)
             if save_error is not None:
                 save_error.set_text(message)
             ui.notify(message, type="negative", multi_line=True)
+            return False
+
+    save_label = "Add rotation" if creating else "Save rotation"
+    save_icon = "add" if creating else "save"
+
+    def current_editor_state() -> dict:
+        return {
+            "draft": draft,
+            "elective": elective_draft,
+            "overrides": resident_override_drafts,
+            "waivers": resident_waiver_drafts,
+            "group": group_draft,
+            "counts": counts,
+        }
+
+    initial_editor_state: dict = {}
+
+    if creating or rotation is None:
+        subject = "the new rotation"
+    else:
+        subject = f"{rotation.name} ({rotation.code})"
+
+    def discard_to_cancel() -> None:
+        if guard is not None:
+            guard.clear()
+        on_cancel()
+
+    def request_close() -> None:
+        if current_editor_state() == initial_editor_state:
+            on_cancel()
+            return
+        _confirm_close_editor(
+            subject=subject,
+            save_label=save_label,
+            save_icon=save_icon,
+            on_discard=discard_to_cancel,
+            on_save_click=save,
+        )
 
     with master_detail.detail_card():
         with ui.row().classes(
@@ -250,13 +384,19 @@ def _rotation_editor(
                         ui.badge("Creating", color="secondary").props("outline")
             else:
                 _rotation_identity(rotation, instance=instance, editing=True)
-            with ui.button(icon="close", on_click=on_cancel).props(
-                button_props(
-                    ICON_BUTTON_PROPS,
-                    "aria-label='Cancel rotation editing'",
-                )
-            ):
-                ui.tooltip("Cancel rotation editing")
+            with ui.row().classes("items-center gap-2"):
+                ui.button(
+                    save_label,
+                    icon=save_icon,
+                    on_click=save,
+                ).props("unelevated no-caps")
+                with ui.button(icon="close", on_click=request_close).props(
+                    button_props(
+                        ICON_BUTTON_PROPS,
+                        "aria-label='Close rotation editor'",
+                    )
+                ):
+                    ui.tooltip("Close rotation editor")
         ui.separator()
         with (
             ui.tabs()
@@ -368,12 +508,14 @@ def _rotation_editor(
             save_error = ui.label().classes(
                 "rbs-rotation-save-error min-w-0 flex-1 rbs-type-caption rbs-text-danger"
             )
-            ui.button("Cancel", on_click=on_cancel).props("flat no-caps")
-            ui.button(
-                "Add rotation" if creating else "Save rotation",
-                icon="save" if not creating else "add",
-                on_click=save,
-            ).props("unelevated no-caps")
+
+    initial_editor_state.update(deepcopy(current_editor_state()))
+    if guard is not None:
+        guard.is_dirty = lambda: current_editor_state() != initial_editor_state
+        guard.save = save
+        guard.subject = subject
+        guard.save_label = save_label
+        guard.save_icon = save_icon
 
 
 def _core_settings(
@@ -1320,7 +1462,11 @@ def _remove_required_block_config(
     _remove_index(rule["block_configs"], index, refresh)
 
 
-def _elective_repeatable_header(elective_draft: Draft) -> Callable[[], None]:
+def _elective_repeatable_header(
+    elective_draft: Draft,
+    *,
+    title: str = "Elective availability",
+) -> Callable[[], None]:
     """Render the shared repeat-takes checkbox; return its refresher.
 
     Per-shape toggles own elective eligibility, so this header only owns the
@@ -1332,7 +1478,7 @@ def _elective_repeatable_header(elective_draft: Draft) -> Callable[[], None]:
     with ui.column().classes(
         "rbs-rotation-flags rbs-mandatory-elective-availability w-full gap-3 rounded p-3"
     ):
-        ui.label("Elective availability").classes("rbs-type-control-label")
+        ui.label(title).classes("rbs-type-control-label")
         ui.label(
             "Repeat takes apply to every block shape marked Elective "
             "or Both below. Elective block sizes follow those shapes."
