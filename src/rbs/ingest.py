@@ -7,7 +7,7 @@ from typing import Any
 from rbs.catalog import catalog_dict
 from rbs.models.instance import SchedulerInput
 from rbs.models.schedule import Schedule
-from rbs.solver.validation import validate_schedule_or_raise
+from rbs.solver.validation import validate_persistable_schedule_or_raise
 
 PathLike = str | Path
 
@@ -87,7 +87,7 @@ def parse_workspace_payload(
         schedule = None
         if data.get("schedule") is not None:
             schedule = Schedule.model_validate(data["schedule"])
-            validate_schedule_or_raise(instance, schedule)
+            validate_persistable_schedule_or_raise(instance, schedule)
         return instance, schedule
     if "residents" not in data:
         raise ValueError("JSON must be an instance (with residents) or a workspace bundle")

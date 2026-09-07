@@ -133,3 +133,21 @@ class Resident(StrictModel):
             days=_WEEKDAY_OFFSETS[weekday],
         )
         return scheduled_day in self.days_off
+
+
+def resident_display_sort_key(resident: Resident) -> tuple[str, str, str, str]:
+    """Return the stable display order for resident choices and lists.
+
+    Names are stored as display text, so the final name token is treated as a
+    surname when one is present. A one-word name uses that token as its first
+    name and sort key.
+    """
+    name_parts = resident.name.split()
+    first_name = name_parts[0]
+    last_name = name_parts[-1] if len(name_parts) > 1 else first_name
+    return (
+        last_name.casefold(),
+        first_name.casefold(),
+        resident.name.casefold(),
+        resident.id.casefold(),
+    )

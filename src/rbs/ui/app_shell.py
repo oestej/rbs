@@ -514,6 +514,16 @@ def _render_residents(session: WorkspaceSession, workspace: Workspace) -> None:
         session.active_tab = "residents"
         session.persist_instance(updated, preserve_schedule=preserve_schedule)
 
+    def persist_resident_block_schedule(
+        updated: SchedulerInput,
+        draft_schedule: Schedule,
+        resident_id: str,
+    ) -> None:
+        session.resident_schedule_editing = False
+        session.resident_id = resident_id
+        session.active_tab = "residents"
+        session.persist_instance(updated, draft_schedule=draft_schedule)
+
     def persist_resident_schedule_change(
         updated: Schedule,
         resident_id: str,
@@ -550,6 +560,7 @@ def _render_residents(session: WorkspaceSession, workspace: Workspace) -> None:
         on_select=select_resident,
         on_save=persist_resident,
         on_schedule_save=persist_resident_schedule,
+        on_block_schedule_save=persist_resident_block_schedule,
         on_schedule_change=persist_resident_schedule_change,
         schedule_is_current=workspace.schedule is not None,
         block_schedule_editing=session.resident_block_schedule_editing,
@@ -615,9 +626,7 @@ def _application_color_scheme(session: WorkspaceSession) -> ColorScheme | None:
     return scheme if isinstance(scheme, ColorScheme) else None
 
 
-def _chrome_color_scheme(
-    session: WorkspaceSession, workspace: Workspace | None
-) -> ColorScheme:
+def _chrome_color_scheme(session: WorkspaceSession, workspace: Workspace | None) -> ColorScheme:
     """Colors for application chrome, whether or not a workspace is open."""
     if workspace is not None:
         return workspace.instance.color_scheme

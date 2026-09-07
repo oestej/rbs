@@ -16,6 +16,7 @@ from rbs.ui.locks import (
     clear_schedule_block,
     lock_schedule_block,
     replace_manual_block,
+    replace_schedule_block,
     schedule_blocks,
     schedule_gaps,
     set_lock_through_today,
@@ -248,6 +249,127 @@ def test_clear_schedule_block_removes_only_one_rotation_group_member() -> None:
         resident_id=resident_id,
         calendar_weeks=instance.calendar.weeks,
     ) == [list(range(1, 23)), list(range(25, instance.calendar.weeks + 1))]
+
+
+def test_replace_schedule_block_places_it_and_clears_whole_overlapping_blocks() -> None:
+    instance = sample_instance()
+    resident = instance.residents[8]
+    other_resident = instance.residents[9]
+    schedule = Schedule(
+        meta=ScheduleMeta(
+            academic_year=instance.academic_year,
+            engine=SolverEngineName.STUB,
+            status=SolverStatus.FEASIBLE,
+            solver_status=SolverStatus.FEASIBLE,
+        ),
+        assignments=[
+            Assignment(
+                resident_id=resident.id,
+                rotation_id="fmed",
+                kind=RotationKind.FMED,
+                start_week=1,
+                end_week=4,
+                weeks=[1, 2, 3, 4],
+                block_start_week=1,
+                block_duration_weeks=4,
+            ),
+            Assignment(
+                resident_id=other_resident.id,
+                rotation_id="fmed",
+                kind=RotationKind.FMED,
+                start_week=1,
+                end_week=4,
+                weeks=[1, 2, 3, 4],
+                block_start_week=1,
+                block_duration_weeks=4,
+            ),
+        ],
+    )
+    manual = ScheduleBlock(
+        resident_id=resident.id,
+        rotation_id="clinic",
+        start_week=3,
+        duration_weeks=2,
+    )
+
+    updated = replace_schedule_block(instance, schedule, manual)
+
+    assert schedule_blocks(updated, resident_id=resident.id) == [manual]
+    assert [
+        block.rotation_id for block in schedule_blocks(updated, resident_id=other_resident.id)
+    ] == ["fmed"]
+    placed = updated.assignment_for(resident.id, 3)
+    assert placed is not None
+    assert placed.kind is RotationKind.CLINIC
+    assert placed.locked_weeks == [3, 4]
+    assert updated.assignment_for(resident.id, 1) is None
+    assert updated.meta.status is SolverStatus.UNKNOWN
+    assert updated.meta.solver_status is SolverStatus.UNKNOWN
+    assert updated.meta.notes[-1].endswith("solve required")
+
+
+def test_replace_schedule_block_starts_a_working_schedule_without_a_solve() -> None:
+    instance = sample_instance()
+    resident = instance.residents[8]
+    manual = ScheduleBlock(
+        resident_id=resident.id,
+        rotation_id="clinic",
+        start_week=1,
+        duration_weeks=2,
+    )
+
+    updated = replace_schedule_block(instance, None, manual)
+
+    assert schedule_blocks(updated, resident_id=resident.id) == [manual]
+    assert updated.meta.engine is instance.solver.engine
+    assert updated.meta.status is SolverStatus.UNKNOWN
+
+
+def test_replace_schedule_block_moves_an_edited_block_without_leaving_the_old_one() -> None:
+    instance = sample_instance()
+    resident = instance.residents[8]
+    original = ScheduleBlock(
+        resident_id=resident.id,
+        rotation_id="clinic",
+        start_week=1,
+        duration_weeks=2,
+    )
+    replacement = ScheduleBlock(
+        resident_id=resident.id,
+        rotation_id="clinic",
+        start_week=7,
+        duration_weeks=2,
+    )
+    schedule = Schedule(
+        meta=ScheduleMeta(
+            academic_year=instance.academic_year,
+            engine=SolverEngineName.STUB,
+            status=SolverStatus.FEASIBLE,
+        ),
+        assignments=[
+            Assignment(
+                resident_id=resident.id,
+                rotation_id="clinic",
+                kind=RotationKind.CLINIC,
+                start_week=1,
+                end_week=2,
+                weeks=[1, 2],
+                block_start_week=1,
+                block_duration_weeks=2,
+            )
+        ],
+    )
+
+    updated = replace_schedule_block(
+        instance,
+        schedule,
+        replacement,
+        replaced_block=original,
+    )
+
+    assert schedule_blocks(updated, resident_id=resident.id) == [replacement]
+    assert updated.assignment_for(resident.id, 1) is None
+    assert updated.assignment_for(resident.id, 7) is not None
 
 
 def test_incomplete_schedule_defers_missing_prerequisite_to_the_next_solve() -> None:

@@ -13,6 +13,7 @@ from rbs.models.curriculum import (
 )
 from rbs.models.enums import RotationKind, Session, Weekday
 from rbs.models.instance import SchedulerInput
+from rbs.models.resident import resident_display_sort_key
 from rbs.models.rotation import (
     ClinicSlot,
     Rotation,
@@ -59,7 +60,7 @@ def _rotation_summary_html(
     for pgy in instance.training_level_ids:
         residents = sorted(
             (resident for resident in instance.residents if resident.pgy == pgy),
-            key=lambda resident: resident.name.casefold(),
+            key=resident_display_sort_key,
         )
         if not residents:
             continue

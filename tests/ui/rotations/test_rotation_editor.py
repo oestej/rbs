@@ -80,7 +80,15 @@ def test_rotation_editor_partitions_standard_and_special_rotations() -> None:
     special = special_rotations(instance)
 
     assert editable
+    assert [rotation.code for rotation in editable] == sorted(
+        (rotation.code for rotation in editable),
+        key=str.casefold,
+    )
     assert all(rotation.kind is RotationKind.STANDARD for rotation in editable)
+    assert [rotation.code for rotation in special] == sorted(
+        (rotation.code for rotation in special),
+        key=str.casefold,
+    )
     assert {rotation.id for rotation in special} == {
         "clinic",
         "fmed",

@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from rbs.models.enums import RotationKind
 from rbs.models.instance import SchedulerInput
+from rbs.models.rotation import rotation_display_sort_key
 from rbs.ui import master_detail
 from rbs.ui.drafts import Draft
 from rbs.ui.editor_common import (
@@ -51,7 +52,7 @@ def _dedicated_rotation_cards(
 
     rotations = sorted(
         (rotation for rotation in instance.rotations if rotation.kind is kind),
-        key=lambda rotation: rotation.code.casefold(),
+        key=rotation_display_sort_key,
     )
     if not rotations:
         master_detail.empty_detail(

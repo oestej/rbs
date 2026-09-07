@@ -27,10 +27,10 @@ def _add_week_objective_terms(
     week: int,
     half_day_slots: list,
     pgys: list[int],
-    slot_groups: tuple[dict, dict, dict, dict],
+    slot_groups: tuple[dict, dict, dict, dict, dict],
     state: _ClinicObjectiveState,
 ) -> None:
-    _slots_by_resident, present_by_slot, primary_by_slot, present_by_pgy = slot_groups
+    _slots_by_resident, present_by_slot, primary_by_slot, present_by_pgy, _occupied = slot_groups
     model = context.model
     policy = context.instance.clinic_policy
     ratio = policy.site(policy.primary_site_id).residents_per_attending

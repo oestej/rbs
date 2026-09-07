@@ -9,6 +9,7 @@ from rbs.models.clinic import ALL_CLINIC_SITES
 from rbs.models.color_scheme import contrasting_text_color, normalize_hex_color
 from rbs.models.enums import RotationKind, Session, Weekday
 from rbs.models.instance import SchedulerInput
+from rbs.models.rotation import rotation_display_sort_key
 from rbs.ui.drafts import Draft
 from rbs.ui.editor_common import (
     _CLINIC_WEEK,
@@ -370,7 +371,7 @@ def prerequisite_options(
     offered = instance.rotation_ids_for_pgy(pgy)
     return {
         rotation.id: f"{rotation.code} — {rotation.name}"
-        for rotation in sorted(instance.rotations, key=lambda item: item.code.casefold())
+        for rotation in sorted(instance.rotations, key=rotation_display_sort_key)
         if rotation.id != rotation_id and rotation.id in offered
         if rotation.kind is not RotationKind.ELECTIVE or instance.is_elective_option(rotation.id)
     }

@@ -11,7 +11,8 @@ from pydantic import ValidationError
 from rbs.models.clinic import ClinicSiteConfig
 from rbs.models.enums import WEEKDAYS_MF, RotationKind, Session, Weekday
 from rbs.models.instance import ManualClinicBlock, SchedulerInput
-from rbs.models.rotation import Rotation
+from rbs.models.resident import resident_display_sort_key
+from rbs.models.rotation import Rotation, rotation_display_sort_key
 from rbs.ui import page_shells
 from rbs.ui.buttons import SECONDARY_BUTTON_PROPS
 from rbs.ui.clinic.ops import (
@@ -116,7 +117,7 @@ def _clinic_block_rules_configuration(
 
     clinic_rotations = sorted(
         (rotation for rotation in instance.rotations if rotation.kind is RotationKind.CLINIC),
-        key=lambda rotation: rotation.code.casefold(),
+        key=rotation_display_sort_key,
     )
     with ui.column().classes("w-full gap-5"):
         with ui.row().classes("w-full items-center justify-between gap-3 flex-wrap"):
@@ -786,7 +787,7 @@ def _manual_clinic_blocks_configuration(
 
 def _manual_clinic_resident_options(instance: SchedulerInput) -> dict[str, str]:
     options: dict[str, str] = {}
-    for resident in sorted(instance.residents, key=lambda item: item.name.casefold()):
+    for resident in sorted(instance.residents, key=resident_display_sort_key):
         if any(
             _manual_duration_options(instance, resident.id, rotation.id)
             for rotation in instance.rotations
@@ -804,7 +805,7 @@ def _manual_clinic_rotation_options(
         rotation.id: f"{rotation.code} — {rotation.name}"
         for rotation in sorted(
             instance.rotations,
-            key=lambda item: item.code.casefold(),
+            key=rotation_display_sort_key,
         )
         if rotation.kind is RotationKind.CLINIC
         and _manual_duration_options(instance, resident_id, rotation.id)
@@ -890,7 +891,7 @@ def _manual_replacement_options(
             continue
         seen.add(block.rotation_id)
         candidates.append((rotation, remaining))
-    candidates.sort(key=lambda item: item[0].code.casefold())
+    candidates.sort(key=lambda item: rotation_display_sort_key(item[0]))
     return {
         rotation.id: (
             f"{rotation.code} — {rotation.name}"
@@ -1658,7 +1659,7 @@ def _clinic_owned_allocation_editor(draft: Draft, instance: SchedulerInput) -> N
             ui.select(
                 {
                     resident.id: (f"{resident.name} · {instance.training_level_name(resident.pgy)}")
-                    for resident in instance.residents
+                    for resident in sorted(instance.residents, key=resident_display_sort_key)
                 },
                 value=None,
                 label="Resident override",
@@ -1681,7 +1682,9 @@ def _clinic_owned_allocation_editor(draft: Draft, instance: SchedulerInput) -> N
             )
             resident_rules = sorted(
                 (rule for rule in rules if rule.get("resident_id") is not None),
-                key=lambda rule: str(rule["resident_id"]),
+                key=lambda rule: resident_display_sort_key(
+                    instance.residents_by_id[str(rule["resident_id"])]
+                ),
             )
             if not pgy_rules and not resident_rules:
                 ui.label("No allocation overrides configured for this clinic.").classes(

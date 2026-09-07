@@ -13,6 +13,7 @@ from rbs.models.instance import SchedulerInput
 from rbs.models.rotation import (
     ROTATION_CODE_MAX_LENGTH,
     Rotation,
+    rotation_display_sort_key,
 )
 from rbs.ui import master_detail
 from rbs.ui.buttons import (
@@ -761,7 +762,7 @@ def _rotation_group_member_options(
         block.count for block in curriculum.blocks if block.rotation_id == rotation_id
     )
     current = instance.rotation_group_for(pgy, rotation_id)
-    options = []
+    options: list[tuple[Rotation, str]] = []
     for rotation in instance.rotations:
         if rotation.id == rotation_id or rotation.kind is not RotationKind.STANDARD:
             continue
@@ -776,10 +777,10 @@ def _rotation_group_member_options(
             and count == target_count
             and (other_group is None or other_group is current)
         ):
-            options.append((rotation.code.casefold(), rotation.id, rotation.name))
+            options.append((rotation, rotation.name))
     return {
-        rotation_id: f"{instance.rotation(rotation_id).code} — {name}"
-        for _sort, rotation_id, name in sorted(options)
+        rotation.id: f"{rotation.code} — {name}"
+        for rotation, name in sorted(options, key=lambda item: rotation_display_sort_key(item[0]))
     }
 
 

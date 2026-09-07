@@ -286,11 +286,19 @@ class CpSatEngine:
 
 
 def _attempt_rank(schedule: Schedule) -> tuple:
-    """Order attempts by the same lexicographic tiers used inside each solve."""
+    """Order attempts by the same lexicographic tiers used inside each solve.
+
+    Validity outranks every tier below it. Clinic-site allocation runs after the
+    search, so one seed can post-process into a capacity violation while another
+    stays valid, and the invalid attempt is free to carry the better objective.
+    The caller cannot use it either way: an attempt with validation errors is
+    reported as ``unknown`` and refused downstream.
+    """
     objective = schedule.meta.solver_objective
     metrics = schedule.meta.metrics
     return (
         schedule.is_empty(),
+        bool(schedule.meta.validation_errors),
         metrics.elective_fallback_blocks,
         *(-count for count in metrics.elective_preference_rank_counts),
         objective if objective is not None else float("inf"),

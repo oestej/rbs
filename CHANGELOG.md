@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Residents:** Block schedule editing now presents assignments, manual pins,
+  and unscheduled gaps in one chronological view, with calendar dates alongside
+  week numbers. Adding or editing an exact block places it on the working
+  schedule immediately and pins it for the next solve instead of leaving it in
+  a separate pending list.
+
+### Fixed
+
+- **Residents:** Resident lists and selection menus now sort alphabetically by
+  last name, using the first name for residents with a single-name record.
+- **Rotations:** Mandatory and Elective selection menus, including eligible
+  rotation choices, now sort alphabetically by code, with the rotation name used
+  when a code is unavailable.
+- **Scheduling:** Clinic half-day capacity is now a rule the solver plans around instead
+  of a check applied to the finished schedule. A half-day can no longer be given more
+  residents than every open clinic can seat between them, which is what produced
+  schedules that were generated and then rejected.
+- **Scheduling:** A solve no longer reports a clinic placement failure when one of its
+  concurrent attempts produced a usable schedule. Attempts were compared on objective
+  alone, so a rejected result could displace a valid one from the same solve.
+
 ## [0.1.5] - 2026-09-06
 
 ### Added

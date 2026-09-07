@@ -15,6 +15,7 @@ from rbs.models.enums import RotationKind, Session, Weekday
 from rbs.models.instance import SchedulerInput
 from rbs.models.locks import LockedPlacement
 from rbs.models.resident import Resident, ResidentClinicHalfDay
+from rbs.models.rotation import rotation_display_sort_key
 from rbs.models.schedule import AssignedClinic, Schedule
 from rbs.ui import master_detail
 from rbs.ui.clinic.board import clinic_weekdays, occupancy
@@ -28,6 +29,7 @@ from rbs.ui.locks import (
     lock_schedule_block,
     remove_manual_lock,
     replace_manual_block,
+    replace_schedule_block,
     schedule_blocks,
     schedule_gaps,
     unlock_resident_schedule,
@@ -60,6 +62,7 @@ from rbs.ui.residents.schedule_pdf import (
 
 SaveResidentSchedule = Callable[[SchedulerInput, str, bool], None]
 SaveResidentScheduleResult = Callable[[Schedule, str, bool], None]
+SaveResidentBlockSchedule = Callable[[SchedulerInput, Schedule, str], None]
 ChangeResidentScheduleEditing = Callable[[bool], None]
 
 _CLINIC_DRAG_START_JS = """
@@ -125,6 +128,7 @@ def _resident_schedule_workspace(
     *,
     today: date | None = None,
     on_schedule_save: SaveResidentSchedule | None = None,
+    on_block_schedule_save: SaveResidentBlockSchedule | None = None,
     on_schedule_change: SaveResidentScheduleResult | None = None,
     schedule_is_current: bool = True,
     block_schedule_editing: bool = False,
@@ -246,6 +250,7 @@ def _resident_schedule_workspace(
                             editing=bool(block_report_state["editing"]),
                             on_editing_change=toggle_block_editing,
                             on_schedule_save=on_schedule_save,
+                            on_block_schedule_save=on_block_schedule_save,
                             on_schedule_change=on_schedule_change,
                             schedule_is_current=schedule_is_current,
                             today=today,
@@ -327,6 +332,7 @@ def _resident_block_schedule_manager(
     resident: Resident,
     *,
     on_schedule_save: SaveResidentSchedule,
+    on_block_schedule_save: SaveResidentBlockSchedule | None,
     on_schedule_change: SaveResidentScheduleResult | None,
     schedule_is_current: bool,
 ) -> None:
@@ -334,11 +340,6 @@ def _resident_block_schedule_manager(
     from nicegui import ui
 
     blocks = schedule_blocks(schedule, resident_id=resident.id)
-    gaps = schedule_gaps(
-        schedule,
-        resident_id=resident.id,
-        calendar_weeks=instance.calendar.weeks,
-    )
     matching_manual_ids = {
         id(lock)
         for block in blocks
@@ -346,6 +347,7 @@ def _resident_block_schedule_manager(
         if lock.source == "manual"
         and lock.resident_id == resident.id
         and lock.rotation_id == block.rotation_id
+        and lock.elective == block.elective
         and set(lock.weeks) == set(block.weeks)
     }
     unmatched_manual = [
@@ -355,6 +357,18 @@ def _resident_block_schedule_manager(
         and lock.resident_id == resident.id
         and id(lock) not in matching_manual_ids
     ]
+    if schedule is not None:
+        base_gaps = schedule_gaps(
+            schedule,
+            resident_id=resident.id,
+            calendar_weeks=instance.calendar.weeks,
+        )
+    elif unmatched_manual:
+        base_gaps = [list(range(1, instance.calendar.weeks + 1))]
+    else:
+        base_gaps = []
+    pending_weeks = {week for lock in unmatched_manual for week in lock.weeks}
+    gaps = _split_week_ranges_around(base_gaps, pending_weeks)
 
     def save_action(action, success: str, *, preserve_schedule: bool) -> None:
         try:
@@ -394,6 +408,7 @@ def _resident_block_schedule_manager(
                     schedule,
                     resident,
                     on_schedule_save=on_schedule_save,
+                    on_block_schedule_save=on_block_schedule_save,
                     schedule_is_current=schedule_is_current,
                 ),
             ).props("unelevated no-caps")
@@ -426,16 +441,28 @@ def _resident_block_schedule_manager(
             ).props("flat no-caps")
             unlock_all.set_enabled(manual_count > 0)
 
-        if schedule is not None and (blocks or gaps):
-            ui.label("Current schedule").classes("rbs-type-control-label")
-            timeline = sorted(
-                [(block.start_week, "block", block) for block in blocks]
-                + [(weeks[0], "gap", weeks) for weeks in gaps],
-                key=lambda item: item[0],
-            )
-            for _start_week, item_type, item in timeline:
+        timeline = sorted(
+            [(block.start_week, 0, "block", block) for block in blocks]
+            + [(lock.weeks[0], 1, "manual", lock) for lock in unmatched_manual]
+            + [(weeks[0], 2, "gap", weeks) for weeks in gaps],
+            key=lambda item: (item[0], item[1]),
+        )
+        if timeline:
+            ui.label("Working schedule").classes("rbs-type-control-label")
+            for _start_week, _priority, item_type, item in timeline:
                 if item_type == "gap":
-                    _resident_schedule_gap_row(item)
+                    _resident_schedule_gap_row(instance, item)
+                elif item_type == "manual":
+                    _resident_manual_lock_row(
+                        instance,
+                        schedule,
+                        resident,
+                        item,
+                        on_schedule_save=on_schedule_save,
+                        on_block_schedule_save=on_block_schedule_save,
+                        schedule_is_current=schedule_is_current,
+                        save_action=save_action,
+                    )
                 else:
                     _resident_block_management_row(
                         instance,
@@ -443,28 +470,16 @@ def _resident_block_schedule_manager(
                         resident,
                         item,
                         on_schedule_save=on_schedule_save,
+                        on_block_schedule_save=on_block_schedule_save,
                         on_schedule_change=on_schedule_change,
                         schedule_is_current=schedule_is_current,
                         save_action=save_action,
                         clear_block_action=clear_block_action,
                     )
-        elif schedule is None and not unmatched_manual:
+        elif schedule is None:
             ui.label(
                 "No solved blocks yet. Add blocks here, then run Solve to fill the remaining weeks."
             ).classes("rbs-type-body rbs-text-muted")
-
-        if unmatched_manual:
-            ui.label("Pending blocks and manual pins").classes("rbs-type-control-label mt-2")
-            for lock in unmatched_manual:
-                _resident_manual_lock_row(
-                    instance,
-                    schedule,
-                    resident,
-                    lock,
-                    on_schedule_save=on_schedule_save,
-                    schedule_is_current=schedule_is_current,
-                    save_action=save_action,
-                )
 
 
 def _resident_block_management_row(
@@ -474,6 +489,7 @@ def _resident_block_management_row(
     block: ScheduleBlock,
     *,
     on_schedule_save: SaveResidentSchedule,
+    on_block_schedule_save: SaveResidentBlockSchedule | None,
     on_schedule_change: SaveResidentScheduleResult | None,
     schedule_is_current: bool,
     save_action,
@@ -505,9 +521,7 @@ def _resident_block_management_row(
         "rbs-resident-block-management-row w-full items-center gap-3 rounded p-3"
     ):
         with ui.column().classes("min-w-0 flex-1 gap-0"):
-            ui.label(f"Weeks {_compact_week_ranges(block.weeks)}").classes(
-                "rbs-type-caption rbs-text-muted"
-            )
+            _resident_schedule_period(instance, block.weeks)
             ui.label(rotation_label).classes("rbs-font-semibold")
         status_badge = ui.badge(status, color=status_color).props("outline")
         if status_color is None:
@@ -561,6 +575,7 @@ def _resident_block_management_row(
                 schedule,
                 resident,
                 on_schedule_save=on_schedule_save,
+                on_block_schedule_save=on_block_schedule_save,
                 schedule_is_current=schedule_is_current,
                 initial=block,
                 original=None,
@@ -569,18 +584,56 @@ def _resident_block_management_row(
         ).props("flat dense no-caps")
 
 
-def _resident_schedule_gap_row(weeks: list[int]) -> None:
+def _resident_schedule_gap_row(instance: SchedulerInput, weeks: list[int]) -> None:
     from nicegui import ui
 
     with ui.row().classes(
         "rbs-resident-block-management-row is-gap w-full items-center gap-3 rounded p-3"
     ):
         with ui.column().classes("min-w-0 flex-1 gap-0"):
-            ui.label(f"Weeks {_compact_week_ranges(weeks)}").classes(
-                "rbs-type-caption rbs-text-muted"
-            )
+            _resident_schedule_period(instance, weeks)
             ui.label("Unscheduled").classes("rbs-font-semibold")
         ui.badge("Needs solve", color="warning").props("outline")
+
+
+def _resident_schedule_period(instance: SchedulerInput, weeks: list[int]) -> None:
+    from nicegui import ui
+
+    ordered = sorted(set(weeks))
+    week_noun = "Week" if len(ordered) == 1 else "Weeks"
+    date_ranges = _schedule_week_date_ranges(instance, ordered)
+    ui.label(f"{week_noun} {_compact_week_ranges(ordered)} ({date_ranges})").classes(
+        "rbs-type-caption rbs-text-muted"
+    )
+
+
+def _schedule_week_date_ranges(instance: SchedulerInput, weeks: list[int]) -> str:
+    """Return calendar ranges corresponding to possibly non-contiguous weeks."""
+    segments = _split_week_ranges_around([sorted(set(weeks))], set())
+    return "; ".join(
+        _vacation_date_range(
+            vacation_monday(instance, segment[0]),
+            vacation_monday(instance, segment[-1]) + timedelta(days=6),
+        )
+        for segment in segments
+    )
+
+
+def _split_week_ranges_around(
+    ranges: list[list[int]],
+    occupied_weeks: set[int],
+) -> list[list[int]]:
+    """Split week ranges wherever weeks are absent or reserved."""
+    result: list[list[int]] = []
+    for weeks in ranges:
+        for week in weeks:
+            if week in occupied_weeks:
+                continue
+            if result and result[-1][-1] == week - 1:
+                result[-1].append(week)
+            else:
+                result.append([week])
+    return result
 
 
 def _resident_manual_lock_row(
@@ -590,6 +643,7 @@ def _resident_manual_lock_row(
     lock: LockedPlacement,
     *,
     on_schedule_save: SaveResidentSchedule,
+    on_block_schedule_save: SaveResidentBlockSchedule | None,
     schedule_is_current: bool,
     save_action,
 ) -> None:
@@ -614,9 +668,7 @@ def _resident_manual_lock_row(
         "rbs-resident-block-management-row is-pending w-full items-center gap-3 rounded p-3"
     ):
         with ui.column().classes("min-w-0 flex-1 gap-0"):
-            ui.label(f"Weeks {_compact_week_ranges(lock.weeks)}").classes(
-                "rbs-type-caption rbs-text-muted"
-            )
+            _resident_schedule_period(instance, lock.weeks)
             ui.label(rotation_label).classes("rbs-font-semibold")
         ui.badge(label, color="warning").props("outline")
         if can_edit:
@@ -635,6 +687,7 @@ def _resident_manual_lock_row(
                     schedule,
                     resident,
                     on_schedule_save=on_schedule_save,
+                    on_block_schedule_save=on_block_schedule_save,
                     schedule_is_current=schedule_is_current,
                     initial=block,
                     original=lock,
@@ -657,14 +710,14 @@ def _resident_block_rotation_options(
 ) -> dict[str, str]:
     curriculum = instance.curriculum_for(resident.pgy)
     curriculum_ids = {block.rotation_id for block in curriculum.blocks}
-    options: list[tuple[str, str, str]] = []
+    options: list[tuple[tuple[str, str, str], str, str]] = []
     for rotation_id in curriculum_ids:
         rotation = instance.rotation(rotation_id)
         if rotation.kind is RotationKind.ELECTIVE:
             continue
         options.append(
             (
-                rotation.code.casefold(),
+                rotation_display_sort_key(rotation),
                 rotation.id,
                 f"{rotation.code} · {rotation.name}",
             )
@@ -679,7 +732,7 @@ def _resident_block_rotation_options(
             continue
         options.append(
             (
-                rotation.code.casefold(),
+                rotation_display_sort_key(rotation),
                 _elective_rotation_option(rotation_id),
                 instance.assignment_label(rotation_id, elective=True),
             )
@@ -693,7 +746,7 @@ def _resident_block_rotation_options(
         rotation = instance.rotation(rotation_id)
         options.append(
             (
-                rotation.code.casefold(),
+                rotation_display_sort_key(rotation),
                 _elective_rotation_option(rotation_id),
                 instance.assignment_label(rotation_id, elective=True),
             )
@@ -778,6 +831,7 @@ def _open_resident_block_dialog(
     resident: Resident,
     *,
     on_schedule_save: SaveResidentSchedule,
+    on_block_schedule_save: SaveResidentBlockSchedule | None = None,
     schedule_is_current: bool,
     initial: ScheduleBlock | None = None,
     original: LockedPlacement | None = None,
@@ -952,6 +1006,13 @@ def _open_resident_block_dialog(
                         replace_weeks=replace_weeks,
                         grouping_exempt=bool(grouping_exempt.value),
                     )
+                    manual_block = ScheduleBlock(
+                        resident_id=resident.id,
+                        rotation_id=rotation_id,
+                        start_week=start_week,
+                        duration_weeks=duration,
+                        elective=elective,
+                    )
                     matches_current = any(
                         block.rotation_id == rotation_id
                         and block.elective == elective
@@ -962,13 +1023,29 @@ def _open_resident_block_dialog(
                             resident_id=resident.id,
                         )
                     )
+                    replaced_schedule_block = initial if replace_weeks is not None else None
+                    schedule_unchanged = matches_current and (
+                        replaced_schedule_block is None or replaced_schedule_block == manual_block
+                    )
                     dialog.close()
                     ui.notify("Block saved", type="positive")
-                    on_schedule_save(
-                        updated,
-                        resident.id,
-                        bool(schedule_is_current and matches_current),
-                    )
+                    if schedule_unchanged or on_block_schedule_save is None:
+                        on_schedule_save(
+                            updated,
+                            resident.id,
+                            bool(schedule_is_current and schedule_unchanged),
+                        )
+                    else:
+                        on_block_schedule_save(
+                            updated,
+                            replace_schedule_block(
+                                updated,
+                                schedule,
+                                manual_block,
+                                replaced_block=replaced_schedule_block,
+                            ),
+                            resident.id,
+                        )
                 except (ValidationError, ValueError) as exc:
                     ui.notify(str(exc), type="negative", multi_line=True)
 
@@ -986,6 +1063,7 @@ def _resident_block_schedule_report(
     editing: bool = False,
     on_editing_change: Callable[[], None] | None = None,
     on_schedule_save: SaveResidentSchedule | None = None,
+    on_block_schedule_save: SaveResidentBlockSchedule | None = None,
     on_schedule_change: SaveResidentScheduleResult | None = None,
     schedule_is_current: bool = True,
     today: date | None = None,
@@ -1031,6 +1109,7 @@ def _resident_block_schedule_report(
                 schedule,
                 resident,
                 on_schedule_save=on_schedule_save,
+                on_block_schedule_save=on_block_schedule_save,
                 on_schedule_change=on_schedule_change,
                 schedule_is_current=schedule_is_current,
             )

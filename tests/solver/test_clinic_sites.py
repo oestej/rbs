@@ -1,5 +1,6 @@
 from collections import defaultdict
 from datetime import date
+from types import SimpleNamespace
 
 from rbs.catalog import sample_instance
 from rbs.models.enums import RotationKind, Session, Weekday
@@ -636,3 +637,58 @@ def test_allocator_prefers_resident_override_over_pgy_override() -> None:
 
     assert {slot.site for slot in assignments[0].clinic_slots} == {"cedar"}
     assert {slot.site for slot in assignments[1].clinic_slots} == {"maple"}
+
+
+def _capacity_rows(model) -> list[tuple[set[int], int]]:
+    """Return each ``sum(literals) <= bound`` row as its variables and bound."""
+    # The proto's repeated fields are a pybind11 wrapper: negative indices
+    # return 0 instead of raising, so read the upper bound from a real list.
+    return [
+        (set(constraint.linear.vars), list(constraint.linear.domain)[-1])
+        for constraint in model.Proto().constraints
+    ]
+
+
+def _half_day_bound(instance, week: int, weekday, session, literal_count: int):
+    """Apply the model's half-day capacity bound to one synthetic half-day."""
+    from ortools.sat.python import cp_model
+
+    from rbs.solver.core.objective_entries import _add_half_day_capacity
+
+    model = cp_model.CpModel()
+    context = SimpleNamespace(model=model, instance=instance)
+    literals = [model.NewBoolVar(f"r{index}") for index in range(literal_count)]
+    _add_half_day_capacity(context, week, {(weekday, session): literals})
+    return model, literals
+
+
+def test_half_day_capacity_bounds_a_slot_by_the_seats_every_site_opens() -> None:
+    """Maple and cedar together seat 16 on a Monday morning."""
+    instance = sample_instance()
+
+    model, literals = _half_day_bound(instance, 1, Weekday.MONDAY, Session.MORNING, 17)
+
+    indices = {literal.index for literal in literals}
+    assert _capacity_rows(model) == [(indices, 16)]
+
+
+def test_half_day_capacity_states_nothing_a_slot_cannot_already_exceed() -> None:
+    """Sixteen residents cannot outgrow sixteen seats; the row would be noise."""
+    instance = sample_instance()
+
+    model, _literals = _half_day_bound(instance, 1, Weekday.MONDAY, Session.MORNING, 16)
+
+    assert _capacity_rows(model) == []
+
+
+def test_half_day_capacity_leaves_a_closed_half_day_to_allocation() -> None:
+    """A closure is not an overflow: allocation drops those sessions instead.
+
+    Forcing the half-day empty here would make the week unplaceable rather than
+    reproduce what :func:`assign_clinic_sites` already does with it.
+    """
+    instance = _with_closure(["maple", "cedar"])
+
+    model, _literals = _half_day_bound(instance, 2, Weekday.TUESDAY, Session.MORNING, 5)
+
+    assert _capacity_rows(model) == []

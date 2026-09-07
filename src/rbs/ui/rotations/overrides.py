@@ -8,8 +8,10 @@ from uuid import uuid4
 
 from rbs.models.enums import RotationKind
 from rbs.models.instance import SchedulerInput
+from rbs.models.resident import resident_display_sort_key
 from rbs.models.rotation import (
     Rotation,
+    rotation_display_sort_key,
 )
 from rbs.ui.drafts import Draft
 from rbs.ui.editor_common import (
@@ -91,7 +93,7 @@ def _resident_override_elective_options(
             replacement_id = str(override["replaces_rotation_id"])
             used[replacement_id] = used.get(replacement_id, 0) + 1
 
-    options: list[tuple[str, str, str]] = []
+    options: list[tuple[tuple[str, str, str], str, str]] = []
     for block in instance.curriculum_for(resident.pgy).blocks:
         elective = instance.rotation(block.rotation_id)
         if (
@@ -102,7 +104,7 @@ def _resident_override_elective_options(
             continue
         options.append(
             (
-                elective.code.casefold(),
+                rotation_display_sort_key(elective),
                 f"{elective.code} — {elective.name}",
                 elective.id,
             )
@@ -267,7 +269,7 @@ def _resident_override_resident_options(
 ) -> dict[str, str]:
     return {
         resident.id: (f"{resident.name} · {instance.training_level_name(resident.pgy)}")
-        for resident in sorted(instance.residents, key=lambda item: item.name.casefold())
+        for resident in sorted(instance.residents, key=resident_display_sort_key)
         if _resident_override_duration_options(
             instance,
             rotation,
@@ -559,7 +561,7 @@ def _resident_waiver_resident_options(
 ) -> dict[str, str]:
     return {
         resident.id: (f"{resident.name} · {instance.training_level_name(resident.pgy)}")
-        for resident in sorted(instance.residents, key=lambda item: item.name.casefold())
+        for resident in sorted(instance.residents, key=resident_display_sort_key)
         if _resident_waiver_duration_options(
             instance,
             rotation,

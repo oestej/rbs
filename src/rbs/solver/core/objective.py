@@ -19,6 +19,7 @@ from rbs.models.enums import RotationKind, Weekday
 from rbs.models.schedule import Schedule
 from rbs.solver.core.context import ClinicDecision, ClinicModelState, PlanningContext
 from rbs.solver.core.objective_entries import (
+    _add_half_day_capacity,
     _available_week_entries,
     _clinic_kind_occupancy,
     _clinic_occurrences,
@@ -60,6 +61,7 @@ __all__ = [
     "add_clinic_objective",
     "_ClinicObjectiveState",
     "_Conditional",
+    "_add_half_day_capacity",
     "_add_occupancy_floor",
     "_add_week_objective_terms",
     "_append_week_spreads",
@@ -144,6 +146,7 @@ def add_clinic_objective(
         grouped, surviving = _available_week_entries(context, week, entries)
         slot_groups = _materialize_week_entries(context, week, grouped, state)
         _add_occupancy_floor(context.model, surviving, slot_groups[0])
+        _add_half_day_capacity(context, week, slot_groups[4])
         _add_week_objective_terms(
             context,
             week,

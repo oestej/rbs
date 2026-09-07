@@ -9,7 +9,10 @@ from rbs.models.catalog import ConstraintCatalog
 from rbs.models.instance import SchedulerInput, SchedulingCase
 from rbs.models.schedule import Schedule
 from rbs.models.workspace import Workspace, WorkspaceConflictError
-from rbs.solver.validation import validate_schedule, validate_schedule_or_raise
+from rbs.solver.validation import (
+    validate_persistable_schedule_or_raise,
+    validate_schedule,
+)
 from rbs.store_schema import _WORKSPACE_SELECT, CURRENT_KEY
 from rbs.store_support import _now
 
@@ -72,7 +75,7 @@ class StoreWorkspaceMixin:
         is_sample: bool = False,
     ) -> Workspace:
         if schedule is not None:
-            validate_schedule_or_raise(instance, schedule)
+            validate_persistable_schedule_or_raise(instance, schedule)
             schedule = schedule.model_copy(
                 update={"meta": schedule.meta.model_copy(update={"source_instance_revision": 1})}
             )
@@ -117,17 +120,25 @@ class StoreWorkspaceMixin:
         *,
         expected_workspace_revision: int,
         preserve_schedule: bool = False,
+        draft_schedule: Schedule | None = None,
     ) -> Workspace:
+        if preserve_schedule and draft_schedule is not None:
+            raise ValueError("cannot preserve and replace a schedule in the same save")
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = self._workspace_row(conn, workspace_id)
             self._require_workspace_revision(row, expected_workspace_revision)
             workspace = self._row_to_workspace(row)
             next_instance_revision = workspace.instance_revision + 1
-            schedule = workspace.schedule if preserve_schedule else None
-            preserve_current_schedule = schedule is not None
-            if preserve_current_schedule:
-                validate_schedule_or_raise(instance, schedule)
+            if draft_schedule is not None:
+                schedule = draft_schedule
+            elif preserve_schedule:
+                schedule = workspace.schedule
+            else:
+                schedule = None
+            write_schedule = schedule is not None
+            if schedule is not None:
+                validate_persistable_schedule_or_raise(instance, schedule)
                 schedule = schedule.model_copy(
                     update={
                         "meta": schedule.meta.model_copy(
@@ -142,7 +153,7 @@ class StoreWorkspaceMixin:
                 instance.constraint_catalog(),
                 managed=True,
             )
-            if preserve_current_schedule:
+            if write_schedule:
                 cursor = conn.execute(
                     """
                     UPDATE workspaces
@@ -204,7 +215,7 @@ class StoreWorkspaceMixin:
                 )
             if schedule is not None:
                 workspace = self._row_to_workspace(row)
-                validate_schedule_or_raise(workspace.instance, schedule)
+                validate_persistable_schedule_or_raise(workspace.instance, schedule)
                 schedule = schedule.model_copy(
                     update={
                         "meta": schedule.meta.model_copy(
@@ -319,9 +330,12 @@ class StoreWorkspaceMixin:
         stale_schedule = None
         if row["schedule_json"]:
             stored_schedule = Schedule.model_validate_json(row["schedule_json"])
-            if (
-                row["schedule_revision"] == row["instance_revision"]
-                and validate_schedule(instance, stored_schedule).valid
+            if row["schedule_revision"] == row["instance_revision"] and (
+                (
+                    stored_schedule.is_working_draft
+                    and stored_schedule.meta.academic_year == instance.academic_year
+                )
+                or validate_schedule(instance, stored_schedule).valid
             ):
                 schedule = stored_schedule
             else:

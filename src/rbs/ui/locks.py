@@ -8,7 +8,7 @@ from datetime import date, timedelta
 from rbs.models.enums import SolverStatus
 from rbs.models.instance import SchedulerInput
 from rbs.models.locks import LockedPlacement
-from rbs.models.schedule import Assignment, Schedule, ScheduleMetrics
+from rbs.models.schedule import Assignment, Schedule, ScheduleMeta, ScheduleMetrics
 
 THROUGH_TODAY_SOURCE = "through_today"
 
@@ -147,6 +147,144 @@ def clear_schedule_block(
         }
     )
     return schedule.model_copy(update={"assignments": kept, "meta": meta})
+
+
+def replace_schedule_block(
+    instance: SchedulerInput,
+    schedule: Schedule | None,
+    block: ScheduleBlock,
+    *,
+    replaced_block: ScheduleBlock | None = None,
+) -> Schedule:
+    """Place an exact manual block into the working schedule immediately.
+
+    When editing, ``replaced_block`` removes the old placement even when the new
+    one does not overlap it. Any other source block touched by the new placement
+    is removed in full. Keeping a leftover fragment would make it look like a
+    legal block even though its configured shape was broken; the resulting gap
+    instead makes the work left for the next solve explicit.
+    """
+    resident = instance.residents_by_id.get(block.resident_id)
+    if resident is None:
+        raise ValueError(f"unknown resident {block.resident_id!r}")
+    rotation = instance.rotations_by_id.get(block.rotation_id)
+    if rotation is None:
+        raise ValueError(f"unknown rotation {block.rotation_id!r}")
+    if block.end_week > instance.calendar.weeks:
+        raise ValueError(
+            f"block ending week {block.end_week} exceeds calendar of "
+            f"{instance.calendar.weeks} weeks"
+        )
+
+    if schedule is None:
+        schedule = Schedule(
+            meta=ScheduleMeta(
+                academic_year=instance.academic_year,
+                engine=instance.solver.engine,
+                status=SolverStatus.UNKNOWN,
+                solver_status=SolverStatus.UNKNOWN,
+            )
+        )
+    elif schedule.meta.academic_year != instance.academic_year:
+        raise ValueError("schedule academic year does not match the workspace")
+
+    current_blocks = schedule_blocks(schedule, resident_id=block.resident_id)
+    target_exists = block in current_blocks
+    if target_exists and (replaced_block is None or replaced_block == block):
+        return schedule
+
+    target_weeks = set(block.weeks)
+    displaced = [
+        current
+        for current in current_blocks
+        if current != block and target_weeks & set(current.weeks)
+    ]
+    if (
+        replaced_block is not None
+        and replaced_block in current_blocks
+        and replaced_block not in displaced
+    ):
+        displaced.append(replaced_block)
+    kept = [
+        assignment
+        for assignment in schedule.assignments
+        if not any(_assignment_belongs_to_block(assignment, current) for current in displaced)
+    ]
+    if not target_exists:
+        kept.append(
+            Assignment(
+                resident_id=block.resident_id,
+                rotation_id=block.rotation_id,
+                kind=rotation.kind,
+                elective=block.elective,
+                elective_fallback=(
+                    block.elective
+                    and instance.is_elective_fallback_rotation(
+                        block.rotation_id,
+                        resident.pgy,
+                        block.duration_weeks,
+                    )
+                ),
+                start_week=block.start_week,
+                end_week=block.end_week,
+                weeks=block.weeks,
+                block_start_week=block.start_week,
+                block_duration_weeks=block.duration_weeks,
+                vacation_weeks_during_block=sorted(
+                    target_weeks & instance.resident_scheduling_vacation_weeks(block.resident_id)
+                ),
+                locked_weeks=block.weeks,
+            )
+        )
+    note = (
+        f"Manual block placed {block.resident_id} weeks "
+        f"{block.start_week}-{block.end_week}; solve required"
+    )
+    meta = schedule.meta.model_copy(
+        update={
+            "status": SolverStatus.UNKNOWN,
+            "solver_status": SolverStatus.UNKNOWN,
+            "metrics": ScheduleMetrics(),
+            "validation_errors": [],
+            "validation_warnings": [],
+            "diagnostics": [],
+            "notes": [*schedule.meta.notes, note],
+        }
+    )
+    assignments = sorted(
+        kept,
+        key=lambda assignment: (
+            assignment.resident_id,
+            assignment.start_week,
+            assignment.end_week,
+            assignment.rotation_id,
+            assignment.elective,
+        ),
+    )
+    return schedule.model_copy(
+        update={
+            "assignments": assignments,
+            "unassigned": [
+                resident_id
+                for resident_id in schedule.unassigned
+                if resident_id != block.resident_id
+            ],
+            "meta": meta,
+        }
+    )
+
+
+def _assignment_belongs_to_block(
+    assignment: Assignment,
+    block: ScheduleBlock,
+) -> bool:
+    return (
+        assignment.resident_id == block.resident_id
+        and assignment.rotation_id == block.rotation_id
+        and assignment.elective == block.elective
+        and (assignment.block_start_week or assignment.start_week) == block.start_week
+        and (assignment.block_duration_weeks or len(assignment.weeks)) == block.duration_weeks
+    )
 
 
 def exact_block_lock(

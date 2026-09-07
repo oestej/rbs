@@ -1443,6 +1443,48 @@ def test_attempt_rank_prefers_usable_then_lower_objective() -> None:
     assert _attempt_rank(schedule) < _attempt_rank(blank)
 
 
+def test_attempt_rank_refuses_an_invalid_attempt_holding_a_better_objective() -> None:
+    """Clinic allocation runs per attempt, so one seed can overflow capacity.
+
+    Its objective is still comparable and can be the better one, but the caller
+    cannot use a schedule that failed validation: it is reported as ``unknown``
+    and refused downstream.
+    """
+    from rbs.models.enums import SolverEngineName
+    from rbs.models.schedule import Assignment, Schedule, ScheduleMeta
+    from rbs.solver.core.cp_sat import _attempt_rank
+
+    def attempt(objective: float, errors: list[str]) -> Schedule:
+        return Schedule(
+            meta=ScheduleMeta(
+                academic_year="2026-2027",
+                engine=SolverEngineName.CP_SAT,
+                status=SolverStatus.UNKNOWN if errors else SolverStatus.FEASIBLE,
+                solver_status=SolverStatus.FEASIBLE,
+                solver_objective=objective,
+                validation_errors=errors,
+            ),
+            assignments=[
+                Assignment(
+                    resident_id="resident-001",
+                    rotation_id="clinic",
+                    start_week=1,
+                    end_week=1,
+                    weeks=[1],
+                )
+            ],
+        )
+
+    valid = attempt(1_233_681_318.0, [])
+    invalid = attempt(
+        996_481_423.0,
+        ["Hacienda Clinic capacity exceeded: week 22 monday morning (5 residents; max 4)"],
+    )
+
+    assert _attempt_rank(valid) < _attempt_rank(invalid)
+    assert min([invalid, valid], key=_attempt_rank) is valid
+
+
 @pytest.mark.solve
 def test_portfolio_records_how_the_budget_was_spent() -> None:
     instance = sample_instance()
