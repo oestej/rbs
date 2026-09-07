@@ -2,6 +2,10 @@
 
 Entries describe, per resident-week-half-day, which block placement would
 supply clinic coverage. Later stages group, materialize, and weigh them.
+
+Materializing them is also where a half-day's total seats become a hard bound:
+site selection is a post-process, so the search can only be told how many
+residents a half-day may hold, not where each of them sits.
 """
 
 from __future__ import annotations
@@ -277,15 +281,17 @@ def _materialize_week_entries(
     week: int,
     grouped: dict,
     state: _ClinicObjectiveState,
-) -> tuple[dict, dict, dict, dict]:
+) -> tuple[dict, dict, dict, dict, dict]:
     slots_by_resident: dict[str, list[Any]] = defaultdict(list)
     present_by_slot: dict[tuple, list[Any]] = defaultdict(list)
     primary_by_slot: dict[tuple, list[Any]] = defaultdict(list)
     present_by_pgy: dict[tuple, list[Any]] = defaultdict(list)
+    occupied_by_slot: dict[tuple, list[Any]] = defaultdict(list)
 
     for (resident_id, weekday, session, pinned), members in grouped.items():
         pgy = members[0][0].pgy
         keys = tuple(dict.fromkeys(member[0].key for member in members))
+        on_vacation = week in context.residents[resident_id].vacation_weeks
         literals = _slot_literals(
             context.model,
             f"clinic:{resident_id}:w{week}:{weekday}:{session}",
@@ -296,6 +302,11 @@ def _materialize_week_entries(
             slots_by_resident[resident_id].append(literal)
             present_by_slot[weekday, session].append(literal)
             present_by_pgy[weekday, session, pgy].append(literal)
+            # Decoding drops a vacation week, so a true literal there seats
+            # nobody. Only the sessions that survive into the schedule may be
+            # held against a half-day's capacity.
+            if not on_vacation:
+                occupied_by_slot[weekday, session].append(literal)
             if _counts_at_primary_site(
                 context,
                 week,
@@ -305,7 +316,47 @@ def _materialize_week_entries(
                 literal,
             ):
                 primary_by_slot[weekday, session].append(literal)
-    return slots_by_resident, present_by_slot, primary_by_slot, present_by_pgy
+    return (
+        slots_by_resident,
+        present_by_slot,
+        primary_by_slot,
+        present_by_pgy,
+        occupied_by_slot,
+    )
+
+
+def _add_half_day_capacity(
+    context: PlanningContext,
+    week: int,
+    occupied_by_slot: dict[tuple, list[Any]],
+) -> None:
+    """Cap a half-day at the clinic seats the whole directory opens.
+
+    Which site a session lands at is settled after the search, so the model
+    cannot bound one site. It can bound the half-day: when more residents hold
+    clinic than every open site together can seat,
+    :func:`rbs.solver.core.clinic_allocation.assign_clinic_sites` has nowhere
+    legal to put the overflow, deliberately overfills to keep the required
+    session, and the finished schedule is rejected in validation. Stating the
+    total here turns that late rejection into a placement the search does not
+    make.
+
+    A half-day with no capacity at all is left alone. A closure is not an
+    overflow: allocation drops those sessions rather than failing, and forcing
+    them empty would make a week unplaceable over a schedule the program is
+    willing to accept.
+    """
+    policy = context.instance.clinic_policy
+    first_week_start = context.instance.calendar.first_week_start
+    for (weekday, session), literals in occupied_by_slot.items():
+        calendar_day = clinic_slot_date(first_week_start, week, weekday)
+        capacity = sum(
+            policy.max_capacity_on(site_id, calendar_day, session)
+            for site_id in policy.site_ids
+        )
+        # Below the seat count the bound is arithmetic, not a constraint.
+        if 0 < capacity < len(literals):
+            context.model.Add(sum(literals) <= capacity)
 
 
 def _counts_at_primary_site(

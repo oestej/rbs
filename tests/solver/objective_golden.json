@@ -2,22 +2,22 @@
   "academic_override": {
     "has_objective": true,
     "num_attending_variables": 468,
-    "num_constraints": 231516,
+    "num_constraints": 231981,
     "num_decisions": 368,
     "num_in_clinic_entries": 11231,
     "num_variables": 68926,
-    "proto_sha256": "d32161b3eb12580a7694dc1028ee1b99d88cac9d1b2b684ac11f9ac3589dca55",
+    "proto_sha256": "42275702c68651e2ba439af12fd26350f9afa6c9939b3bb5fbf21f6d248b8dbc",
     "quality_bound": 1636660,
     "stability_comparisons": 0
   },
   "configured_sample": {
     "has_objective": true,
     "num_attending_variables": 468,
-    "num_constraints": 231502,
+    "num_constraints": 231967,
     "num_decisions": 368,
     "num_in_clinic_entries": 11242,
     "num_variables": 68925,
-    "proto_sha256": "ddda16842ea93305ecbf6f85c1e3531b6de2ab23de7a4194f0236a59b935c5f3",
+    "proto_sha256": "2d5cb2f6ae087a3f0e9c48d468c0a9aeb42d8fd80e641fa86cdbc9202b9bb55c",
     "quality_bound": 1637560,
     "stability_comparisons": 0
   }
