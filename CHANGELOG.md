@@ -12,6 +12,8 @@
 - **Residents:** Identical duplicate locks are cleaned up automatically when
   a file opens, and saving the same block twice no longer creates another
   copy.
+- **Clinic:** A closure day outside the academic year is rejected with an
+  explanation instead of being saved.
 
 ## [0.1.7] - 2026-09-07
 
