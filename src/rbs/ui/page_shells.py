@@ -17,13 +17,33 @@ def page_header(title: str, *, subtitle: str | None = None) -> None:
 
 
 @contextmanager
-def schedule_canvas(title: str, *, subtitle: str | None = None) -> Iterator[None]:
-    """Wide shell for read-mostly schedules and their compact toolbars."""
+def schedule_canvas(
+    title: str,
+    *,
+    subtitle: str | None = None,
+    with_header_actions: bool = False,
+) -> Iterator[object | None]:
+    """Wide shell for read-mostly schedules and their compact toolbars.
+
+    When ``with_header_actions`` is set, the yielded container places compact
+    schedule controls beside the title while leaving the default stacked shell
+    available to schedules which need a full-width legend or toolbar.
+    """
     from nicegui import ui
 
     with ui.column().classes("rbs-page-shell rbs-schedule-canvas w-full min-w-0 gap-4"):
-        page_header(title, subtitle=subtitle)
-        yield
+        header_actions = None
+        if with_header_actions:
+            with ui.row().classes(
+                "rbs-schedule-heading-row w-full min-w-0 items-center justify-between gap-4"
+            ):
+                page_header(title, subtitle=subtitle)
+                header_actions = ui.row().classes(
+                    "rbs-schedule-heading-actions items-center gap-2"
+                )
+        else:
+            page_header(title, subtitle=subtitle)
+        yield header_actions
 
 
 @contextmanager

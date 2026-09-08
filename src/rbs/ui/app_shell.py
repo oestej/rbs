@@ -33,6 +33,10 @@ from rbs.ui.app_status import (
     _retention_banner,
     _solve_chip,
 )
+from rbs.ui.block_schedule_pdf import (
+    block_schedule_pdf_filename,
+    build_block_schedule_pdf,
+)
 from rbs.ui.buttons import (
     ICON_BUTTON_PROPS,
     PRIMARY_BUTTON_PROPS,
@@ -306,17 +310,41 @@ def _render_block_schedule(session: WorkspaceSession, workspace: Workspace) -> N
 
     instance = workspace.instance
     schedule = workspace.latest_schedule
+
+    def export_to_pdf() -> None:
+        try:
+            content = build_block_schedule_pdf(instance, schedule)
+            filename = block_schedule_pdf_filename(instance.academic_year)
+            _open_exported_pdf(session, content, filename)
+            get_logger("documents").info(
+                "schedule.exported",
+                source="block_pdf",
+            )
+        except Exception as exc:
+            get_logger("documents").error(
+                "schedule.export_failed",
+                source="block_pdf",
+                error_code=type(exc).__name__,
+                exc_info=True,
+            )
+            ui.notify(f"Unable to export block schedule PDF: {exc}", type="negative")
+
     with page_shells.schedule_canvas(
         "Block schedule",
         subtitle="Review weekly block assignments across the academic year.",
-    ):
-        with page_shells.toolbar():
-            ui.space()
-            with page_shells.toolbar_actions():
-                block_past = ui.checkbox(
-                    "Show past weeks",
-                    value=bool(session.show_past_block_weeks),
-                ).props("dense")
+        with_header_actions=True,
+    ) as header_actions:
+        assert header_actions is not None
+        with header_actions:
+            block_past = ui.checkbox(
+                "Show past weeks",
+                value=bool(session.show_past_block_weeks),
+            ).props("dense")
+            ui.button(
+                "Export to PDF",
+                icon="picture_as_pdf",
+                on_click=export_to_pdf,
+            ).props(button_props(SECONDARY_BUTTON_PROPS, "dense"))
         grid = ui.column().classes("w-full min-w-0 gap-2")
 
         def render_grid() -> None:

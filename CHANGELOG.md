@@ -4,6 +4,9 @@
 
 ### Changed
 
+- **Block schedule:** The full academic-year schedule can now be exported as a
+  landscape PDF, split between complete four-week blocks with resident and date
+  headings repeated on every page.
 - **Files:** Only the current file format opens. Older `.rbsc` files are
   rejected instead of being upgraded in place.
 - **Scheduling:** A failed solve now names locked blocks that exceed a

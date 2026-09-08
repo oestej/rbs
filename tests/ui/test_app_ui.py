@@ -63,6 +63,19 @@ def test_schedule_pages_share_the_canvas_header_and_toolbar_order() -> None:
         and element._text == "Show past weeks"
         for element in block_elements
     )
+    block_controls = next(
+        element
+        for element in block_elements
+        if "rbs-schedule-heading-actions" in getattr(element, "_classes", [])
+    )
+    assert [
+        child.__class__.__name__ for child in block_controls.default_slot.children
+    ] == ["Checkbox", "Button"]
+    assert block_controls.default_slot.children[-1]._props.get("label") == "Export to PDF"
+    assert "rbs-schedule-heading-row" in block_controls.parent_slot.parent._classes
+    assert not any(
+        "rbs-page-toolbar" in getattr(element, "_classes", []) for element in block_elements
+    )
 
     before = set(ui.context.client.elements)
     _render_clinic_schedule(
