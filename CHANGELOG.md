@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Residents:** Manually adding a block of a rotation a resident takes more
+  than once (such as FMED) stays available until every required block is on
+  their schedule, instead of being blocked after the first one.
+
 ## [0.1.8] - 2026-09-08
 
 ### Changed
