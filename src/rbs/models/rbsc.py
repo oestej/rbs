@@ -16,8 +16,8 @@ from rbs.models.rotation import DEFAULT_ROTATION_COLOR, default_rotation_color
 from rbs.models.schedule import Schedule
 
 RBSC_FORMAT = "rbsc"
-# The immediately preceding schema is upgraded when its shape is compatible;
-# older incompatible documents still fail validation. Portable documents omit
+# Only the current schema version loads: documents written by older builds
+# fail validation instead of being upgraded in place. Portable documents omit
 # application-owned presentation (colors, solver tuning, automatic-locking
 # state) by design; import restores neutral defaults. A Save As deliberately
 # clears the bundled-sample flag before producing the user's document.
@@ -98,13 +98,14 @@ def _hydrate_portable_preferences(value: object) -> object:
     return hydrated
 
 
-def _migrate_v8_portable_state(value: object) -> object:
-    """Upgrade documents whose only missing feature is directional groups."""
-    if not isinstance(value, dict) or value.get("schema_version") != 8:
-        return value
-    migrated = deepcopy(value)
-    migrated["schema_version"] = RBSC_SCHEMA_VERSION
-    return migrated
+def _migrate_portable_state(value: object) -> object:
+    """Upgrade path for documents written by older schema versions.
+
+    No older version is accepted right now: only the current schema loads.
+    When the next schema ships, upgrade its predecessor here, normalizing
+    any nested versioned payloads alongside the outer version.
+    """
+    return value
 
 
 def _validated_timestamp(value: str) -> str:
@@ -197,7 +198,7 @@ class RBSCState(StrictModel):
     @model_validator(mode="before")
     @classmethod
     def migrate_and_hydrate(cls, value: object) -> object:
-        return _hydrate_portable_preferences(_migrate_v8_portable_state(value))
+        return _hydrate_portable_preferences(_migrate_portable_state(value))
 
     @model_serializer(mode="wrap")
     def serialize_portable_state(self, handler):

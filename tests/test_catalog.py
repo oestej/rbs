@@ -125,21 +125,10 @@ def test_catalog_schema_rejects_curriculum_choice_groups() -> None:
         ConstraintCatalog.model_validate(raw)
 
 
-def test_v7_catalogs_migrate_with_directional_groups_disabled() -> None:
+@pytest.mark.parametrize("legacy_version", [5, 6, 7])
+def test_pre_v8_catalogs_are_rejected(legacy_version: int) -> None:
     raw = bootstrap_catalog().model_dump(mode="json")
-    raw["schema_version"] = 7
-    for group in raw["rotation_groups"]:
-        group.pop("anchor_rotation_id")
-
-    migrated = ConstraintCatalog.model_validate(raw)
-
-    assert migrated.schema_version == 8
-    assert all(group.anchor_rotation_id is None for group in migrated.rotation_groups)
-
-
-def test_pre_v7_catalogs_are_rejected() -> None:
-    raw = bootstrap_catalog().model_dump(mode="json")
-    raw["schema_version"] = 6
+    raw["schema_version"] = legacy_version
 
     with pytest.raises(ValidationError, match="Input should be 8"):
         ConstraintCatalog.model_validate(raw)

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Files:** Only the current file format opens. Older `.rbsc` files are
+  rejected instead of being upgraded in place.
+
 ## [0.1.7] - 2026-09-07
 
 ### Changed
