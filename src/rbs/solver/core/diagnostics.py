@@ -8,6 +8,8 @@ infeasible, the resulting explanation is conclusive and can name a useful edit.
 
 from __future__ import annotations
 
+from collections import defaultdict
+
 from rbs.models.instance import SolverConfig, SolverProblem
 from rbs.models.resident import Resident
 from rbs.models.schedule import SolverDiagnostic
@@ -22,6 +24,8 @@ def explain_infeasibility(
 ) -> list[SolverDiagnostic]:
     """Return conclusive explanations for isolated infeasible subproblems."""
     diagnostics: list[SolverDiagnostic] = []
+    diagnostics.extend(_locked_capacity_conflicts(problem))
+    diagnostics.extend(_locked_elective_repeats(problem))
     for resident in problem.residents:
         feasible = _resident_curriculum_can_cover_year(problem, options, resident)
         if feasible is not False:
@@ -54,6 +58,170 @@ def explain_infeasibility(
                     "Review earliest-start rules and required block lengths for "
                     f"{problem.training_level_label(resident.pgy, compact=True)}.",
                 ],
+            )
+        )
+    return diagnostics
+
+
+def _locked_capacity_conflicts(problem: SolverProblem) -> list[SolverDiagnostic]:
+    """Name weeks where locked placements alone exceed a rotation maximum.
+
+    Locks are hard equality constraints and maximums are hard upper bounds,
+    so distinct locked residents above a maximum are conclusive: no schedule
+    can satisfy both. Identical duplicate locks pin the same resident twice
+    and count once.
+    """
+    by_week_rotation: dict[tuple[int, str], set[str]] = defaultdict(set)
+    for lock in problem.locks:
+        for week in lock.weeks:
+            by_week_rotation[week, lock.rotation_id].add(lock.resident_id)
+    residents = problem.residents_by_id
+    diagnostics: list[SolverDiagnostic] = []
+    # Group weeks that lock the same residents so one message covers one
+    # conflict instead of one message per week.
+    overall: dict[tuple[str, frozenset[str]], set[int]] = defaultdict(set)
+    by_level: dict[tuple[str, int, frozenset[str]], set[int]] = defaultdict(set)
+    for (week, rotation_id), resident_ids in by_week_rotation.items():
+        overall[rotation_id, frozenset(resident_ids)].add(week)
+        seen_pgys: set[int] = set()
+        for resident_id in resident_ids:
+            resident = residents.get(resident_id)
+            if resident is None or resident.pgy in seen_pgys:
+                continue
+            seen_pgys.add(resident.pgy)
+            by_level[rotation_id, resident.pgy, frozenset(
+                peer
+                for peer in resident_ids
+                if residents.get(peer) is not None
+                and residents[peer].pgy == resident.pgy
+            )].add(week)
+    reported: set[tuple[str, frozenset[str], tuple[int, ...]]] = set()
+    for (rotation_id, locked), weeks in sorted(
+        overall.items(), key=lambda item: (item[0][0], sorted(item[0][1]))
+    ):
+        rotation = problem.rotations_by_id.get(rotation_id)
+        maximum = rotation.capacity.max_concurrent if rotation is not None else None
+        if rotation is None or maximum is None or len(locked) <= maximum:
+            continue
+        names = sorted(residents[resident_id].name for resident_id in sorted(locked))
+        reported.add((rotation_id, locked, tuple(sorted(weeks))))
+        diagnostics.append(
+            SolverDiagnostic(
+                code="locked_capacity_conflict",
+                message=(
+                    f"{rotation.name} {_weeks_label(sorted(weeks))}: "
+                    f"{len(names)} residents are locked there "
+                    f"({', '.join(names)}), but at most {maximum} "
+                    f"{'resident' if maximum == 1 else 'residents'} can take "
+                    f"{rotation.name} at a time."
+                ),
+                resident_ids=sorted(locked),
+                weeks=sorted(weeks),
+                suggestions=(
+                    "Move or delete one of the locked blocks on those weeks.",
+                    f"Raise the maximum number of residents who can take "
+                    f"{rotation.name} at once.",
+                ),
+            )
+        )
+    for (rotation_id, pgy, locked), weeks in sorted(
+        by_level.items(), key=lambda item: (item[0][0], item[0][1], sorted(item[0][2]))
+    ):
+        rotation = problem.rotations_by_id.get(rotation_id)
+        rule = rotation.pgy_rule(pgy) if rotation is not None else None
+        maximum = rule.max_concurrent if rule is not None else None
+        if (
+            rotation is None
+            or maximum is None
+            or len(locked) <= maximum
+            # The overall conflict above already names this exact group.
+            or (rotation_id, locked, tuple(sorted(weeks))) in reported
+        ):
+            continue
+        level = problem.training_level_label(pgy, compact=True)
+        names = sorted(residents[resident_id].name for resident_id in sorted(locked))
+        diagnostics.append(
+            SolverDiagnostic(
+                code="locked_capacity_conflict",
+                message=(
+                    f"{rotation.name} {_weeks_label(sorted(weeks))}: "
+                    f"{len(names)} {level} residents are locked there "
+                    f"({', '.join(names)}), but at most {maximum} {level} "
+                    f"{'resident' if maximum == 1 else 'residents'} can take "
+                    f"{rotation.name} at a time."
+                ),
+                resident_ids=sorted(locked),
+                weeks=sorted(weeks),
+                suggestions=(
+                    "Move or delete one of the locked blocks on those weeks.",
+                    f"Raise the {level} maximum for {rotation.name}.",
+                ),
+            )
+        )
+    return diagnostics
+
+
+def _locked_elective_repeats(problem: SolverProblem) -> list[SolverDiagnostic]:
+    """Name residents locked to the same non-repeatable elective twice.
+
+    A non-repeatable service allows one elective block per resident, and two
+    locks on disjoint weeks need two separate blocks, so the pair is
+    conclusive. Identical duplicate locks describe a single block and are
+    ignored, as are elective-fallback placements, which the repeat limit
+    does not count.
+    """
+    nonrepeatable = {
+        option.rotation_id
+        for option in problem.electives.rotation_options
+        if not option.repeatable
+    }
+    if not nonrepeatable:
+        return []
+    by_resident_rotation: dict[tuple[str, str], list[tuple[int, ...]]] = defaultdict(list)
+    for lock in problem.locks:
+        if not lock.elective or lock.rotation_id not in nonrepeatable:
+            continue
+        resident = problem.residents_by_id.get(lock.resident_id)
+        if resident is None or problem.is_elective_fallback_rotation(
+            lock.rotation_id, resident.pgy
+        ):
+            continue
+        weeks = tuple(lock.weeks)
+        if weeks not in by_resident_rotation[lock.resident_id, lock.rotation_id]:
+            by_resident_rotation[lock.resident_id, lock.rotation_id].append(weeks)
+    diagnostics: list[SolverDiagnostic] = []
+    for (resident_id, rotation_id), ranges in sorted(by_resident_rotation.items()):
+        if len(ranges) < 2:
+            continue
+        ordered = sorted(ranges)
+        pair = next(
+            (
+                (first, second)
+                for first, second in zip(ordered, ordered[1:], strict=False)
+                if first[-1] + 1 < second[0]
+            ),
+            None,
+        )
+        if pair is None:
+            continue
+        resident = problem.residents_by_id[resident_id]
+        rotation = problem.rotations_by_id[rotation_id]
+        first, second = pair
+        diagnostics.append(
+            SolverDiagnostic(
+                code="locked_elective_repeat",
+                message=(
+                    f"{resident.name} is locked to {rotation.name} elective blocks in "
+                    f"{_weeks_label(list(first))} and {_weeks_label(list(second))}, "
+                    f"but {rotation.name} may be taken only once as an elective."
+                ),
+                resident_ids=[resident_id],
+                weeks=sorted({week for weeks in ranges for week in weeks}),
+                suggestions=(
+                    "Remove one of the locked elective blocks or change it to "
+                    "another rotation.",
+                    "Use a repeatable elective service for the second block.",
+                ),
             )
         )
     return diagnostics

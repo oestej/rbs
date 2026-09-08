@@ -479,16 +479,16 @@ def replace_manual_block(
         kept.append(lock)
     if original is not None and not removed_original:
         raise ValueError("the hardcoded block no longer exists")
-    kept.append(
-        exact_block_lock(
-            resident_id,
-            rotation_id,
-            start_week,
-            duration_weeks,
-            elective=elective,
-            grouping_exempt=grouping_exempt,
-        )
+    new_lock = exact_block_lock(
+        resident_id,
+        rotation_id,
+        start_week,
+        duration_weeks,
+        elective=elective,
+        grouping_exempt=grouping_exempt,
     )
+    if new_lock not in kept:
+        kept.append(new_lock)
     return _with_locks(instance, kept)
 
 
