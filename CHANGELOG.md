@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-09-08
+
 ### Changed
 
 - **Block schedule:** The full academic-year schedule can now be exported as a
@@ -278,7 +280,8 @@
 - **Releases:** Download a macOS disk image built from the tagged commit, with
   that release's changelog section as its published description.
 
-[Unreleased]: https://github.com/oestej/rbs/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/oestej/rbs/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/oestej/rbs/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/oestej/rbs/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/oestej/rbs/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/oestej/rbs/compare/v0.1.4...v0.1.5
