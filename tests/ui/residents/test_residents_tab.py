@@ -34,7 +34,10 @@ from rbs.ui.residents.ops import (
 )
 from rbs.ui.residents.schedule import (
     _open_resident_block_dialog,
+    _resident_exhausted_block_rotations,
+    _resident_required_block_counts,
     _resident_schedule_workspace,
+    _resident_scheduled_block_counts,
     _schedule_week_date_ranges,
 )
 from rbs.ui.residents.tab import NEW_RESIDENT_ID, _resident_view, render_residents_tab
@@ -1108,6 +1111,142 @@ def test_block_dialog_treats_pending_blocks_as_scheduled() -> None:
     )
     options = {option["label"]: option for option in rotation._props["options"]}
     assert options["GYN · Outpatient GYN · already scheduled"].get("disable") is True
+
+
+def test_required_block_counts_follow_curriculum() -> None:
+    instance = sample_instance()
+    # PGY2 FMED requires two 4-week blocks plus one 2-week block.
+    assert _resident_required_block_counts(
+        instance, instance.residents_by_id["resident-009"]
+    )["fmed"] == 3
+    # PGY1 FMED requires two 4-week blocks.
+    assert _resident_required_block_counts(
+        instance, instance.residents_by_id["resident-001"]
+    )["fmed"] == 2
+    assert _resident_required_block_counts(
+        instance, instance.residents_by_id["resident-009"]
+    )["derm"] == 1
+
+
+def test_scheduled_block_counts_deduplicate_schedule_and_locks() -> None:
+    from rbs.models.enums import RotationKind, SolverEngineName, SolverStatus
+    from rbs.models.schedule import Assignment, Schedule, ScheduleMeta
+    from rbs.ui.locks import replace_manual_block
+
+    instance = sample_instance()
+    resident = instance.residents_by_id["resident-009"]
+    pending = replace_manual_block(
+        instance,
+        resident_id=resident.id,
+        rotation_id="fmed",
+        start_week=1,
+        duration_weeks=4,
+    )
+    assert _resident_scheduled_block_counts(pending, None, resident)["fmed"] == 1
+    assert "fmed" not in _resident_exhausted_block_rotations(pending, None, resident)
+    schedule = Schedule(
+        meta=ScheduleMeta(
+            academic_year=pending.academic_year,
+            engine=SolverEngineName.STUB,
+            status=SolverStatus.FEASIBLE,
+        ),
+        assignments=[
+            Assignment(
+                resident_id=resident.id,
+                rotation_id="fmed",
+                kind=RotationKind.FMED,
+                start_week=1,
+                end_week=4,
+                weeks=[1, 2, 3, 4],
+                block_start_week=1,
+                block_duration_weeks=4,
+            )
+        ],
+    )
+    # A saved manual block lives in both the working schedule and the manual
+    # locks; it must count once so the second of three FMED takes stays open.
+    assert _resident_scheduled_block_counts(pending, schedule, resident)["fmed"] == 1
+    assert "fmed" not in _resident_exhausted_block_rotations(pending, schedule, resident)
+
+
+def test_block_dialog_allows_repeated_rotation_until_curriculum_filled() -> None:
+    from nicegui import ui
+    from nicegui.events import ClickEventArguments
+
+    from rbs.models.enums import RotationKind, SolverEngineName, SolverStatus
+    from rbs.models.schedule import Assignment, Schedule, ScheduleMeta
+
+    instance = sample_instance()
+    resident = instance.residents_by_id["resident-009"]
+
+    def fmed_schedule(spans: list[tuple[int, int]]) -> Schedule:
+        return Schedule(
+            meta=ScheduleMeta(
+                academic_year=instance.academic_year,
+                engine=SolverEngineName.STUB,
+                status=SolverStatus.FEASIBLE,
+            ),
+            assignments=[
+                Assignment(
+                    resident_id=resident.id,
+                    rotation_id="fmed",
+                    kind=RotationKind.FMED,
+                    start_week=start,
+                    end_week=end,
+                    weeks=list(range(start, end + 1)),
+                    block_start_week=start,
+                    block_duration_weeks=end - start + 1,
+                )
+                for start, end in spans
+            ],
+        )
+
+    def open_add_dialog(schedule):
+        saved: list[tuple] = []
+        legacy_saves: list[tuple] = []
+        before = set(ui.context.client.elements)
+        _open_resident_block_dialog(
+            instance,
+            schedule,
+            resident,
+            on_schedule_save=lambda *args: legacy_saves.append(args),
+            on_block_schedule_save=lambda *args: saved.append(args),
+            schedule_is_current=True,
+        )
+        selects = {
+            element._props.get("label"): element
+            for element_id, element in ui.context.client.elements.items()
+            if element_id not in before and element.__class__.__name__ == "Select"
+        }
+        save = next(
+            element
+            for element_id, element in ui.context.client.elements.items()
+            if element_id not in before
+            and element.__class__.__name__ == "Button"
+            and element._props.get("label") == "Save block"
+        )
+        return selects, save, saved, legacy_saves
+
+    # Two of three required FMED blocks leave the rotation available.
+    selects, _save, _saved, _legacy = open_add_dialog(fmed_schedule([(1, 4), (5, 8)]))
+    options = {option["label"]: option for option in selects["Rotation"]._props["options"]}
+    assert options["FMED · Family Med Education Service"].get("disable") is not True
+
+    # All three required blocks grey the rotation out and reject a forced save.
+    selects, save, saved, legacy_saves = open_add_dialog(
+        fmed_schedule([(1, 4), (5, 8), (9, 10)])
+    )
+    options = {option["label"]: option for option in selects["Rotation"]._props["options"]}
+    assert options["FMED · Family Med Education Service · already scheduled"].get(
+        "disable"
+    ) is True
+    selects["Rotation"].value = "fmed"
+    listener = next(
+        listener for listener in save._event_listeners.values() if listener.type == "click"
+    )
+    listener.handler(ClickEventArguments(sender=save, client=save.client))
+    assert saved == []
+    assert legacy_saves == []
 
 
 def test_block_dialog_disables_overlapping_weeks() -> None:

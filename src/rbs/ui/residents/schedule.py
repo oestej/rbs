@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -925,6 +926,73 @@ def _resident_block_start_options(
     return starts
 
 
+def _resident_required_block_counts(
+    instance: SchedulerInput,
+    resident: Resident,
+) -> Counter[str]:
+    """Mandatory block takes one resident's plan requires, by rotation."""
+    counts: Counter[str] = Counter()
+    for block in instance.curriculum_for(resident.pgy).blocks:
+        rotation = instance.rotations_by_id.get(block.rotation_id)
+        if rotation is not None and rotation.kind is RotationKind.ELECTIVE:
+            continue
+        counts[block.rotation_id] += block.count
+    for override in instance.resident_rotation_overrides:
+        if override.resident_id == resident.id and not override.elective:
+            counts[override.rotation_id] += 1
+    return counts
+
+
+def _resident_scheduled_block_counts(
+    instance: SchedulerInput,
+    schedule: Schedule | None,
+    resident: Resident,
+) -> Counter[str]:
+    """Mandatory blocks already placed for one resident, by rotation.
+
+    A saved manual block lives in both the working schedule and the manual
+    locks, so placements are deduplicated on exact weeks before counting.
+    """
+    counts: Counter[str] = Counter()
+    seen: set[tuple[str, tuple[int, ...]]] = set()
+    for block in schedule_blocks(schedule, resident_id=resident.id):
+        if block.elective:
+            continue
+        seen.add((block.rotation_id, tuple(block.weeks)))
+        counts[block.rotation_id] += 1
+    for lock in instance.locks:
+        if (
+            lock.source != "manual"
+            or lock.resident_id != resident.id
+            or lock.elective
+            or not lock.exact_block
+        ):
+            continue
+        key = (lock.rotation_id, tuple(sorted(lock.weeks)))
+        if key in seen:
+            continue
+        seen.add(key)
+        counts[lock.rotation_id] += 1
+    return counts
+
+
+def _resident_exhausted_block_rotations(
+    instance: SchedulerInput,
+    schedule: Schedule | None,
+    resident: Resident,
+) -> set[str]:
+    """Rotation IDs with no required block takes left for one resident."""
+    required = _resident_required_block_counts(instance, resident)
+    if not required:
+        return set()
+    scheduled = _resident_scheduled_block_counts(instance, schedule, resident)
+    return {
+        rotation_id
+        for rotation_id, total in required.items()
+        if scheduled[rotation_id] >= total
+    }
+
+
 def _open_resident_block_dialog(
     instance: SchedulerInput,
     schedule: Schedule | None,
@@ -952,23 +1020,17 @@ def _open_resident_block_dialog(
         if initial_option is not None and initial_option in rotation_options
         else next(iter(rotation_options), None)
     )
-    # Mandatory rotations the resident already has on their schedule cannot be
-    # added again, so their menu entries are greyed out below. Blocks pending
-    # solve count as scheduled, elective options may repeat and are never
-    # greyed out, and the entry being edited stays enabled so the dialog
-    # keeps a valid selection.
-    scheduled_mandatory_ids = {
-        block.rotation_id
-        for block in schedule_blocks(schedule, resident_id=resident.id)
-        if not block.elective
-    } | {
-        lock.rotation_id
-        for lock in instance.locks
-        if lock.source == "manual"
-        and lock.resident_id == resident.id
-        and lock.exact_block
-        and not lock.elective
-    }
+    # Mandatory rotations whose required blocks are all on the schedule
+    # cannot be added again, so their menu entries are greyed out below.
+    # Rotations that repeat (such as FMED) stay available until every
+    # required block is placed. Blocks pending solve count as scheduled,
+    # elective options may repeat and are never greyed out, and the entry
+    # being edited stays enabled so the dialog keeps a valid selection.
+    exhausted_rotation_ids = _resident_exhausted_block_rotations(
+        instance,
+        schedule,
+        resident,
+    )
     greyed_rotation_options = {
         option
         for option in rotation_options
@@ -976,7 +1038,7 @@ def _open_resident_block_dialog(
         # keeps its own rotation enabled.
         if (initial is None or option != initial_rotation)
         and not _parse_rotation_option(str(option))[1]
-        and _parse_rotation_option(str(option))[0] in scheduled_mandatory_ids
+        and _parse_rotation_option(str(option))[0] in exhausted_rotation_ids
     }
     rotation_options = {
         option: (
@@ -1186,8 +1248,8 @@ def _open_resident_block_dialog(
                     rotation_option = str(rotation_select.value)
                     if rotation_option in greyed_rotation_options:
                         raise ValueError(
-                            "that rotation is already on this resident's "
-                            "schedule; choose another rotation"
+                            "that rotation already has all of its required "
+                            "blocks on this resident's schedule; choose another rotation"
                         )
                     rotation_id, elective = _parse_rotation_option(rotation_option)
                     duration = int(duration_select.value)
