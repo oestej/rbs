@@ -60,17 +60,31 @@ class ManualClinicBlock(StrictModel):
 
 
 class ResidentRotationOverride(StrictModel):
-    """One additional resident-specific required-service block.
+    """One additional resident-specific required-service or elective block.
 
     The solver places the block normally. By default it uses the resident's
     otherwise-unallocated time and leaves every curriculum requirement in
     place. ``replaces_rotation_id`` may instead name a same-length direct
     Elective block to remove when the resident has no suitable unallocated time.
+
+    Set ``elective`` for a named elective take of one service instead: the
+    solver places it like other elective blocks, but the service is fixed
+    rather than matched from the resident's preferences. This field is an
+    additive option (older documents without it load as required-service
+    blocks), so it does not change the enclosing document version.
     """
 
     resident_id: str
     rotation_id: str
     duration_weeks: int = Field(ge=1, le=5)
+    elective: bool = Field(
+        default=False,
+        description=(
+            "Whether this addition is an elective take of the named service. "
+            "Elective takes bypass preference matching and count toward the "
+            "service's elective repeat limits."
+        ),
+    )
     replaces_rotation_id: str | None = Field(
         default=None,
         description=(

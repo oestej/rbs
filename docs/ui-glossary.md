@@ -9,6 +9,7 @@ descriptions.
 | Ranked elective choices | elective preferences | Elective Preference |
 | Dates when a clinic is closed | closure days; Add closure day | Holidays/Closure Days; Add closure |
 | Weekly half-day frequency | half-day(s) per week | half-day/week; half-day/wk |
+| Resident-specific named elective placement | Elective Slot(s) | extra elective; elective take |
 | Compact training-level identifier | configured short code, such as `PGY1` or `SMF` | a hardcoded `PGY<n>` label |
 | Descriptive training-level name | configured full name, such as `PGY 1` or `Sports Medicine Fellow` | a compact code in headings or prose |
 

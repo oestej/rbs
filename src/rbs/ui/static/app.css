@@ -1731,6 +1731,7 @@
 
 .rbs-clinic-rules-dialog,
 .rbs-fmed-rules-dialog,
+.rbs-elective-properties-dialog,
 .rbs-manual-clinic-dialog {
   overflow: hidden;
 }
@@ -1740,7 +1741,8 @@
   background: var(--rbs-surface-subtle);
 }
 
-.rbs-resident-rotation-override {
+.rbs-resident-rotation-override,
+.rbs-resident-rotation-waiver {
   border: 1px solid var(--rbs-border);
   background: var(--rbs-surface-subtle);
 }
@@ -2022,14 +2024,16 @@
 }
 
 .rbs-clinic-editor-header,
-.rbs-fmed-rules-header {
+.rbs-fmed-rules-header,
+.rbs-elective-properties-header {
   flex: 0 0 auto;
   flex-wrap: nowrap;
   border-bottom: 1px solid var(--rbs-border-subtle);
 }
 
 .rbs-clinic-editor-title,
-.rbs-fmed-rules-title {
+.rbs-fmed-rules-title,
+.rbs-elective-properties-title {
   max-width: 360px;
   flex: 0 1 auto;
   overflow: hidden;
@@ -2037,7 +2041,8 @@
 }
 
 .rbs-clinic-editor-tabs,
-.rbs-fmed-rules-tabs {
+.rbs-fmed-rules-tabs,
+.rbs-elective-properties-tabs {
   min-height: 52px;
   flex: 0 1 auto;
   align-self: stretch;
@@ -2045,7 +2050,8 @@
 }
 
 .rbs-clinic-editor-tabs .q-tab,
-.rbs-fmed-rules-tabs .q-tab {
+.rbs-fmed-rules-tabs .q-tab,
+.rbs-elective-properties-tabs .q-tab {
   min-height: 52px;
   padding: 0 var(--rbs-space-4);
 }
@@ -2055,9 +2061,54 @@
 .rbs-clinic-editor-panels .q-tab-panel,
 .rbs-fmed-rules-panels,
 .rbs-fmed-rules-panels .q-panel,
-.rbs-fmed-rules-panels .q-tab-panel {
+.rbs-fmed-rules-panels .q-tab-panel,
+.rbs-elective-properties-panels,
+.rbs-elective-properties-panels .q-panel,
+.rbs-elective-properties-panels .q-tab-panel {
   height: 100%;
   min-height: 0;
+}
+
+@media (max-width: 900px) {
+  .rbs-elective-properties-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    column-gap: var(--rbs-space-2);
+    row-gap: 0;
+  }
+
+  .rbs-elective-properties-title {
+    grid-column: 1;
+    grid-row: 1;
+    max-width: none;
+  }
+
+  .rbs-elective-properties-tabs {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    width: 100%;
+  }
+
+  .rbs-elective-properties-header > .q-space {
+    display: none;
+  }
+
+  .rbs-elective-properties-save {
+    grid-column: 2;
+    grid-row: 1;
+    white-space: nowrap;
+  }
+
+  .rbs-elective-properties-close {
+    grid-column: 3;
+    grid-row: 1;
+  }
+}
+
+@media (max-width: 600px) {
+  .rbs-elective-properties-tabs .q-tab {
+    padding-inline: var(--rbs-space-2);
+  }
 }
 
 .rbs-clinic-capacity-grid {

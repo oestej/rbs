@@ -3,6 +3,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from rbs.catalog import sample_instance as unconfigured_sample_instance
 from rbs.models.enums import WEEKDAYS_MF, RotationKind, Session, SolverStatus, Weekday
@@ -404,6 +405,116 @@ def test_manual_clinic_block_uses_unallocated_time_at_fixed_start() -> None:
     assert manual.fixed_start_week == 1
     assert sum(occurrence.duration_weeks for occurrence in occurrences) == 52
     assert any(occurrence.elective for occurrence in occurrences)
+
+
+def _named_elective_shape(instance, pgy: int = 1) -> tuple[str, str, int, str]:
+    """Return one (resident, service, duration) take the sample supports."""
+    resident = next(item for item in instance.residents if item.pgy == pgy)
+    inventory = instance.direct_elective_block_counts_for_pgy(pgy)
+    for duration in sorted(inventory):
+        options = instance.elective_options_for(pgy, duration)
+        if not options:
+            continue
+        direct_id = next(
+            block.rotation_id
+            for block in instance.curriculum_for(pgy).blocks
+            if block.duration_weeks == duration
+            and instance.rotation(block.rotation_id).kind is RotationKind.ELECTIVE
+        )
+        return resident.id, options[0].id, duration, direct_id
+    raise AssertionError("sample has no placeable elective inventory")
+
+
+def test_named_elective_take_replaces_direct_elective_block() -> None:
+    instance = sample_instance()
+    resident_id, service_id, duration, direct_id = _named_elective_shape(instance)
+    raw = instance.model_dump(mode="json")
+    raw["resident_rotation_overrides"] = [
+        {
+            "resident_id": resident_id,
+            "rotation_id": service_id,
+            "duration_weeks": duration,
+            "elective": True,
+            "replaces_rotation_id": direct_id,
+        }
+    ]
+    instance = type(instance).model_validate(raw)
+    occurrences = [
+        occurrence
+        for occurrence in expand_occurrences(instance)
+        if occurrence.resident_id == resident_id
+    ]
+    take = next(occurrence for occurrence in occurrences if "resident-override" in occurrence.key)
+
+    assert take.rotation_id == service_id
+    assert take.elective
+    assert not take.preference_managed
+    assert take.duration_weeks == duration
+    assert not any(
+        occurrence.rotation_id == direct_id
+        and occurrence.group_id == occurrence.key
+        for occurrence in occurrences
+    )
+
+
+def test_named_elective_take_backfills_a_waiver_hole() -> None:
+    instance = sample_instance()
+    resident_id, service_id, duration, direct_id = _named_elective_shape(instance)
+    raw = instance.model_dump(mode="json")
+    raw["resident_rotation_waivers"] = [
+        {
+            "resident_id": resident_id,
+            "rotation_id": direct_id,
+            "duration_weeks": duration,
+        }
+    ]
+    raw["resident_rotation_overrides"] = [
+        {
+            "resident_id": resident_id,
+            "rotation_id": service_id,
+            "duration_weeks": duration,
+            "elective": True,
+            "replaces_rotation_id": None,
+        }
+    ]
+    instance = type(instance).model_validate(raw)
+
+    assert instance.resident_unallocated_weeks(resident_id) == 0
+    occurrences = [
+        occurrence
+        for occurrence in expand_occurrences(instance)
+        if occurrence.resident_id == resident_id
+    ]
+    assert sum(occurrence.duration_weeks for occurrence in occurrences) == 52
+
+
+def test_named_elective_take_rejects_ineligible_services() -> None:
+    instance = sample_instance()
+    resident_id, service_id, duration, _direct_id = _named_elective_shape(instance)
+    raw = instance.model_dump(mode="json")
+    raw["resident_rotation_overrides"] = [
+        {
+            "resident_id": resident_id,
+            "rotation_id": "clinic",
+            "duration_weeks": duration,
+            "elective": True,
+            "replaces_rotation_id": None,
+        }
+    ]
+    with pytest.raises(ValidationError, match="can only take"):
+        type(instance).model_validate(raw)
+
+    raw["resident_rotation_overrides"] = [
+        {
+            "resident_id": resident_id,
+            "rotation_id": service_id,
+            "duration_weeks": duration,
+            "elective": True,
+            "group_instance_id": "grouped",
+        }
+    ]
+    with pytest.raises(ValidationError, match="cannot group an elective take"):
+        type(instance).model_validate(raw)
 
 
 def test_clinic_exemption_can_fund_a_fixed_manual_block() -> None:

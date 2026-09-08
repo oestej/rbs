@@ -1076,6 +1076,60 @@ def test_the_elective_properties_dialog_edits_color_and_elective_time() -> None:
     assert any(
         "rbs-rotation-color-palette" in getattr(element, "_classes", []) for element in created
     )
+    assert {
+        element._props.get("label")
+        for element in created
+        if element.__class__.__name__ == "Tab"
+    } == {"General", "Training-level rules", "Resident overrides"}
+    tab_bar = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Tabs"
+        and "rbs-elective-properties-tabs" in getattr(element, "_classes", [])
+    )
+    assert tab_bar._props.get("inline-label") is True
+    panels = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "TabPanels"
+        and "rbs-elective-properties-panels" in getattr(element, "_classes", [])
+    )
+    assert panels._props.get("model-value") == "elective_properties_general"
+    dialog_card = next(
+        element
+        for element in created
+        if "rbs-elective-properties-dialog" in getattr(element, "_classes", [])
+    )
+    assert dialog_card._style["width"] == "calc(100vw - 64px)"
+    assert dialog_card._style["max-width"] == "1200px"
+    assert dialog_card._style["height"] == "calc(100vh - 64px)"
+    assert dialog_card._style["max-height"] == "900px"
+    levels = [
+        element
+        for element in created
+        if element.__class__.__name__ == "Expansion"
+        and "rbs-pgy-rule" in getattr(element, "_classes", [])
+    ]
+    assert {level._props.get("label") for level in levels} == {"PGY 1", "PGY 2", "PGY 3"}
+    assert all(level.value is False for level in levels)
+    button_labels = {
+        element._props.get("label")
+        for element in created
+        if element.__class__.__name__ == "Button"
+    }
+    assert "Cancel" not in button_labels
+    save = _button(created, "Save")
+    close = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Button"
+        and element._props.get("aria-label") == "Close shared elective properties"
+    )
+    assert save.parent_slot.parent is close.parent_slot.parent
+    header_items = [
+        element for element in created if element.parent_slot.parent is save.parent_slot.parent
+    ]
+    assert header_items.index(close) == header_items.index(save) + 1
     # One editable row per level that has committed Elective time.
     assert len(_fields(created, "Select", "Elective block length")) == 2
     assert len(_fields(created, "Number", "Blocks per resident")) == 2
@@ -1090,11 +1144,18 @@ def test_elective_time_can_be_added_to_a_level_that_has_none() -> None:
     before = _open_properties(blank_instance(), saves, [])
     created = _created_since(before)
     assert not _fields(created, "Number", "Blocks per resident")
+    level = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Expansion"
+        and "rbs-pgy-rule" in getattr(element, "_classes", [])
+    )
+    assert level.value is True
 
     _click(_button(created, "Add block length"))
     created = _created_since(before)
     _fields(created, "Number", "Blocks per resident")[0].set_value(3)
-    _click(_button(created, "Save elective properties"))
+    _click(_button(created, "Save"))
 
     updated, rotation_id = saves[-1]
     assert rotation_id is None
@@ -1109,7 +1170,7 @@ def test_elective_time_can_be_reduced_and_returns_the_weeks() -> None:
     count = _fields(created, "Number", "Blocks per resident")[1]
     assert count.value == 4
     count.set_value(2)
-    _click(_button(created, "Save elective properties"))
+    _click(_button(created, "Save"))
 
     updated, _rotation_id = saves[-1]
     assert direct_elective_counts(updated, 2) == {2: 2}
@@ -1130,7 +1191,7 @@ def test_a_color_only_edit_keeps_the_solved_schedule() -> None:
         and "rbs-rotation-color-choice" in getattr(element, "_classes", [])
     ]
     _click(swatches[3])
-    _click(_button(created, "Save elective properties"))
+    _click(_button(created, "Save"))
 
     assert not saves
     updated, _rotation_id = colors[-1]
@@ -1146,7 +1207,7 @@ def test_elective_time_beyond_a_levels_budget_cannot_be_saved() -> None:
     created = _created_since(before)
     _fields(created, "Number", "Blocks per resident")[0].set_value(30)
 
-    assert _button(created, "Save elective properties").enabled is False
+    assert _button(created, "Save").enabled is False
     assert "8 weeks more than PGY1 has left to spend" in {
         getattr(element, "_text", None) for element in created
     }
@@ -1425,3 +1486,80 @@ def test_elective_editor_close_with_changes_confirms_before_discarding() -> None
     _click(_button(confirm, "Discard changes"))
 
     assert cancels == [True]
+
+
+def test_properties_dialog_stages_and_saves_an_elective_take() -> None:
+    instance = sample_instance()
+    saves: list = []
+    colors: list = []
+    before = _open_properties(instance, saves, colors)
+    opened = _created_since(before)
+
+    assert "Resident overrides" in {
+        getattr(element, "_text", None) for element in opened
+    }
+    assert any(
+        "Elective Slots add a named elective service for one resident."
+        in (getattr(element, "_text", None) or "")
+        for element in opened
+    )
+    assert not _fields(opened, "Select", "Service")
+    _click(_button(opened, "Add Elective Slot"))
+
+    slot_dialog = _created_since(before)
+    assert "Add Elective Slot" in {
+        getattr(element, "_text", None) for element in slot_dialog
+    }
+    service = _fields(slot_dialog, "Select", "Service")[0]
+    assert service.options
+    funding = _fields(slot_dialog, "Select", "Funded by")[0]
+    assert funding.options
+    _click(_button(slot_dialog, "Add slot"))
+
+    staged = _created_since(before)
+    assert any(
+        "added on save" in (getattr(element, "_text", None) or "") for element in staged
+    )
+    assert any(
+        "rbs-resident-rotation-override" in getattr(element, "_classes", [])
+        for element in staged
+    )
+    assert saves == [] and colors == []
+    _click(_button(staged, "Save"))
+
+    assert len(saves) == 1 and colors == []
+    updated, _rotation_id = saves[0]
+    takes = [override for override in updated.resident_rotation_overrides if override.elective]
+    assert len(takes) == 1
+    assert service.value is not None and takes[0].rotation_id == service.value
+
+
+def test_properties_dialog_stages_and_saves_an_elective_waiver() -> None:
+    instance = sample_instance()
+    saves: list = []
+    colors: list = []
+    before = _open_properties(instance, saves, colors)
+    opened = _created_since(before)
+
+    assert not _fields(opened, "Select", "Block length")
+    _click(_button(opened, "Waive elective block"))
+
+    waiver_dialog = _created_since(before)
+    duration = _fields(waiver_dialog, "Select", "Block length")[0]
+    assert duration.options
+    _click(_button(waiver_dialog, "Add waiver"))
+
+    staged = _created_since(before)
+    assert any(
+        "added on save" in (getattr(element, "_text", None) or "") for element in staged
+    )
+    assert any(
+        "rbs-resident-rotation-waiver" in getattr(element, "_classes", [])
+        for element in staged
+    )
+    _click(_button(staged, "Save"))
+
+    assert len(saves) == 1 and colors == []
+    updated, _rotation_id = saves[0]
+    assert len(updated.resident_rotation_waivers) == 1
+    assert updated.resident_rotation_waivers[0].duration_weeks == int(duration.value)
