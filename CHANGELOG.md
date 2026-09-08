@@ -6,6 +6,12 @@
 
 - **Files:** Only the current file format opens. Older `.rbsc` files are
   rejected instead of being upgraded in place.
+- **Scheduling:** A failed solve now names locked blocks that exceed a
+  rotation's maximum or repeat a non-repeatable elective, instead of
+  returning with no explanation.
+- **Residents:** Identical duplicate locks are cleaned up automatically when
+  a file opens, and saving the same block twice no longer creates another
+  copy.
 
 ## [0.1.7] - 2026-09-07
 
