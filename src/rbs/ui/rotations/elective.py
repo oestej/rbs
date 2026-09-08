@@ -9,7 +9,12 @@ from functools import partial
 from pydantic import ValidationError
 
 from rbs.models.enums import RotationKind
-from rbs.models.instance import SchedulerInput
+from rbs.models.instance import (
+    ResidentRotationOverride,
+    ResidentRotationWaiver,
+    SchedulerInput,
+)
+from rbs.models.resident import Resident, resident_display_sort_key
 from rbs.models.rotation import (
     Rotation,
     rotation_display_sort_key,
@@ -46,12 +51,20 @@ from rbs.ui.rotations.forms import (
 )
 from rbs.ui.rotations.ops import (
     add_elective_rotation,
+    add_named_elective_take,
+    add_resident_rotation_waiver,
     direct_elective_counts,
     elective_rotations,
+    elective_waiver_duration_options,
+    named_elective_take_duration_options,
+    named_elective_take_service_options,
+    named_elective_takes,
     next_mandatory_rotation_id,
+    remaining_direct_elective_blocks,
     remove_elective_rotation,
     replace_elective_color,
     replace_elective_rotation,
+    resolve_elective_waiver_rotation,
     rotation_editor_state,
     rotation_from_editor_state,
     rotation_group_members_by_pgy,
@@ -102,7 +115,7 @@ def _elective_configuration(
                     with ui.column().classes("gap-0"):
                         ui.label("Shared elective properties").classes("rbs-type-section-title")
                     ui.button(
-                        "Edit shared properties",
+                        "Edit rules",
                         icon="edit",
                         on_click=partial(
                             _open_elective_properties_dialog,
@@ -196,6 +209,569 @@ def _elective_time_level_summary(instance: SchedulerInput, pgy: int) -> None:
         )
 
 
+def _sorted_residents(instance: SchedulerInput) -> list[Resident]:
+    return sorted(instance.residents, key=resident_display_sort_key)
+
+
+def _take_funding_options(
+    instance: SchedulerInput,
+    resident_id: str,
+    duration_weeks: int,
+) -> dict[str, str]:
+    """Unallocated and replacement funding choices for one elective take."""
+    if instance.residents_by_id.get(resident_id) is None:
+        return {}
+    options: dict[str, str] = {}
+    unallocated = instance.resident_unallocated_weeks(resident_id)
+    if unallocated >= duration_weeks:
+        options["unallocated"] = f"Unallocated time ({unallocated} weeks available)"
+    for (rotation_id, duration), count in remaining_direct_elective_blocks(
+        instance, resident_id
+    ).items():
+        if duration != duration_weeks:
+            continue
+        rotation = instance.rotation(rotation_id)
+        options[f"{rotation_id}|{duration}"] = (
+            f"Replace {rotation.code} · {duration}-week elective"
+            + (f" ({count} available)" if count > 1 else "")
+        )
+    return options
+
+
+def _elective_waivers(
+    instance: SchedulerInput,
+    resident_id: str,
+) -> list[tuple[int, ResidentRotationWaiver]]:
+    """Elective-kind waivers for one resident with their case positions."""
+    return [
+        (index, waiver)
+        for index, waiver in enumerate(instance.resident_rotation_waivers)
+        if waiver.resident_id == resident_id
+        and instance.rotation(waiver.rotation_id).kind is RotationKind.ELECTIVE
+    ]
+
+
+def _staged_take_row(
+    instance: SchedulerInput,
+    resident: Resident,
+    index: int,
+    take: ResidentRotationOverride,
+    removed: set[int],
+    refresh: Callable[[], None],
+) -> None:
+    from nicegui import ui
+
+    rotation = instance.rotation(take.rotation_id)
+    funded_by = (
+        "uses unallocated time"
+        if take.replaces_rotation_id is None
+        else f"replaces {instance.rotation(take.replaces_rotation_id).code}"
+    )
+
+    def _stage_removal() -> None:
+        removed.add(index)
+        refresh()
+
+    with ui.row().classes(
+        "rbs-resident-rotation-override w-full items-center gap-3 rounded p-3"
+    ):
+        with ui.column().classes("min-w-0 flex-1 gap-0"):
+            ui.label(
+                f"{resident.name} · {instance.training_level_name(resident.pgy)}"
+            ).classes("rbs-font-semibold")
+            ui.label(
+                f"{rotation.code} · {_weeks_label(take.duration_weeks)} Elective Slot · "
+                f"{funded_by}"
+            ).classes("rbs-type-caption rbs-text-muted")
+        ui.button(
+            icon="delete_outline",
+            on_click=lambda _event: _stage_removal(),
+        ).props(
+            "flat round dense color=negative aria-label='Remove Elective Slot'"
+        )
+
+
+def _take_draft_row(
+    instance: SchedulerInput,
+    draft_index: int,
+    draft: Draft,
+    take_drafts: list[Draft],
+    refresh: Callable[[], None],
+) -> None:
+    from nicegui import ui
+
+    resident = instance.residents_by_id[str(draft["resident_id"])]
+    rotation = instance.rotation(str(draft["rotation_id"]))
+    funding = str(draft["funding"])
+    funded_by = (
+        "uses unallocated time"
+        if funding == "unallocated"
+        else f"replaces {instance.rotation(funding.rsplit('|', 1)[0]).code}"
+    )
+
+    def _discard() -> None:
+        take_drafts.pop(draft_index)
+        refresh()
+
+    with ui.row().classes(
+        "rbs-resident-rotation-override w-full items-center gap-3 rounded p-3"
+    ):
+        with ui.column().classes("min-w-0 flex-1 gap-0"):
+            ui.label(
+                f"{resident.name} · {instance.training_level_name(resident.pgy)}"
+            ).classes("rbs-font-semibold")
+            ui.label(
+                f"{rotation.code} · {_weeks_label(int(draft['duration_weeks']))} "
+                f"Elective Slot · {funded_by} · added on save"
+            ).classes("rbs-type-caption rbs-text-muted")
+        ui.button(
+            icon="delete_outline",
+            on_click=lambda _event: _discard(),
+        ).props(
+            "flat round dense color=negative aria-label='Discard Elective Slot'"
+        )
+
+
+def _elective_slot_duration_options(
+    instance: SchedulerInput,
+    resident_id: str,
+) -> dict[int, str]:
+    return {
+        duration: _weeks_label(duration)
+        for duration in named_elective_take_duration_options(instance, resident_id)
+        if _take_funding_options(instance, resident_id, duration)
+    }
+
+
+def _elective_slot_resident_options(instance: SchedulerInput) -> dict[str, str]:
+    return {
+        resident.id: f"{resident.name} · {instance.training_level_name(resident.pgy)}"
+        for resident in _sorted_residents(instance)
+        if _elective_slot_duration_options(instance, resident.id)
+    }
+
+
+def _open_elective_slot_dialog(
+    instance: SchedulerInput,
+    take_drafts: list[Draft],
+    refresh: Callable[[], None],
+) -> None:
+    from nicegui import ui
+
+    resident_options = _elective_slot_resident_options(instance)
+    if not resident_options:
+        ui.notify(
+            "No resident has compatible unallocated or Elective time available",
+            type="warning",
+        )
+        return
+    resident_id = next(iter(resident_options))
+    durations = _elective_slot_duration_options(instance, resident_id)
+    initial_duration = next(iter(durations))
+    service_options = named_elective_take_service_options(
+        instance,
+        resident_id,
+        initial_duration,
+    )
+    funding_options = _take_funding_options(instance, resident_id, initial_duration)
+
+    with ui.dialog() as dialog, ui.card().classes("w-full max-w-2xl p-0 gap-0"):
+        with ui.row().classes("w-full items-center justify-between gap-3 px-5 py-4"):
+            ui.label("Add Elective Slot").classes("rbs-type-dialog-title")
+            ui.button(icon="close", on_click=dialog.close).props(
+                "flat round dense aria-label='Close Elective Slot dialog'"
+            )
+        ui.separator()
+        with ui.column().classes("w-full gap-4 p-5"):
+            ui.label(
+                "Add one named elective service for a resident without changing the "
+                "training-level rules. Unallocated time is used when available; "
+                "otherwise, replace a same-length elective block."
+            ).classes("rbs-type-body rbs-text-muted")
+            resident_select = (
+                ui.select(resident_options, value=resident_id, label="Resident")
+                .props("outlined options-dense use-input")
+                .classes("w-full")
+            )
+            duration_select = (
+                ui.select(
+                    durations,
+                    value=initial_duration,
+                    label="Block length",
+                )
+                .props("outlined options-dense")
+                .classes("w-full")
+            )
+            service_select = (
+                ui.select(
+                    service_options,
+                    value=next(iter(service_options)),
+                    label="Service",
+                )
+                .props("outlined options-dense use-input")
+                .classes("w-full")
+            )
+            funding_select = (
+                ui.select(
+                    funding_options,
+                    value=next(iter(funding_options)),
+                    label="Funded by",
+                )
+                .props("outlined options-dense")
+                .classes("w-full")
+            )
+
+        def refresh_services_and_funding() -> None:
+            if resident_select.value is None or duration_select.value is None:
+                service_select.set_options({}, value=None)
+                funding_select.set_options({}, value=None)
+                return
+            duration = int(duration_select.value)
+            services = named_elective_take_service_options(
+                instance, str(resident_select.value), duration
+            )
+            service_select.set_options(
+                services,
+                value=(
+                    service_select.value
+                    if service_select.value in services
+                    else next(iter(services), None)
+                ),
+            )
+            funding = _take_funding_options(instance, str(resident_select.value), duration)
+            funding_select.set_options(funding, value=next(iter(funding), None))
+
+        def refresh_all() -> None:
+            resident_choice = (
+                str(resident_select.value) if resident_select.value is not None else None
+            )
+            choices = (
+                _elective_slot_duration_options(instance, resident_choice)
+                if resident_choice is not None
+                else {}
+            )
+            duration_select.set_options(
+                choices,
+                value=(
+                    duration_select.value
+                    if isinstance(duration_select.value, int)
+                    and duration_select.value in choices
+                    else next(iter(choices), None)
+                ),
+            )
+            refresh_services_and_funding()
+
+        resident_select.on_value_change(lambda _event: refresh_all())
+        duration_select.on_value_change(lambda _event: refresh_services_and_funding())
+
+        def stage_slot() -> None:
+            try:
+                if (
+                    resident_select.value is None
+                    or duration_select.value is None
+                    or service_select.value is None
+                    or funding_select.value is None
+                ):
+                    raise ValueError("complete all Elective Slot fields")
+                resident_choice = str(resident_select.value)
+                duration = int(duration_select.value)
+                rotation_id = str(service_select.value)
+                if rotation_id not in named_elective_take_service_options(
+                    instance, resident_choice, duration
+                ):
+                    raise ValueError("that service cannot fill this Elective Slot")
+                funding = _take_funding_options(instance, resident_choice, duration)
+                funding_key = str(funding_select.value)
+                if funding_key not in funding:
+                    raise ValueError("no compatible unallocated or elective time remains")
+                take_drafts.append(
+                    {
+                        "resident_id": resident_choice,
+                        "rotation_id": rotation_id,
+                        "duration_weeks": duration,
+                        "funding": funding_key,
+                    }
+                )
+                dialog.close()
+                refresh()
+            except (ValidationError, ValueError) as exc:
+                ui.notify(str(exc), type="negative", multi_line=True)
+
+        ui.separator()
+        with ui.row().classes("w-full justify-end gap-3 p-4"):
+            ui.button("Cancel", on_click=dialog.close).props(TERTIARY_BUTTON_PROPS)
+            ui.button("Add slot", icon="add", on_click=stage_slot).props(
+                PRIMARY_BUTTON_PROPS
+            )
+    dialog.open()
+
+
+def _staged_waiver_row(
+    instance: SchedulerInput,
+    resident: Resident,
+    index: int,
+    waiver: ResidentRotationWaiver,
+    removed: set[int],
+    refresh: Callable[[], None],
+) -> None:
+    from nicegui import ui
+
+    rotation = instance.rotation(waiver.rotation_id)
+
+    def _stage_removal() -> None:
+        removed.add(index)
+        refresh()
+
+    with ui.row().classes(
+        "rbs-resident-rotation-waiver w-full items-center gap-3 rounded p-3"
+    ):
+        with ui.column().classes("min-w-0 flex-1 gap-0"):
+            ui.label(
+                f"{resident.name} · {instance.training_level_name(resident.pgy)}"
+            ).classes("rbs-font-semibold")
+            ui.label(
+                f"{rotation.code} · {_weeks_label(waiver.duration_weeks)} waived"
+            ).classes("rbs-type-caption rbs-text-muted")
+        ui.button(
+            icon="delete_outline",
+            on_click=lambda _event: _stage_removal(),
+        ).props(
+            "flat round dense color=negative aria-label='Remove elective waiver'"
+        )
+
+
+def _waiver_draft_row(
+    instance: SchedulerInput,
+    draft_index: int,
+    draft: Draft,
+    waiver_drafts: list[Draft],
+    refresh: Callable[[], None],
+) -> None:
+    from nicegui import ui
+
+    resident = instance.residents_by_id[str(draft["resident_id"])]
+    rotation = instance.rotation(str(draft["rotation_id"]))
+
+    def _discard() -> None:
+        waiver_drafts.pop(draft_index)
+        refresh()
+
+    with ui.row().classes(
+        "rbs-resident-rotation-waiver w-full items-center gap-3 rounded p-3"
+    ):
+        with ui.column().classes("min-w-0 flex-1 gap-0"):
+            ui.label(
+                f"{resident.name} · {instance.training_level_name(resident.pgy)}"
+            ).classes("rbs-font-semibold")
+            ui.label(
+                f"{rotation.code} · {_weeks_label(int(draft['duration_weeks']))} "
+                "waived · added on save"
+            ).classes("rbs-type-caption rbs-text-muted")
+        ui.button(
+            icon="delete_outline",
+            on_click=lambda _event: _discard(),
+        ).props(
+            "flat round dense color=negative aria-label='Discard elective waiver'"
+        )
+
+
+def _elective_waiver_resident_options(instance: SchedulerInput) -> dict[str, str]:
+    return {
+        resident.id: f"{resident.name} · {instance.training_level_name(resident.pgy)}"
+        for resident in _sorted_residents(instance)
+        if elective_waiver_duration_options(instance, resident.id)
+    }
+
+
+def _open_elective_waiver_dialog(
+    instance: SchedulerInput,
+    waiver_drafts: list[Draft],
+    refresh: Callable[[], None],
+) -> None:
+    from nicegui import ui
+
+    resident_options = _elective_waiver_resident_options(instance)
+    if not resident_options:
+        ui.notify("No resident has an elective block available to waive", type="warning")
+        return
+    resident_id = next(iter(resident_options))
+    durations = elective_waiver_duration_options(instance, resident_id)
+
+    with ui.dialog() as dialog, ui.card().classes("w-full max-w-2xl p-0 gap-0"):
+        with ui.row().classes("w-full items-center justify-between gap-3 px-5 py-4"):
+            ui.label("Waive elective block").classes("rbs-type-dialog-title")
+            ui.button(icon="close", on_click=dialog.close).props(
+                "flat round dense aria-label='Close elective waiver dialog'"
+            )
+        ui.separator()
+        with ui.column().classes("w-full gap-4 p-5"):
+            ui.label(
+                "Excuse one resident from a direct elective block without changing "
+                "the training-level rules for everyone else."
+            ).classes("rbs-type-body rbs-text-muted")
+            resident_select = (
+                ui.select(resident_options, value=resident_id, label="Resident")
+                .props("outlined options-dense use-input")
+                .classes("w-full")
+            )
+            duration_select = (
+                ui.select(
+                    durations,
+                    value=next(iter(durations)),
+                    label="Block length",
+                )
+                .props("outlined options-dense")
+                .classes("w-full")
+            )
+
+        def refresh_durations() -> None:
+            choices = (
+                elective_waiver_duration_options(instance, str(resident_select.value))
+                if resident_select.value is not None
+                else {}
+            )
+            duration_select.set_options(
+                choices,
+                value=next(iter(choices), None),
+            )
+
+        resident_select.on_value_change(lambda _event: refresh_durations())
+
+        def stage_waiver() -> None:
+            try:
+                if (
+                    resident_select.value is None
+                    or duration_select.value is None
+                ):
+                    raise ValueError("choose a resident and a block length")
+                resident_choice = str(resident_select.value)
+                duration = int(duration_select.value)
+                rotation_id = resolve_elective_waiver_rotation(
+                    instance, resident_choice, duration
+                )
+                waiver_drafts.append(
+                    {
+                        "resident_id": resident_choice,
+                        "rotation_id": rotation_id,
+                        "duration_weeks": duration,
+                    }
+                )
+                dialog.close()
+                refresh()
+            except (ValidationError, ValueError) as exc:
+                ui.notify(str(exc), type="negative", multi_line=True)
+
+        ui.separator()
+        with ui.row().classes("w-full justify-end gap-3 p-4"):
+            ui.button("Cancel", on_click=dialog.close).props(TERTIARY_BUTTON_PROPS)
+            ui.button("Add waiver", icon="person_off", on_click=stage_waiver).props(
+                PRIMARY_BUTTON_PROPS
+            )
+    dialog.open()
+
+
+def _elective_overrides_editor(
+    instance: SchedulerInput,
+    take_drafts: list[Draft],
+    waiver_drafts: list[Draft],
+    removed_take_indices: set[int],
+    removed_waiver_indices: set[int],
+) -> None:
+    """Render Elective Slots and waivers like the other resident exceptions."""
+    from nicegui import ui
+
+    container = ui.column().classes("w-full gap-3")
+
+    def render() -> None:
+        container.clear()
+        has_saved_slot = any(
+            index not in removed_take_indices and override.elective
+            for index, override in enumerate(instance.resident_rotation_overrides)
+        )
+        has_saved_waiver = any(
+            index not in removed_waiver_indices
+            and instance.rotation(waiver.rotation_id).kind is RotationKind.ELECTIVE
+            for index, waiver in enumerate(instance.resident_rotation_waivers)
+        )
+        with container:
+            ui.label(
+                "Elective Slots add a named elective service for one resident. "
+                "Waivers excuse one resident from a direct elective block. Both "
+                "leave the training-level rules unchanged."
+            ).classes("rbs-type-body rbs-text-muted")
+            if not (has_saved_slot or has_saved_waiver or take_drafts or waiver_drafts):
+                ui.label("No resident-specific exceptions.").classes(
+                    "rbs-type-body rbs-text-muted"
+                )
+
+            for resident in _sorted_residents(instance):
+                for index, take in named_elective_takes(instance, resident.id):
+                    if index not in removed_take_indices:
+                        _staged_take_row(
+                            instance,
+                            resident,
+                            index,
+                            take,
+                            removed_take_indices,
+                            render,
+                        )
+            for draft_index, draft in enumerate(take_drafts):
+                _take_draft_row(
+                    instance,
+                    draft_index,
+                    draft,
+                    take_drafts,
+                    render,
+                )
+            for resident in _sorted_residents(instance):
+                for index, waiver in _elective_waivers(instance, resident.id):
+                    if index not in removed_waiver_indices:
+                        _staged_waiver_row(
+                            instance,
+                            resident,
+                            index,
+                            waiver,
+                            removed_waiver_indices,
+                            render,
+                        )
+            for draft_index, draft in enumerate(waiver_drafts):
+                _waiver_draft_row(
+                    instance,
+                    draft_index,
+                    draft,
+                    waiver_drafts,
+                    render,
+                )
+
+            with ui.row().classes("w-full items-center gap-3 flex-wrap"):
+                slot_button = ui.button(
+                    "Add Elective Slot",
+                    icon="person_add",
+                    on_click=partial(
+                        _open_elective_slot_dialog,
+                        instance,
+                        take_drafts,
+                        render,
+                    ),
+                ).props("outline no-caps")
+                slot_button.set_enabled(bool(_elective_slot_resident_options(instance)))
+                waiver_button = ui.button(
+                    "Waive elective block",
+                    icon="person_off",
+                    on_click=partial(
+                        _open_elective_waiver_dialog,
+                        instance,
+                        waiver_drafts,
+                        render,
+                    ),
+                ).props("outline no-caps")
+                waiver_button.set_enabled(
+                    bool(_elective_waiver_resident_options(instance))
+                )
+
+    render()
+
+
 def _open_elective_properties_dialog(
     instance: SchedulerInput,
     *,
@@ -222,10 +798,17 @@ def _open_elective_properties_dialog(
         for pgy, rows in drafts.items()
     }
     overspent: dict[int, bool] = {}
-    footer: dict[str, object] = {"save": None}
+    actions: dict[str, object] = {"save": None}
+    # Resident overrides stage alongside the shared rows and commit on save.
+    # Additions validate against the committed case when staged; the save
+    # below arbitrates the staged composition as a whole.
+    take_drafts: list[Draft] = []
+    waiver_drafts: list[Draft] = []
+    removed_take_indices: set[int] = set()
+    removed_waiver_indices: set[int] = set()
 
     def refresh_save() -> None:
-        save = footer["save"]
+        save = actions["save"]
         if save is not None:
             save.set_enabled(not any(overspent.values()))
 
@@ -244,10 +827,51 @@ def _open_elective_properties_dialog(
                 if desired == direct_elective_counts(instance, pgy):
                     continue
                 updated = set_elective_allocation(updated, pgy, desired)
+            # Removals apply first so additions validate against freed time.
+            if removed_take_indices or removed_waiver_indices:
+                kept_overrides = [
+                    override
+                    for index, override in enumerate(updated.resident_rotation_overrides)
+                    if index not in removed_take_indices or not override.elective
+                ]
+                kept_waivers = [
+                    waiver
+                    for index, waiver in enumerate(updated.resident_rotation_waivers)
+                    if index not in removed_waiver_indices
+                    or instance.rotation(waiver.rotation_id).kind
+                    is not RotationKind.ELECTIVE
+                ]
+                updated = updated.revised(
+                    resident_rotation_overrides=kept_overrides,
+                    resident_rotation_waivers=kept_waivers,
+                )
+            for draft in take_drafts:
+                funding = str(draft["funding"])
+                updated = add_named_elective_take(
+                    updated,
+                    resident_id=str(draft["resident_id"]),
+                    rotation_id=str(draft["rotation_id"]),
+                    duration_weeks=int(draft["duration_weeks"]),
+                    replaces_rotation_id=(
+                        None if funding == "unallocated" else funding.rsplit("|", 1)[0]
+                    ),
+                )
+            for draft in waiver_drafts:
+                updated = add_resident_rotation_waiver(
+                    updated,
+                    {
+                        "resident_id": str(draft["resident_id"]),
+                        "rotation_id": str(draft["rotation_id"]),
+                        "duration_weeks": int(draft["duration_weeks"]),
+                    },
+                )
             dialog.close()
             ui.notify("Shared elective properties updated", type="positive")
             # A color-only edit leaves a solved schedule valid.
-            if updated == recolored and on_color_save is not None:
+            overrides_dirty = bool(
+                take_drafts or waiver_drafts or removed_take_indices or removed_waiver_indices
+            )
+            if updated == recolored and not overrides_dirty and on_color_save is not None:
                 on_color_save(updated, selected_rotation_id)
             else:
                 on_save(updated, selected_rotation_id)
@@ -258,53 +882,108 @@ def _open_elective_properties_dialog(
         ui.dialog() as dialog,
         ui.card()
         .classes("rbs-elective-properties-dialog p-0 gap-0")
-        .style("width:calc(100vw - 64px);max-width:720px;max-height:calc(100vh - 64px)"),
+        .style(
+            "width:calc(100vw - 64px);max-width:1200px;"
+            "height:calc(100vh - 64px);max-height:900px"
+        ),
     ):
-        with ui.row().classes("w-full items-center justify-between gap-3 px-5 py-4"):
-            ui.label("Edit shared elective properties").classes("rbs-type-dialog-title")
-            ui.button(icon="close", on_click=dialog.close).props(
-                button_props(ICON_BUTTON_PROPS, "aria-label='Close shared elective properties'")
-            )
-        ui.separator()
-        # The card is sized by its content, so a flex-1 scroll area would have no
-        # height to resolve against. Cap and scroll the content column instead.
-        with (
-            ui.column()
-            .classes("w-full gap-4 p-5")
-            .style("overflow-y:auto;max-height:calc(100vh - 220px)")
+        with ui.row().classes(
+            "rbs-elective-properties-header w-full items-center gap-5 px-5 py-4"
         ):
-            rotation_color_palette(
-                color_draft,
-                instance.color_scheme.palette,
+            ui.label("Edit shared elective properties").classes(
+                "rbs-elective-properties-title rbs-type-dialog-title whitespace-nowrap"
             )
-            with ui.column().classes("w-full gap-3"):
-                with ui.column().classes("gap-0"):
-                    ui.label("Elective time").classes("rbs-type-control-label")
-                    ui.label(
-                        "Adding blocks spends a training level's unscheduled weeks; "
-                        "removing them gives the time back."
-                    ).classes("rbs-type-caption rbs-text-muted")
-                if not drafts:
-                    ui.label("No training levels are configured yet.").classes(
-                        "rbs-type-body rbs-text-muted"
-                    )
-                for pgy, rows in drafts.items():
-                    _elective_time_level_editor(
-                        instance,
-                        pgy,
-                        rows,
-                        budget_weeks=budgets[pgy],
-                        overspent=overspent,
-                        on_change=refresh_save,
-                    )
-        ui.separator()
-        with ui.row().classes("w-full justify-end gap-3 p-4"):
-            ui.button("Cancel", on_click=dialog.close).props(TERTIARY_BUTTON_PROPS)
-            footer["save"] = ui.button(
-                "Save elective properties",
+            with (
+                ui.tabs()
+                .props("dense no-caps inline-label align=left mobile-arrows outside-arrows")
+                .classes("rbs-elective-properties-tabs min-w-0") as tabs
+            ):
+                general_tab = ui.tab(
+                    "elective_properties_general",
+                    label="General",
+                    icon="tune",
+                )
+                time_tab = ui.tab(
+                    "elective_properties_time",
+                    label="Training-level rules",
+                    icon="groups",
+                )
+                overrides_tab = ui.tab(
+                    "elective_properties_overrides",
+                    label="Resident overrides",
+                    icon="person_add",
+                )
+            ui.space()
+            actions["save"] = ui.button(
+                "Save",
                 icon="save",
                 on_click=save_properties,
-            ).props(PRIMARY_BUTTON_PROPS)
+            ).props(PRIMARY_BUTTON_PROPS).classes("rbs-elective-properties-save")
+            ui.button(icon="close", on_click=dialog.close).props(
+                button_props(ICON_BUTTON_PROPS, "aria-label='Close shared elective properties'")
+            ).classes("rbs-elective-properties-close")
+        with (
+            ui.tab_panels(tabs, value=general_tab)
+            .props("animated")
+            .classes("rbs-elective-properties-panels w-full flex-1 min-h-0")
+        ):
+            with ui.tab_panel(general_tab).classes("h-full p-0"):
+                with ui.scroll_area().classes("h-full w-full"):
+                    with ui.column().classes("w-full gap-5 p-6"):
+                        with ui.column().classes("gap-1"):
+                            ui.label("General elective settings").classes(
+                                "rbs-type-section-title"
+                            )
+                            ui.label(
+                                "Choose the block schedule color shared by standalone electives."
+                            ).classes("rbs-type-caption rbs-text-muted")
+                        rotation_color_palette(
+                            color_draft,
+                            instance.color_scheme.palette,
+                        )
+
+            with ui.tab_panel(time_tab).classes("h-full p-0"):
+                with ui.scroll_area().classes("h-full w-full"):
+                    with ui.column().classes("w-full gap-4 p-6"):
+                        with ui.column().classes("gap-1"):
+                            ui.label("Elective time").classes("rbs-type-section-title")
+                            ui.label(
+                                "Adding blocks spends a training level's unscheduled weeks; "
+                                "removing them gives the time back."
+                            ).classes("rbs-type-caption rbs-text-muted")
+                        if not drafts:
+                            ui.label("No training levels are configured yet.").classes(
+                                "rbs-type-body rbs-text-muted"
+                            )
+                        for pgy, rows in drafts.items():
+                            _elective_time_level_editor(
+                                instance,
+                                pgy,
+                                rows,
+                                budget_weeks=budgets[pgy],
+                                overspent=overspent,
+                                on_change=refresh_save,
+                                expanded=len(drafts) == 1,
+                            )
+
+            with ui.tab_panel(overrides_tab).classes("h-full p-0"):
+                with ui.scroll_area().classes("h-full w-full"):
+                    with ui.column().classes("w-full gap-4 p-6"):
+                        with ui.column().classes("gap-1"):
+                            ui.label("Resident overrides").classes(
+                                "rbs-type-section-title"
+                            )
+                            ui.label(
+                                "Add or waive a named resident's elective placement "
+                                "without changing the rules for everyone else."
+                            ).classes("rbs-type-caption rbs-text-muted")
+                        _elective_overrides_editor(
+                            instance,
+                            take_drafts,
+                            waiver_drafts,
+                            removed_take_indices,
+                            removed_waiver_indices,
+                        )
     refresh_save()
     dialog.open()
 
@@ -317,22 +996,26 @@ def _elective_time_level_editor(
     budget_weeks: int,
     overspent: dict[int, bool],
     on_change: Callable[[], None],
+    expanded: bool = False,
 ) -> None:
     """Edit one training level's Elective slots against the weeks it can spend."""
     from nicegui import ui
 
-    with (
-        ui.card()
-        .props("flat bordered")
-        .classes("rbs-rotation-nested-card rbs-elective-time-level w-full gap-3 p-4")
-    ):
-        with ui.row().classes("w-full items-center justify-between gap-3"):
-            ui.label(instance.training_level_name(pgy)).classes("rbs-font-semibold")
-            budget = ui.label().classes("rbs-type-caption rbs-text-muted")
-        body = ui.column().classes("w-full gap-3")
+    def planned_weeks() -> int:
+        return sum(int(row["duration_weeks"]) * int(row["count"]) for row in rows)
 
-        def planned_weeks() -> int:
-            return sum(int(row["duration_weeks"]) * int(row["count"]) for row in rows)
+    def allocation_caption() -> str:
+        planned = planned_weeks()
+        remaining = max(budget_weeks - planned, 0)
+        return f"{_weeks_label(planned)} Elective · {_weeks_label(remaining)} unscheduled"
+
+    with ui.expansion(
+        instance.training_level_name(pgy),
+        caption=allocation_caption(),
+        icon="school",
+        value=expanded,
+    ).classes("rbs-pgy-rule rbs-elective-time-level w-full") as level:
+        body = ui.column().classes("w-full gap-3")
 
         def unused_durations(keeping: int | None = None) -> dict[int, str]:
             taken = {int(row["duration_weeks"]) for row in rows} - {keeping}
@@ -345,7 +1028,7 @@ def _elective_time_level_editor(
         def update_budget() -> None:
             planned = planned_weeks()
             remaining = budget_weeks - planned
-            budget.set_text(f"{max(remaining, 0)} unscheduled · {planned} Elective")
+            level.props["caption"] = allocation_caption()
             overspend.set_text(
                 f"{_weeks_label(-remaining)} more than "
                 f"{instance.training_level_label(pgy, compact=True)} has left to spend"

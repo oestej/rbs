@@ -321,18 +321,47 @@ class SolverIntegrityMixin:
                     f"{override.replaces_rotation_id!r}"
                 )
             rotation = self.rotation(override.rotation_id)
-            if rotation.kind not in {RotationKind.STANDARD, RotationKind.FMED}:
-                raise ValueError(
-                    "resident rotation overrides can only add Mandatory or FMED rotations"
-                )
-            try:
-                rotation.block_config(resident.pgy, override.duration_weeks)
-            except KeyError as exc:
-                raise ValueError(
-                    f"resident rotation override: {rotation.code} does not allow "
-                    f"{override.duration_weeks}-week blocks for "
-                    f"{self.training_level_label(resident.pgy, compact=True)}"
-                ) from exc
+            if override.elective:
+                if rotation.kind not in {
+                    RotationKind.STANDARD,
+                    RotationKind.ELECTIVE,
+                    RotationKind.FMED,
+                }:
+                    raise ValueError(
+                        "resident rotation overrides can only take Mandatory, "
+                        "standalone Elective, or FMED services as electives"
+                    )
+                if override.group_instance_id is not None:
+                    raise ValueError(
+                        "resident rotation overrides cannot group an elective take"
+                    )
+                option = self.electives.option_for(override.rotation_id)
+                if (
+                    option is None
+                    or not option.allows(resident.pgy, override.duration_weeks)
+                    or not rotation.allows_duration(
+                        override.duration_weeks, pgy=resident.pgy
+                    )
+                ):
+                    raise ValueError(
+                        f"resident rotation override: {rotation.code} is not an "
+                        f"available elective for "
+                        f"{self.training_level_label(resident.pgy, compact=True)} "
+                        f"in {override.duration_weeks}-week blocks"
+                    )
+            else:
+                if rotation.kind not in {RotationKind.STANDARD, RotationKind.FMED}:
+                    raise ValueError(
+                        "resident rotation overrides can only add Mandatory or FMED rotations"
+                    )
+                try:
+                    rotation.block_config(resident.pgy, override.duration_weeks)
+                except KeyError as exc:
+                    raise ValueError(
+                        f"resident rotation override: {rotation.code} does not allow "
+                        f"{override.duration_weeks}-week blocks for "
+                        f"{self.training_level_label(resident.pgy, compact=True)}"
+                    ) from exc
             if override.replaces_rotation_id is None:
                 continue
             replacement = self.rotation(override.replaces_rotation_id)

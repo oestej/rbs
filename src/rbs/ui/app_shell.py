@@ -279,11 +279,20 @@ def _render_tab(session: WorkspaceSession, name: str) -> None:
             session.active_tab = "clinic"
             session.persist_instance(updated)
 
+        def persist_clinic_block_schedule(
+            updated: SchedulerInput,
+            draft_schedule: Schedule,
+        ) -> None:
+            session.active_tab = "clinic"
+            session.persist_instance(updated, draft_schedule=draft_schedule)
+
         render_clinic_tab(
             workspace.instance,
             on_save=persist_clinic,
             active_section=session.clinic_section,
             on_section_change=lambda event: _remember_clinic_section(session, event.value),
+            schedule=workspace.latest_schedule,
+            on_block_schedule_save=persist_clinic_block_schedule,
         )
     elif name == "residents":
         _render_residents(session, workspace)

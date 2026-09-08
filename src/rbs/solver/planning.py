@@ -198,6 +198,11 @@ def expand_occurrences(
                     )
         for index, override in enumerate(resident_overrides):
             rule = rotations[override.rotation_id].pgy_rule(resident.pgy)
+            elective_option = (
+                instance.electives.option_for(override.rotation_id)
+                if override.elective
+                else None
+            )
             override_group = (
                 instance.rotation_group_for(resident.pgy, override.rotation_id)
                 if override.group_instance_id is not None
@@ -221,8 +226,14 @@ def expand_occurrences(
                     rotation_id=override.rotation_id,
                     duration_weeks=override.duration_weeks,
                     group_id=key,
+                    elective=override.elective,
                     prerequisite_rotation_ids=tuple(rule.prerequisite_rotation_ids),
                     earliest_start_week=rule.earliest_start_week,
+                    elective_blackout_weeks=(
+                        tuple(elective_option.blackout_weeks)
+                        if elective_option is not None
+                        else ()
+                    ),
                     rotation_group_key=(
                         rotation_group_key(
                             override_group.pgy,

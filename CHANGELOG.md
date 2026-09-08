@@ -6,6 +6,16 @@
 
 - **Files:** Only the current file format opens. Older `.rbsc` files are
   rejected instead of being upgraded in place.
+- **Clinic:** Scheduling a fixed Clinic block for a resident now places it
+  on their block schedule immediately, with a solve still required
+  afterwards. Removing the block clears that placement again.
+- **Rotations:** The roomier shared elective properties editor separates
+  general settings, training-level rules, and resident overrides into tabs.
+  Training levels collapse for easier scanning, resident exceptions use the
+  same focused dialogs and summary rows as other rule editors, and Save stays
+  beside Close. Resident overrides can add an Elective Slot, funded by
+  unallocated time or a direct elective block, or waive a direct elective
+  block. The solver places Elective Slots like other elective blocks.
 - **Scheduling:** A failed solve now names locked blocks that exceed a
   rotation's maximum or repeat a non-repeatable elective, instead of
   returning with no explanation.

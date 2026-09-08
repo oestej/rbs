@@ -33,6 +33,8 @@ from rbs.ui.editor_common import (
     _academic_block_start_for_week,
     _academic_block_start_options,
 )
+from rbs.ui.locks import ScheduleBlock, replace_schedule_block
+from rbs.ui.residents.ops import resident_schedule_report_rows
 from rbs.ui.rotations.editor import (
     NEW_MANDATORY_ROTATION_ID,
     _apply_away_selection,
@@ -53,10 +55,18 @@ from rbs.ui.rotations.editor import (
 from rbs.ui.rotations.ops import (
     add_mandatory_rotation,
     add_manual_clinic_block,
+    add_named_elective_take,
     add_resident_rotation_waiver,
+    elective_waiver_duration_options,
+    named_elective_take_duration_options,
+    named_elective_take_service_options,
+    named_elective_takes,
     next_mandatory_rotation_id,
+    place_manual_clinic_block,
+    remaining_direct_elective_blocks,
     remove_mandatory_rotation,
     remove_manual_clinic_block,
+    remove_named_elective_take,
     remove_resident_rotation_waiver,
     replace_clinic_block_rules,
     replace_fmed_pgy_rules,
@@ -64,12 +74,14 @@ from rbs.ui.rotations.ops import (
     replace_standard_rotation,
     resident_missing_mandatory_rotations,
     resident_rotation_week_totals,
+    resolve_elective_waiver_rotation,
     rotation_editor_state,
     rotation_from_editor_state,
     rotation_group_members_by_pgy,
     set_elective_allocation,
     special_rotations,
     standard_rotations,
+    withdraw_manual_clinic_block,
 )
 from rbs.ui.rotations.widgets import (
     add_block_config,
@@ -1210,9 +1222,9 @@ def test_rotation_summary_is_the_first_and_default_workspace_tab() -> None:
         and "rbs-rotation-color-choice" in element._classes
     ]
     assert dedicated_color_buttons == []
-    assert {"Edit rules", "Edit shared properties"} <= {
-        element._props.get("label") for element in created
-    }
+    labels = {element._props.get("label") for element in created}
+    assert "Edit rules" in labels
+    assert "Edit shared properties" not in labels
     assert (
         sum(getattr(element, "_text", None) == "Schedule color editable" for element in created)
         == 0
@@ -1901,6 +1913,115 @@ def test_manual_clinic_block_replaces_elective_and_round_trips() -> None:
     assert remove_manual_clinic_block(updated, 0).manual_clinic_blocks == []
 
 
+def test_place_manual_clinic_block_shows_on_the_block_schedule() -> None:
+    instance = sample_instance()
+
+    updated, draft = place_manual_clinic_block(
+        instance,
+        None,
+        {
+            "resident_id": "resident-001",
+            "rotation_id": "clinic",
+            "start_week": 1,
+            "duration_weeks": 2,
+            "replaces_rotation_id": "elective",
+        },
+    )
+
+    assert len(updated.manual_clinic_blocks) == 1
+    assert draft is not None
+    placed = next(
+        assignment
+        for assignment in draft.assignments
+        if assignment.resident_id == "resident-001" and assignment.rotation_id == "clinic"
+    )
+    assert placed.weeks == [1, 2]
+    assert placed.locked_weeks == [1, 2]
+    assert placed.clinic_slots == []
+    assert "solve required" in " ".join(draft.meta.notes)
+    rows = resident_schedule_report_rows(updated, draft, "resident-001")
+    assert [(row["rotation_code"], row["weeks"]) for row in rows] == [("CLINIC", "1–2")]
+
+
+def test_place_manual_clinic_block_matches_an_existing_draft() -> None:
+    instance = sample_instance()
+    draft = replace_schedule_block(
+        instance,
+        None,
+        ScheduleBlock(
+            resident_id="resident-001",
+            rotation_id="clinic",
+            start_week=1,
+            duration_weeks=2,
+        ),
+    )
+
+    updated, unchanged = place_manual_clinic_block(
+        instance,
+        draft,
+        {
+            "resident_id": "resident-001",
+            "rotation_id": "clinic",
+            "start_week": 1,
+            "duration_weeks": 2,
+            "replaces_rotation_id": "elective",
+        },
+    )
+
+    assert len(updated.manual_clinic_blocks) == 1
+    assert unchanged is None
+
+
+def test_withdraw_manual_clinic_block_clears_the_draft() -> None:
+    instance = sample_instance()
+    updated, draft = place_manual_clinic_block(
+        instance,
+        None,
+        {
+            "resident_id": "resident-001",
+            "rotation_id": "clinic",
+            "start_week": 1,
+            "duration_weeks": 2,
+            "replaces_rotation_id": "elective",
+        },
+    )
+    assert draft is not None
+
+    withdrawn, cleared = withdraw_manual_clinic_block(updated, draft, 0)
+
+    assert withdrawn.manual_clinic_blocks == []
+    assert cleared is not None
+    assert [
+        assignment
+        for assignment in cleared.assignments
+        if assignment.resident_id == "resident-001"
+    ] == []
+    assert resident_schedule_report_rows(withdrawn, cleared, "resident-001") == []
+
+
+def test_withdraw_manual_clinic_block_without_a_draft() -> None:
+    instance = sample_instance()
+    updated, _draft = place_manual_clinic_block(
+        instance,
+        None,
+        {
+            "resident_id": "resident-001",
+            "rotation_id": "clinic",
+            "start_week": 1,
+            "duration_weeks": 2,
+            "replaces_rotation_id": "elective",
+        },
+    )
+
+    withdrawn, cleared = withdraw_manual_clinic_block(updated, None, 0)
+
+    assert withdrawn.manual_clinic_blocks == []
+    assert cleared is None
+
+    with pytest.raises(ValueError, match="manual Clinic block not found"):
+        withdraw_manual_clinic_block(withdrawn, None, 0)
+
+
 def test_manual_clinic_block_can_use_resident_unallocated_time() -> None:
     freed, _rotation = _free_night_float_pgy1_weeks(sample_instance())
     before = resident_rotation_week_totals(freed, "resident-001")
@@ -1981,6 +2102,99 @@ def test_clinic_resident_exemption_frees_time_for_a_manual_block() -> None:
     restored = remove_resident_rotation_waiver(without_block, 0)
     assert restored.resident_rotation_waivers == []
     assert restored.resident_unallocated_weeks("resident-001") == 0
+
+
+def test_named_elective_take_add_remove_and_totals() -> None:
+    instance = sample_instance()
+    resident_id = "resident-001"
+    remaining = remaining_direct_elective_blocks(instance, resident_id)
+    assert remaining
+    durations = named_elective_take_duration_options(instance, resident_id)
+    duration = next(
+        size for size in durations if any(size == block[1] for block in remaining)
+    )
+    service_id = next(
+        iter(named_elective_take_service_options(instance, resident_id, duration))
+    )
+    direct_id = next(rid for (rid, size) in remaining if size == duration)
+    assert named_elective_take_service_options(instance, "unknown", duration) == {}
+    assert named_elective_take_duration_options(instance, "unknown") == []
+
+    before = resident_rotation_week_totals(instance, resident_id)
+    updated = add_named_elective_take(
+        instance,
+        resident_id=resident_id,
+        rotation_id=service_id,
+        duration_weeks=duration,
+        replaces_rotation_id=direct_id,
+    )
+    takes = named_elective_takes(updated, resident_id)
+    assert len(takes) == 1
+    index, take = takes[0]
+    assert take.elective and take.rotation_id == service_id
+    after = resident_rotation_week_totals(updated, resident_id)
+    assert after["elective"] == before["elective"]
+    assert after["mandatory"] == before["mandatory"]
+
+    cleared = remove_named_elective_take(updated, index)
+    assert named_elective_takes(cleared, resident_id) == []
+    assert resident_rotation_week_totals(cleared, resident_id) == before
+
+    with pytest.raises(ValueError, match="resident elective take not found"):
+        remove_named_elective_take(cleared, index)
+
+
+def test_named_elective_take_uses_unallocated_time() -> None:
+    freed, _rotation = _free_night_float_pgy1_weeks(sample_instance())
+    resident_id = "resident-001"
+    duration = named_elective_take_duration_options(freed, resident_id)[0]
+    service_id = next(
+        iter(named_elective_take_service_options(freed, resident_id, duration))
+    )
+    before = freed.resident_unallocated_weeks(resident_id)
+    assert before >= duration
+
+    updated = add_named_elective_take(
+        freed,
+        resident_id=resident_id,
+        rotation_id=service_id,
+        duration_weeks=duration,
+        replaces_rotation_id=None,
+    )
+
+    assert updated.resident_unallocated_weeks(resident_id) == before - duration
+    assert resident_rotation_week_totals(updated, resident_id)["elective"] == (
+        resident_rotation_week_totals(freed, resident_id)["elective"] + duration
+    )
+
+
+def test_elective_waiver_options_track_consumption() -> None:
+    instance = sample_instance()
+    resident_id = "resident-001"
+    durations = elective_waiver_duration_options(instance, resident_id)
+    assert durations
+    duration = next(iter(durations))
+    rotation_id = resolve_elective_waiver_rotation(instance, resident_id, duration)
+
+    waived = add_resident_rotation_waiver(
+        instance,
+        {
+            "resident_id": resident_id,
+            "rotation_id": rotation_id,
+            "duration_weeks": duration,
+        },
+    )
+
+    remaining = elective_waiver_duration_options(waived, resident_id)
+    assert duration not in remaining or (
+        remaining_direct_elective_blocks(waived, resident_id).get(
+            (rotation_id, duration), 0
+        )
+        > 0
+    )
+    if duration not in remaining:
+        with pytest.raises(ValueError, match="no waivable elective block"):
+            resolve_elective_waiver_rotation(waived, resident_id, duration)
 
 
 def test_standalone_clinic_tab_uses_tabs_and_structured_site_cards() -> None:
