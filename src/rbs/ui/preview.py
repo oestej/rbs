@@ -96,6 +96,9 @@ class PreviewDocumentIO(DocumentIO):
     async def load_settings(self):
         raise self._unavailable()
 
+    async def save_csv_export(self, content: str, suggested_name: str):  # noqa: ARG002
+        raise self._unavailable()
+
     def new(self, *, sample: bool = False):  # noqa: ARG002 - signature parity
         raise self._unavailable()
 

@@ -449,47 +449,65 @@ def _render_clinic_schedule(session: WorkspaceSession, workspace: Workspace) -> 
         session.clinic_site = str(event.value or "all")
         render_board()
 
-    def export_clinic_schedule(extension: str) -> None:
+    def export_options() -> tuple[str | None, bool]:
+        site = selected_clinic_site()
+        return site, bool(session.show_past_clinic_weeks)
+
+    def report_export_failure(extension: str, exc: Exception) -> None:
+        get_logger("documents").error(
+            "schedule.export_failed",
+            source=extension,
+            error_code=type(exc).__name__,
+            exc_info=True,
+        )
+        ui.notify(str(exc), type="negative")
+
+    async def export_clinic_csv() -> None:
         try:
-            site = selected_clinic_site()
-            export_options = {
-                "show_past_weeks": bool(session.show_past_clinic_weeks),
-                "site": site,
-            }
-            if extension == "csv":
-                content = build_clinic_schedule_csv(
-                    instance,
-                    schedule,
-                    **export_options,
+            site, show_past_weeks = export_options()
+            content = build_clinic_schedule_csv(
+                instance,
+                schedule,
+                show_past_weeks=show_past_weeks,
+                site=site,
+            )
+            filename = clinic_schedule_csv_filename(
+                instance.academic_year,
+                site=site,
+            )
+            if not await _present_csv_export(session, content, filename):
+                get_logger("documents").info(
+                    "schedule.export_cancelled",
+                    source="csv",
                 )
-                filename = clinic_schedule_csv_filename(
-                    instance.academic_year,
-                    site=site,
-                )
-                ui.download.content(content, filename)
-            else:
-                content = build_clinic_schedule_pdf(
-                    instance,
-                    schedule,
-                    **export_options,
-                )
-                filename = clinic_schedule_pdf_filename(
-                    instance.academic_year,
-                    site=site,
-                )
-                _open_exported_pdf(session, content, filename)
+                return
             get_logger("documents").info(
                 "schedule.exported",
-                source=extension,
+                source="csv",
             )
         except Exception as exc:
-            get_logger("documents").error(
-                "schedule.export_failed",
-                source=extension,
-                error_code=type(exc).__name__,
-                exc_info=True,
+            report_export_failure("csv", exc)
+
+    def export_clinic_pdf() -> None:
+        try:
+            site, show_past_weeks = export_options()
+            content = build_clinic_schedule_pdf(
+                instance,
+                schedule,
+                show_past_weeks=show_past_weeks,
+                site=site,
             )
-            ui.notify(str(exc), type="negative")
+            filename = clinic_schedule_pdf_filename(
+                instance.academic_year,
+                site=site,
+            )
+            _open_exported_pdf(session, content, filename)
+            get_logger("documents").info(
+                "schedule.exported",
+                source="pdf",
+            )
+        except Exception as exc:
+            report_export_failure("pdf", exc)
 
     with page_shells.schedule_canvas(
         "Clinic schedule",
@@ -520,12 +538,12 @@ def _render_clinic_schedule(session: WorkspaceSession, workspace: Workspace) -> 
                 ui.button(
                     "Export CSV",
                     icon="table_view",
-                    on_click=lambda: export_clinic_schedule("csv"),
+                    on_click=export_clinic_csv,
                 ).props(button_props(SECONDARY_BUTTON_PROPS, "dense"))
                 ui.button(
                     "Export PDF",
                     icon="picture_as_pdf",
-                    on_click=lambda: export_clinic_schedule("pdf"),
+                    on_click=export_clinic_pdf,
                 ).props(button_props(SECONDARY_BUTTON_PROPS, "dense"))
 
         clinic_schedule = ui.column().classes("w-full min-w-0 gap-2")
@@ -580,6 +598,27 @@ def _open_exported_pdf(session: WorkspaceSession, content: bytes, filename: str)
         native=bool(getattr(documents, "opens_exports_natively", False)),
         owner=session.principal.subject if session.principal is not None else None,
     )
+
+
+async def _present_csv_export(
+    session: WorkspaceSession,
+    content: str,
+    filename: str,
+) -> bool:
+    """Download in browsers or save through a native desktop file picker."""
+    from nicegui import ui
+
+    documents = getattr(session.workspace_host, "document_io", None)
+    if documents is None:
+        ui.download.content(content, filename, "text/csv")
+        return True
+
+    destination = await documents.save_csv_export(content, filename)
+    if destination is None:
+        ui.notify("CSV export cancelled - nothing was written", type="info")
+        return False
+    ui.notify(f"CSV saved to {destination.name}", type="positive")
+    return True
 
 
 def _render_residents(session: WorkspaceSession, workspace: Workspace) -> None:

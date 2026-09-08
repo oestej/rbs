@@ -402,6 +402,15 @@ class NiceGuiNativeFileDialogs:
         )
         return _selected_path(selected)
 
+    async def choose_csv_export_path(self, suggested_name: str) -> Path | None:
+        selected = await _native_window().create_file_dialog(
+            dialog_type=_file_dialog_type("SAVE"),
+            directory=str(self.workspace_directory),
+            save_filename=suggested_name,
+            file_types=("CSV file (*.csv)",),
+        )
+        return _selected_path(selected)
+
     async def choose_log_export_path(self, suggested_name: str) -> Path | None:
         selected = await _native_window().create_file_dialog(
             dialog_type=_file_dialog_type("SAVE"),

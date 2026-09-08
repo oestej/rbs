@@ -58,6 +58,13 @@ class NativeFileDialogs(Protocol):
         """Choose a settings JSON destination, or return ``None`` on cancel."""
         ...
 
+    async def choose_csv_export_path(
+        self,
+        suggested_name: str,
+    ) -> str | Path | None:
+        """Choose a CSV export destination, or return ``None`` on cancel."""
+        ...
+
 
 class DocumentCardinalityError(ValueError):
     """Raised when a desktop document does not contain exactly one workspace."""
@@ -216,6 +223,19 @@ class DesktopDocumentController:
                 pass
             raise
         return workspace
+
+    async def save_csv_export(
+        self,
+        content: str,
+        suggested_name: str,
+    ) -> Path | None:
+        """Write a generated schedule CSV through the native save picker."""
+        selected = await self.dialogs.choose_csv_export_path(suggested_name)
+        if selected is None or str(selected).strip() == "":
+            return None
+        destination = _with_csv_suffix(Path(selected).expanduser()).resolve()
+        _atomic_write_text(destination, content)
+        return destination
 
     def load(self, path: str | Path) -> Workspace:
         """Validate and load one ``.rbsc`` document, replacing the ephemeral store.
@@ -616,6 +636,12 @@ def _with_json_suffix(path: Path) -> Path:
     if path.suffix.lower() == ".json":
         return path
     return path.with_suffix(".json")
+
+
+def _with_csv_suffix(path: Path) -> Path:
+    if path.suffix.lower() == ".csv":
+        return path
+    return path.with_suffix(".csv")
 
 
 def _atomic_write_text(destination: Path, payload: str) -> None:

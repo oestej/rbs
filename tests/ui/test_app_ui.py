@@ -98,6 +98,78 @@ def test_schedule_pages_share_the_canvas_header_and_toolbar_order() -> None:
     assert control_kinds[2:] == ["Button", "Button"]
 
 
+def test_csv_export_uses_native_document_file_picker(monkeypatch, tmp_path) -> None:
+    from nicegui import ui
+
+    from rbs.ui.app_shell import _present_csv_export
+
+    calls: list[tuple[str, str]] = []
+
+    class Documents:
+        async def save_csv_export(self, content: str, suggested_name: str):
+            calls.append((content, suggested_name))
+            return tmp_path / "clinic.csv"
+
+    downloads: list[tuple] = []
+    notifications: list[tuple[str, str]] = []
+    monkeypatch.setattr(ui.download, "content", lambda *args: downloads.append(args))
+    monkeypatch.setattr(
+        ui,
+        "notify",
+        lambda message, *, type: notifications.append((message, type)),
+    )
+    session = SimpleNamespace(
+        workspace_host=SimpleNamespace(document_io=Documents()),
+    )
+
+    assert asyncio.run(_present_csv_export(session, "Week\n1\n", "schedule.csv"))
+    assert calls == [("Week\n1\n", "schedule.csv")]
+    assert downloads == []
+    assert notifications == [("CSV saved to clinic.csv", "positive")]
+
+
+def test_csv_export_keeps_browser_download_behavior(monkeypatch) -> None:
+    from nicegui import ui
+
+    from rbs.ui.app_shell import _present_csv_export
+
+    downloads: list[tuple] = []
+    monkeypatch.setattr(ui.download, "content", lambda *args: downloads.append(args))
+    session = SimpleNamespace(
+        workspace_host=SimpleNamespace(document_io=None),
+    )
+
+    assert asyncio.run(_present_csv_export(session, "Week\n1\n", "schedule.csv"))
+    assert downloads == [("Week\n1\n", "schedule.csv", "text/csv")]
+
+
+def test_cancelled_native_csv_export_reports_that_nothing_was_written(
+    monkeypatch,
+) -> None:
+    from nicegui import ui
+
+    from rbs.ui.app_shell import _present_csv_export
+
+    class Documents:
+        async def save_csv_export(self, _content: str, _suggested_name: str):
+            return None
+
+    notifications: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        ui,
+        "notify",
+        lambda message, *, type: notifications.append((message, type)),
+    )
+    session = SimpleNamespace(
+        workspace_host=SimpleNamespace(document_io=Documents()),
+    )
+
+    assert not asyncio.run(_present_csv_export(session, "Week\n", "schedule.csv"))
+    assert notifications == [
+        ("CSV export cancelled - nothing was written", "info")
+    ]
+
+
 def test_loading_screen_is_accessible_and_covers_startup() -> None:
     from rbs.ui.app_branding import (
         DISMISS_LOADING_SCREEN_SCRIPT,

@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- **Clinic schedule:** CSV exports now use a native save dialog in RBS Desktop
+  and write to the selected file.
 - **Editing:** A form opened before another edit now reloads the current
   workspace instead of overwriting newer work.
 - **Schedules:** Name, label, and color-only edits no longer mark the current

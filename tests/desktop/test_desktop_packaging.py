@@ -227,6 +227,39 @@ def test_native_settings_dialogs_use_json_filters(monkeypatch, tmp_path) -> None
     ]
 
 
+def test_native_csv_dialog_starts_in_documents(monkeypatch, tmp_path) -> None:
+    class Window:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def create_file_dialog(self, **options):
+            self.calls.append(options)
+            return (tmp_path / "clinic.csv",)
+
+    window = Window()
+    documents = tmp_path / "Documents"
+    documents.mkdir()
+    monkeypatch.setattr(desktop, "_native_window", lambda: window)
+    monkeypatch.setitem(
+        sys.modules,
+        "webview",
+        SimpleNamespace(FileDialog=SimpleNamespace(OPEN=10, SAVE=20)),
+    )
+    dialogs = desktop.NiceGuiNativeFileDialogs(workspace_directory=documents)
+
+    assert asyncio.run(dialogs.choose_csv_export_path("schedule.csv")) == (
+        tmp_path / "clinic.csv"
+    )
+    assert window.calls == [
+        {
+            "dialog_type": 20,
+            "directory": str(documents),
+            "save_filename": "schedule.csv",
+            "file_types": ("CSV file (*.csv)",),
+        }
+    ]
+
+
 def test_main_calls_freeze_support_before_native_runtime(monkeypatch, tmp_path) -> None:
     calls: list[str] = []
     monkeypatch.setattr(desktop.multiprocessing, "freeze_support", lambda: calls.append("freeze"))
