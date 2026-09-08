@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-09-08
+
 ### Fixed
 
 - **Academic year:** Moving a workspace to another academic year now asks for
@@ -302,7 +304,8 @@
 - **Releases:** Download a macOS disk image built from the tagged commit, with
   that release's changelog section as its published description.
 
-[Unreleased]: https://github.com/oestej/rbs/compare/v0.1.9...HEAD
+[Unreleased]: https://github.com/oestej/rbs/compare/v0.1.10...HEAD
+[0.1.10]: https://github.com/oestej/rbs/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/oestej/rbs/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/oestej/rbs/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/oestej/rbs/compare/v0.1.6...v0.1.7
