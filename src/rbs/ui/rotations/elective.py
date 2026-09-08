@@ -1509,12 +1509,14 @@ def _elective_rotation_editor(
     )
     draft["color"] = instance.electives.color
     draft["kind"] = RotationKind.ELECTIVE.value
-    size_draft: Draft = {
+    elective_option = instance.electives.option_for(rotation.id) if rotation is not None else None
+    elective_draft: Draft = {
         "eligible_block_sizes": (
             list(instance.eligible_elective_block_sizes(rotation.id))
             if rotation is not None
             else list(instance.elective_block_sizes)
         ),
+        "repeatable": bool(elective_option and elective_option.repeatable),
     }
     blackout_weeks = set(
         instance.elective_blackout_weeks(rotation.id) if rotation is not None else ()
@@ -1558,7 +1560,7 @@ def _elective_rotation_editor(
             draft["kind"] = RotationKind.ELECTIVE.value
             replacement = rotation_from_editor_state(draft)
             eligible_block_sizes = [
-                int(size) for size in size_draft.get("eligible_block_sizes", [])
+                int(size) for size in elective_draft.get("eligible_block_sizes", [])
             ]
             if not eligible_block_sizes:
                 raise ValueError("select at least one eligible Elective block size")
@@ -1567,6 +1569,7 @@ def _elective_rotation_editor(
                     instance,
                     replacement,
                     eligible_block_sizes=eligible_block_sizes,
+                    repeatable=bool(elective_draft.get("repeatable")),
                     blackout_weeks=sorted(blackout_weeks),
                     group_members_by_pgy=group_draft,
                 )
@@ -1577,6 +1580,7 @@ def _elective_rotation_editor(
                     replacement,
                     eligible_pgys=_elective_rule_pgys(draft),
                     eligible_block_sizes=eligible_block_sizes,
+                    repeatable=bool(elective_draft.get("repeatable")),
                     blackout_weeks=sorted(blackout_weeks),
                     group_members_by_pgy=group_draft,
                 )
@@ -1596,7 +1600,7 @@ def _elective_rotation_editor(
     def current_editor_state() -> dict:
         return {
             "draft": draft,
-            "sizes": size_draft,
+            "elective": elective_draft,
             "blackout_weeks": blackout_weeks,
             "group": group_draft,
         }
@@ -1689,14 +1693,26 @@ def _elective_rotation_editor(
                     elective_sizes = (
                         ui.select(
                             _elective_block_size_options(instance.elective_block_sizes),
-                            value=list(size_draft["eligible_block_sizes"]),
+                            value=list(elective_draft["eligible_block_sizes"]),
                             label="Eligible elective block sizes",
                             multiple=True,
                         )
                         .props("outlined options-dense use-chips")
                         .classes("w-full")
                     )
-                    elective_sizes.bind_value(size_draft, "eligible_block_sizes")
+                    elective_sizes.bind_value(elective_draft, "eligible_block_sizes")
+                    with ui.column().classes("rbs-rotation-flags w-full gap-2 rounded p-3"):
+                        ui.label("Elective repeat rules").classes("rbs-type-control-label")
+                        ui.label(
+                            "Leave this off to limit each resident to one block. "
+                            "When it is on, use Maximum total weeks above to limit "
+                            "their total time on this elective."
+                        ).classes("rbs-type-caption rbs-text-muted")
+                        repeatable = ui.checkbox(
+                            "Can be taken more than once as an elective",
+                            value=bool(elective_draft.get("repeatable")),
+                        )
+                        repeatable.bind_value(elective_draft, "repeatable")
 
             with ui.tab_panel(pgy_tab).classes("p-0"):
                 with ui.column().classes("w-full gap-4 p-5"):

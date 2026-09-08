@@ -612,6 +612,7 @@ def test_new_elective_uses_the_full_screen_editor() -> None:
         if element.__class__.__name__ == "Checkbox"
         and getattr(element, "_text", None) == "No clinic hours"
     )
+    repeatable = _repeatable_checkbox(created)
     button_labels = {
         element._props.get("label") for element in created if element.__class__.__name__ == "Button"
     }
@@ -625,6 +626,7 @@ def test_new_elective_uses_the_full_screen_editor() -> None:
     assert "New elective" in text
     assert "Creating" in text
     assert no_clinic.value is False
+    assert repeatable.value is False
     assert "Elective Rules" in text
     assert "Not required program-wide" not in text
     # Rotation-level plus one per PGY rule cloned from the first configured
@@ -665,6 +667,41 @@ def test_new_elective_detail_panel_renders_the_full_screen_editor() -> None:
     assert "New elective" in text
 
 
+def test_new_standalone_elective_can_be_created_repeatable() -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    saves: list = []
+    before = set(ui.context.client.elements)
+    _elective_rotation_editor(
+        instance,
+        None,
+        on_cancel=lambda: None,
+        on_save=lambda updated, rotation_id: saves.append((updated, rotation_id)),
+    )
+    created = _created_since(before)
+    code = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Input" and element._props.get("label") == "Rotation code"
+    )
+    name = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Input" and element._props.get("label") == "Rotation name"
+    )
+    repeatable = _repeatable_checkbox(created)
+
+    code.set_value("REP")
+    name.set_value("Repeat Elective")
+    repeatable.set_value(True)
+    _click(_button(created, "Save elective"))
+
+    updated, rotation_id = saves[-1]
+    assert rotation_id == "repeat_elective"
+    assert updated.elective_option_is_repeatable(rotation_id)
+
+
 def test_existing_elective_uses_the_master_detail_editor() -> None:
     from nicegui import ui
 
@@ -698,6 +735,8 @@ def test_existing_elective_uses_the_master_detail_editor() -> None:
         and element._props.get("label") == "Maximum total weeks"
         for element in created
     )
+    repeatable = _repeatable_checkbox(created)
+    assert repeatable.value is False
     assert {
         element._props.get("label") for element in created if element.__class__.__name__ == "Tab"
     } == {"General", "Training-level rules", "Clinic", "Availability"}
@@ -709,6 +748,38 @@ def test_existing_elective_uses_the_master_detail_editor() -> None:
         str(getattr(element, "_text", "")).startswith("Shared Elective color ·")
         for element in created
     )
+
+
+@pytest.mark.parametrize(("initial", "target"), [(False, True), (True, False)])
+def test_existing_standalone_elective_can_change_repeatability(
+    initial: bool,
+    target: bool,
+) -> None:
+    from nicegui import ui
+
+    instance = add_elective_rotation(
+        sample_instance(),
+        _standalone_elective(),
+        repeatable=initial,
+    )
+    saves: list = []
+    before = set(ui.context.client.elements)
+    _elective_rotation_editor(
+        instance,
+        instance.rotation("addiction_medicine_elective"),
+        on_cancel=lambda: None,
+        on_save=lambda updated, rotation_id: saves.append((updated, rotation_id)),
+    )
+    created = _created_since(before)
+    repeatable = _repeatable_checkbox(created)
+
+    assert repeatable.value is initial
+    repeatable.set_value(target)
+    _click(_button(created, "Save elective"))
+
+    updated, rotation_id = saves[-1]
+    assert rotation_id == "addiction_medicine_elective"
+    assert updated.elective_option_is_repeatable(rotation_id) is target
 
 
 def test_available_elective_can_be_grouped_one_way_with_clinic_and_fmed() -> None:
@@ -1018,6 +1089,15 @@ def _button(created: list, label: str):
         element
         for element in created
         if element.__class__.__name__ == "Button" and element._props.get("label") == label
+    )
+
+
+def _repeatable_checkbox(created: list):
+    return next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Checkbox"
+        and getattr(element, "_text", None) == "Can be taken more than once as an elective"
     )
 
 

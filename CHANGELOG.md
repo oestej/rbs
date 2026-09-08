@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Rotations:** Standalone electives can now be changed between once per
+  resident and repeatable when they are created or edited.
+
 ## [0.1.9] - 2026-09-08
 
 ### Fixed
