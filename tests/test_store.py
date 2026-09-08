@@ -386,6 +386,38 @@ def test_save_instance_and_delete(tmp_path) -> None:
     assert store.list() == []
 
 
+def test_workspace_writes_revalidate_model_copies_before_the_transaction(tmp_path) -> None:
+    instance = sample_instance()
+    malformed = instance.model_copy(
+        update={
+            "residents": [
+                instance.residents[0],
+                instance.residents[0],
+                *instance.residents[2:],
+            ]
+        }
+    )
+    store = Store(tmp_path / "rbs.sqlite")
+    store.init()
+
+    with pytest.raises(ValidationError, match="resident ids must be unique"):
+        store.create("Malformed", malformed)
+
+    assert store.workspace_count() == 0
+    workspace = store.create("Keep valid", instance)
+
+    with pytest.raises(ValidationError, match="resident ids must be unique"):
+        store.save_instance(
+            workspace.id,
+            malformed,
+            expected_workspace_revision=workspace.workspace_revision,
+        )
+
+    unchanged = store.get(workspace.id)
+    assert unchanged.workspace_revision == workspace.workspace_revision
+    assert unchanged.instance == instance
+
+
 def test_save_instance_can_preserve_a_matching_schedule(tmp_path) -> None:
     from rbs.solver.core import get_engine
 
@@ -537,6 +569,171 @@ def test_constraint_conflicting_working_draft_remains_current_and_round_trips(
     assert restored.schedule is not None
     assert restored.stale_schedule is None
     assert restored.schedule.is_working_draft
+
+
+def test_structurally_invalid_working_draft_is_rejected_before_create(
+    tmp_path,
+) -> None:
+    from rbs.models.enums import RotationKind, SolverEngineName, SolverStatus
+    from rbs.models.schedule import Assignment, Schedule, ScheduleMeta
+
+    instance = sample_instance()
+    assignment = Assignment(
+        resident_id=instance.residents[0].id,
+        rotation_id="clinic",
+        kind=RotationKind.CLINIC,
+        start_week=1,
+        end_week=1,
+        weeks=[1],
+    )
+    valid = Schedule(
+        meta=ScheduleMeta(
+            academic_year=instance.academic_year,
+            engine=SolverEngineName.STUB,
+            status=SolverStatus.UNKNOWN,
+            solver_status=SolverStatus.UNKNOWN,
+        ),
+        assignments=[assignment],
+    )
+    malformed = valid.model_copy(update={"assignments": [assignment, assignment]})
+    store = Store(tmp_path / "rbs.sqlite")
+    store.init()
+
+    with pytest.raises(ValidationError, match="overlapping assignments"):
+        store.create("Malformed draft", instance, malformed)
+
+    assert store.workspace_count() == 0
+
+
+def test_structurally_invalid_working_draft_rolls_back_schedule_save(tmp_path) -> None:
+    from rbs.models.enums import RotationKind, SolverEngineName, SolverStatus
+    from rbs.models.schedule import Assignment, Schedule, ScheduleMeta
+
+    instance = sample_instance()
+    assignment = Assignment(
+        resident_id=instance.residents[0].id,
+        rotation_id="clinic",
+        kind=RotationKind.CLINIC,
+        start_week=1,
+        end_week=1,
+        weeks=[1],
+    )
+    valid = Schedule(
+        meta=ScheduleMeta(
+            academic_year=instance.academic_year,
+            engine=SolverEngineName.STUB,
+            status=SolverStatus.UNKNOWN,
+            solver_status=SolverStatus.UNKNOWN,
+        ),
+        assignments=[assignment],
+    )
+    malformed = valid.model_copy(update={"assignments": [assignment, assignment]})
+    store = Store(tmp_path / "rbs.sqlite")
+    store.init()
+    workspace = store.create("Keep clean", instance)
+
+    with pytest.raises(ValidationError, match="overlapping assignments"):
+        store.save_schedule(
+            workspace.id,
+            malformed,
+            expected_instance_revision=workspace.instance_revision,
+            expected_workspace_revision=workspace.workspace_revision,
+        )
+
+    unchanged = store.get(workspace.id)
+    assert unchanged.workspace_revision == workspace.workspace_revision
+    assert unchanged.schedule is None
+
+
+def test_working_draft_references_must_belong_to_the_current_problem(tmp_path) -> None:
+    from rbs.models.enums import (
+        RotationKind,
+        Session,
+        SolverEngineName,
+        SolverStatus,
+        Weekday,
+    )
+    from rbs.models.schedule import AssignedClinic, Assignment, Schedule, ScheduleMeta
+
+    instance = sample_instance()
+    resident_id = instance.residents[8].id
+    assignment = Assignment(
+        resident_id=resident_id,
+        rotation_id="clinic",
+        kind=RotationKind.CLINIC,
+        start_week=7,
+        end_week=8,
+        weeks=[7, 8],
+        block_start_week=7,
+        block_duration_weeks=2,
+    )
+    meta = ScheduleMeta(
+        academic_year=instance.academic_year,
+        engine=SolverEngineName.STUB,
+        status=SolverStatus.UNKNOWN,
+        solver_status=SolverStatus.UNKNOWN,
+    )
+    cases = [
+        (
+            "unknown-resident",
+            Schedule(meta=meta, assignments=[assignment.revised(resident_id="missing")]),
+            "unknown resident",
+        ),
+        (
+            "unknown-rotation",
+            Schedule(meta=meta, assignments=[assignment.revised(rotation_id="missing")]),
+            "unknown rotation",
+        ),
+        (
+            "outside-calendar",
+            Schedule(
+                meta=meta,
+                assignments=[
+                    Assignment(
+                        resident_id=resident_id,
+                        rotation_id="clinic",
+                        kind=RotationKind.CLINIC,
+                        start_week=instance.calendar.weeks + 1,
+                        end_week=instance.calendar.weeks + 1,
+                        weeks=[instance.calendar.weeks + 1],
+                    )
+                ],
+            ),
+            "weeks outside calendar",
+        ),
+        (
+            "unknown-clinic",
+            Schedule(
+                meta=meta,
+                assignments=[
+                    assignment.revised(
+                        clinic_slots=[
+                            AssignedClinic(
+                                weekday=Weekday.MONDAY,
+                                session=Session.MORNING,
+                                site="missing",
+                                week=7,
+                                manual_override=True,
+                            )
+                        ]
+                    )
+                ],
+            ),
+            "clinic site 'missing' is not configured",
+        ),
+        (
+            "unknown-unassigned",
+            Schedule(meta=meta, unassigned=["missing"]),
+            "unassigned contains unknown residents",
+        ),
+    ]
+
+    for label, draft, message in cases:
+        store = Store(tmp_path / f"{label}.sqlite")
+        store.init()
+        with pytest.raises(ValueError, match=message):
+            store.create(label, instance, draft)
+        assert store.workspace_count() == 0
 
 
 def test_incomplete_manual_schedule_is_persisted_as_needing_solve(tmp_path) -> None:

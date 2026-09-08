@@ -218,15 +218,6 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
     def _curriculum_by_pgy(self) -> dict[int, PGYCurriculum]:
         return {item.pgy: item for item in self.requirements}
 
-    def revised(self, **updates: Any) -> Self:
-        """Return a fully revalidated copy with ``updates`` applied.
-
-        Every edit round-trips through validation so an instance can never hold
-        a combination of fields that ``check_integrity`` would reject.
-        """
-        draft = self.model_copy(update=updates)
-        return type(self).model_validate(draft.model_dump(mode="json"))
-
     @classmethod
     def from_payload(cls, raw: dict[str, Any]) -> Self:
         """Validate an edited JSON payload of this instance."""

@@ -6,6 +6,7 @@ from rbs import __version__
 from rbs.logging import (
     get_logger,
 )
+from rbs.models.instance import SchedulerInput
 from rbs.models.workspace import Workspace
 from rbs.product import ProductConfig
 from rbs.ui.app_branding import (
@@ -36,6 +37,7 @@ from rbs.ui.workspaces.status import (
     PILL_OK,
     PILL_WARN,
 )
+from rbs.workspaces import InstanceEditImpact
 
 
 def _document_io(session: WorkspaceSession):
@@ -344,6 +346,15 @@ def open_workspace_dialog(
 
     from rbs.ui.settings.view import _colors_settings
 
+    def persist_colors(
+        updated: SchedulerInput,
+        *,
+        impact: InstanceEditImpact = InstanceEditImpact.PRESENTATION,
+    ) -> None:
+        session.persist_instance(workspace, updated, impact=impact)
+        dialog.close()
+        session.workspace_dialog = None
+
     with (
         ui.dialog() as dialog,
         ui.card().classes("rbs-popout-dialog rbs-workspace-dialog p-0 gap-0"),
@@ -385,9 +396,8 @@ def open_workspace_dialog(
             ):
                 _colors_settings(
                     workspace,
-                    session.persist_instance,
+                    persist_colors,
                     apply_theme,
-                    schedule_is_current=workspace.schedule is not None,
                 )
     session.workspace_dialog = dialog
     dialog.open()

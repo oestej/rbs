@@ -3,7 +3,6 @@ import time
 from types import SimpleNamespace
 
 from rbs.ui.pdf_export import (
-    _pending_exports,
     open_with_system_viewer,
     present_pdf_export,
     stage_pdf_export,
@@ -14,20 +13,47 @@ from rbs.ui.pdf_export import (
 
 
 def test_staged_pdf_export_is_single_use() -> None:
-    path = stage_pdf_export(b"%PDF-1.4", "quinn-schedule.pdf")
+    path = stage_pdf_export(
+        b"%PDF-1.4",
+        "quinn-schedule.pdf",
+        owner="quinn",
+    )
 
     assert path.startswith("/_exports/pdf/")
     token = path.rsplit("/", 1)[1]
-    assert take_staged_pdf_export(token) == (b"%PDF-1.4", "quinn-schedule.pdf")
-    assert take_staged_pdf_export(token) is None
-    assert take_staged_pdf_export("missing") is None
+    assert take_staged_pdf_export(token, owner="quinn") == (
+        b"%PDF-1.4",
+        "quinn-schedule.pdf",
+    )
+    assert take_staged_pdf_export(token, owner="quinn") is None
+    assert take_staged_pdf_export("missing", owner="quinn") is None
 
 
-def test_staged_pdf_export_expires() -> None:
-    _pending_exports["stale"] = (b"%PDF-1.4", "old.pdf", time.monotonic() - 3601)
+def test_staged_pdf_export_expires(monkeypatch) -> None:
+    import rbs.ui.pdf_export as pdf_export
 
-    assert take_staged_pdf_export("stale") is None
-    assert "stale" not in _pending_exports
+    staged_at = time.monotonic()
+    monkeypatch.setattr(pdf_export.time, "monotonic", lambda: staged_at)
+    token = stage_pdf_export(b"%PDF-1.4", "old.pdf", owner="quinn").rsplit("/", 1)[1]
+    monkeypatch.setattr(
+        pdf_export.time,
+        "monotonic",
+        lambda: staged_at + pdf_export.EXPORT_TTL_SECONDS + 1,
+    )
+
+    assert take_staged_pdf_export(token, owner="quinn") is None
+    assert token not in pdf_export._pending_exports
+
+
+def test_staged_pdf_export_is_not_consumed_by_another_owner() -> None:
+    path = stage_pdf_export(b"%PDF-1.4", "quinn-schedule.pdf", owner="quinn")
+    token = path.rsplit("/", 1)[1]
+
+    assert take_staged_pdf_export(token, owner="other-user") is None
+    assert take_staged_pdf_export(token, owner="quinn") == (
+        b"%PDF-1.4",
+        "quinn-schedule.pdf",
+    )
 
 
 def test_system_viewer_command_per_platform(monkeypatch) -> None:
@@ -72,12 +98,17 @@ def test_present_pdf_export_opens_new_tab_in_browsers(monkeypatch) -> None:
         ui.navigate, "to", lambda target, new_tab=False: opened.append((target, new_tab))
     )
 
-    pdf_export.present_pdf_export(b"%PDF-1.4", "quinn-schedule.pdf", native=False)
+    pdf_export.present_pdf_export(
+        b"%PDF-1.4",
+        "quinn-schedule.pdf",
+        native=False,
+        owner="quinn",
+    )
 
     assert len(opened) == 1
     target, new_tab = opened[0]
     assert new_tab is True
-    staged = take_staged_pdf_export(target.rsplit("/", 1)[1])
+    staged = take_staged_pdf_export(target.rsplit("/", 1)[1], owner="quinn")
     assert staged == (b"%PDF-1.4", "quinn-schedule.pdf")
 
 
@@ -109,12 +140,17 @@ def test_write_export_tempfile_keeps_recognisable_pdf_name(monkeypatch, tmp_path
 
 def test_pdf_export_response_serves_inline_pdf() -> None:
     from rbs.ui.app import pdf_export_response
+    from rbs.ui.host import Principal
 
     class Host:
         def principal(self, _request):
-            return object()
+            return Principal(subject="quinn")
 
-    token = stage_pdf_export(b"%PDF-1.4", "quinn-schedule.pdf").rsplit("/", 1)[1]
+    token = stage_pdf_export(
+        b"%PDF-1.4",
+        "quinn-schedule.pdf",
+        owner="quinn",
+    ).rsplit("/", 1)[1]
     response = pdf_export_response(Host(), token, object())
 
     assert response.status_code == 200
@@ -126,6 +162,27 @@ def test_pdf_export_response_serves_inline_pdf() -> None:
     assert pdf_export_response(Host(), "missing", object()).status_code == 404
 
 
+def test_pdf_export_response_does_not_cross_principal_boundaries() -> None:
+    from rbs.ui.app import pdf_export_response
+    from rbs.ui.host import Principal
+
+    class Host:
+        def __init__(self, subject: str) -> None:
+            self.subject = subject
+
+        def principal(self, _request):
+            return Principal(subject=self.subject)
+
+    token = stage_pdf_export(
+        b"%PDF-1.4",
+        "quinn-schedule.pdf",
+        owner="quinn",
+    ).rsplit("/", 1)[1]
+
+    assert pdf_export_response(Host("other-user"), token, object()).status_code == 404
+    assert pdf_export_response(Host("quinn"), token, object()).status_code == 200
+
+
 def test_pdf_export_response_rejects_anonymous_requests() -> None:
     from rbs.ui.app import pdf_export_response
 
@@ -133,11 +190,15 @@ def test_pdf_export_response_rejects_anonymous_requests() -> None:
         def principal(self, _request):
             return None
 
-    token = stage_pdf_export(b"%PDF-1.4", "quinn-schedule.pdf").rsplit("/", 1)[1]
+    token = stage_pdf_export(
+        b"%PDF-1.4",
+        "quinn-schedule.pdf",
+        owner="quinn",
+    ).rsplit("/", 1)[1]
     try:
         assert pdf_export_response(Host(), token, object()).status_code == 403
     finally:
-        take_staged_pdf_export(token)
+        take_staged_pdf_export(token, owner="quinn")
 
 
 def test_resident_export_to_pdf_uses_open_callback() -> None:

@@ -87,7 +87,7 @@ def parse_workspace_payload(
         schedule = None
         if data.get("schedule") is not None:
             schedule = Schedule.model_validate(data["schedule"])
-            validate_persistable_schedule_or_raise(instance, schedule)
+            schedule = validate_persistable_schedule_or_raise(instance, schedule)
         return instance, schedule
     if "residents" not in data:
         raise ValueError("JSON must be an instance (with residents) or a workspace bundle")

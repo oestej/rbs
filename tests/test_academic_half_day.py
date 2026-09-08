@@ -12,7 +12,6 @@ from rbs.catalog import sample_instance
 from rbs.models.case_blocks import AcademicHalfDayOverride
 from rbs.models.enums import Session, Weekday
 from rbs.models.rotation import ClinicSlot
-from rbs.ui.clinic.board import is_academic as board_is_academic
 from rbs.ui.clinic.ops import (
     cancel_academic_half_day_for_week,
     disable_academic_half_day,
@@ -20,6 +19,7 @@ from rbs.ui.clinic.ops import (
     replace_academic_half_day,
     set_academic_half_day_override,
 )
+from rbs.ui.clinic.projection import is_academic as board_is_academic
 
 RECURRING = (Weekday.WEDNESDAY, Session.AFTERNOON)
 

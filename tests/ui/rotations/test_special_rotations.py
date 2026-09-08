@@ -9,14 +9,16 @@ from rbs.models.enums import RotationKind, Session, SolverEngineName, SolverStat
 from rbs.models.instance import SchedulerInput
 from rbs.models.schedule import AssignedClinic, Assignment, Schedule, ScheduleMeta
 from rbs.models.special import SpecialRotation, SpecialRotationKind
-from rbs.ui.clinic.board import occupancy, render_clinic_html
+from rbs.ui.clinic.board import render_clinic_html
+from rbs.ui.clinic.projection import occupancy
 from rbs.ui.clinic.schedule_csv import clinic_schedule_csv_rows
 from rbs.ui.grid import render_grid_html
 from rbs.ui.residents.ops import (
     resident_clinic_schedule_report_rows,
     resident_schedule_report_rows,
 )
-from rbs.ui.rotations.editor import _open_special_rotation_dialog, render_rotations_tab
+from rbs.ui.rotations.editor import render_rotations_tab
+from rbs.ui.rotations.special import _open_special_rotation_dialog
 from rbs.ui.rotations.special_ops import (
     add_special_rotation,
     next_special_rotation_id,

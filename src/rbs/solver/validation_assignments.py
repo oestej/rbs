@@ -150,12 +150,25 @@ def _validate_assignment_clinic_slot(
     errors: list[str],
 ) -> None:
     display_week = slot.week or assignment.start_week
-    if slot.site is not None and slot.site not in instance.clinic_policy.site_ids:
+    configured_sites = set(instance.clinic_policy.site_ids)
+    if slot.site is not None and slot.site not in configured_sites:
         errors.append(
             f"{assignment.resident_id} week {display_week}: "
             f"clinic site {slot.site!r} is not configured"
         )
     allowed_sites = instance.clinic_policy.resolve_site_ids(slot.allowed_sites)
+    unknown_allowed_sites = sorted(set(allowed_sites) - configured_sites)
+    if unknown_allowed_sites:
+        errors.append(
+            f"{assignment.resident_id} week {display_week}: allowed clinic sites "
+            f"are not configured {unknown_allowed_sites}"
+        )
+    original_site = slot.manual_override_original_site
+    if original_site is not None and original_site not in configured_sites:
+        errors.append(
+            f"{assignment.resident_id} week {display_week}: original clinic site "
+            f"{original_site!r} is not configured"
+        )
     if not slot.manual_override and allowed_sites and slot.site not in allowed_sites:
         errors.append(
             f"{assignment.resident_id} week {display_week}: clinic site "
@@ -163,6 +176,8 @@ def _validate_assignment_clinic_slot(
             f"{slot.weekday.value} {slot.session.value}"
         )
     for week in [slot.week] if slot.week is not None else assignment.weeks:
+        if not 1 <= week <= instance.calendar.weeks:
+            continue
         _validate_clinic_slot_week(instance, assignment, resident, slot, week, errors)
 
 
@@ -182,9 +197,13 @@ def _validate_clinic_slot_week(
         slot.weekday,
     )
     scheduled_site = None if slot.admin else (slot.site or instance.clinic_policy.primary_site_id)
-    if scheduled_site is not None and instance.clinic_policy.is_site_closed(
-        scheduled_site,
-        calendar_day,
+    if (
+        scheduled_site is not None
+        and scheduled_site in instance.clinic_policy.site_ids
+        and instance.clinic_policy.is_site_closed(
+            scheduled_site,
+            calendar_day,
+        )
     ):
         _append_closed_clinic_error(
             instance,

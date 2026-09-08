@@ -24,7 +24,7 @@ from rbs.models.enums import Session, Weekday
 from rbs.models.instance import SchedulerInput
 from rbs.models.schedule import Schedule
 from rbs.models.special import SpecialRotation
-from rbs.ui.clinic.board import (
+from rbs.ui.clinic.projection import (
     ACADEMIC_LABEL,
     ClinicOccupant,
     calendar_occupants,
@@ -37,7 +37,6 @@ from rbs.ui.clinic.board import (
     site_headcount,
     special_events_for_slot,
 )
-from rbs.ui.grid import visible_week_numbers, week_monday
 from rbs.ui.pdf_pages import with_export_timestamp
 from rbs.ui.print_tokens import (
     PRINT_BODY_LEADING,
@@ -54,6 +53,7 @@ from rbs.ui.print_tokens import (
     PRINT_TITLE_LEADING,
     PRINT_TITLE_SIZE,
 )
+from rbs.ui.schedule_projection import visible_week_numbers, week_monday
 from rbs.ui.schedule_styles import (
     ACADEMIC_TINT,
     ADMIN_COLOR,

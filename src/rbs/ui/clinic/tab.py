@@ -16,6 +16,12 @@ from rbs.models.rotation import Rotation, rotation_display_sort_key
 from rbs.models.schedule import Schedule
 from rbs.ui import page_shells
 from rbs.ui.buttons import SECONDARY_BUTTON_PROPS
+from rbs.ui.case_ops import (
+    add_resident_rotation_waiver,
+    place_manual_clinic_block,
+    remove_resident_rotation_waiver,
+    withdraw_manual_clinic_block,
+)
 from rbs.ui.clinic.ops import (
     _default_clinic_rule,
     _new_clinic_draft,
@@ -44,12 +50,8 @@ from rbs.ui.editor_common import (
     _weeks_label,
 )
 from rbs.ui.rotations.ops import (
-    add_resident_rotation_waiver,
-    place_manual_clinic_block,
-    remove_resident_rotation_waiver,
     replace_clinic_block_rules,
     rotation_editor_state,
-    withdraw_manual_clinic_block,
 )
 from rbs.ui.rotations.widgets import (
     add_block_config,

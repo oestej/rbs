@@ -2,6 +2,8 @@ import asyncio
 from datetime import date
 from types import SimpleNamespace
 
+import pytest
+
 
 def _created_elements(before: set[int]) -> list:
     from nicegui import ui
@@ -1202,7 +1204,6 @@ def test_colors_settings_defines_the_institutional_palette_not_assignments(tmp_p
         workspace,
         lambda *_args, **_kwargs: None,
         lambda: None,
-        schedule_is_current=True,
     )
 
     created = _created_elements(before)
@@ -1252,6 +1253,7 @@ def test_colors_settings_saves_scheme_and_remaps_assignments(tmp_path) -> None:
     from rbs.catalog import sample_instance
     from rbs.store import Store
     from rbs.ui.settings.view import _colors_settings
+    from rbs.workspaces import InstanceEditImpact
 
     instance = sample_instance()
     store = Store(tmp_path / "rbs.sqlite")
@@ -1265,7 +1267,6 @@ def test_colors_settings_saves_scheme_and_remaps_assignments(tmp_path) -> None:
         workspace,
         lambda updated, **kwargs: persisted.append((updated, kwargs)),
         applied_themes.append,
-        schedule_is_current=True,
     )
 
     created = _created_elements(before)
@@ -1295,7 +1296,7 @@ def test_colors_settings_saves_scheme_and_remaps_assignments(tmp_path) -> None:
     assert updated.color_scheme.name == "Example University"
     assert updated.color_scheme.primary.color == "#123A67"
     assert updated.clinic_policy.site("cedar").color == "#123A67"
-    assert kwargs == {"preserve_schedule": True}
+    assert kwargs == {"impact": InstanceEditImpact.PRESENTATION}
     assert applied_themes == [updated.color_scheme]
 
 
@@ -1321,7 +1322,6 @@ def test_colors_settings_generates_accents_from_unsaved_institutional_colors(
         workspace,
         lambda updated, **_kwargs: persisted.append(updated),
         applied_themes.append,
-        schedule_is_current=True,
     )
 
     created = _created_elements(before)
@@ -1369,7 +1369,6 @@ def test_advanced_settings_exposes_every_objective_weight(tmp_path) -> None:
     _advanced_settings(
         workspace,
         lambda *_args, **_kwargs: None,
-        schedule_is_current=False,
     )
 
     created = _created_elements(before)
@@ -1650,7 +1649,6 @@ def test_advanced_settings_keeps_automatic_clinic_balance_copy_dataset_neutral(
     _advanced_settings(
         workspace,
         lambda *_args, **_kwargs: None,
-        schedule_is_current=False,
     )
 
     created = _created_elements(before)
@@ -1688,7 +1686,7 @@ def test_instance_save_refreshes_the_visible_tab_only(tmp_path) -> None:
     session.panels = {name: _DummyPanel() for name in TAB_NAMES}
     session._render_tab = lambda _session, name: rendered.append(name)
 
-    session.persist_instance(workspace.instance)
+    session.persist_instance(workspace, workspace.instance)
 
     assert rendered == ["rotations"]
     assert "block_schedule" in session.stale_panels
@@ -1718,11 +1716,188 @@ def test_schedule_save_can_defer_the_visible_tab_refresh(tmp_path) -> None:
         )
     )
 
-    session.persist_schedule(schedule, refresh=False)
+    session.persist_schedule(workspace, schedule, refresh=False)
 
     assert rendered == []
     assert session.stale_panels == set(TAB_NAMES)
     assert store.get(workspace.id).schedule is not None
+
+
+def test_instance_save_rejects_the_snapshot_an_editor_rendered_before_a_newer_edit(
+    tmp_path,
+) -> None:
+    from rbs.catalog import sample_instance
+    from rbs.models.workspace import WorkspaceConflictError
+    from rbs.store import Store
+    from rbs.ui.session import WorkspaceSession
+    from rbs.workspaces import WorkspaceController
+
+    store = Store(tmp_path / "rbs.sqlite")
+    store.init()
+    rendered = store.create("Session workspace", sample_instance())
+    resident = rendered.instance.residents[0].revised(name="Stale resident name")
+    stale_edit = rendered.instance.revised(
+        residents=[resident, *rendered.instance.residents[1:]]
+    )
+    concurrent = rendered.instance.revised(lock_through_today=True)
+    WorkspaceController(store).save_instance(rendered, concurrent)
+    session = WorkspaceSession(store=store, workspace_id=rendered.id)
+
+    with pytest.raises(WorkspaceConflictError, match="reload it before saving"):
+        session.persist_instance(rendered, stale_edit)
+
+    current = store.get(rendered.id)
+    assert current.instance.lock_through_today
+    assert current.instance.residents[0].name != "Stale resident name"
+    assert current.workspace_revision == rendered.workspace_revision + 1
+
+
+def test_schedule_save_rejects_a_snapshot_whose_inputs_changed(tmp_path) -> None:
+    from rbs.catalog import sample_instance
+    from rbs.models.enums import SolverEngineName, SolverStatus
+    from rbs.models.schedule import Schedule, ScheduleMeta
+    from rbs.models.workspace import WorkspaceConflictError
+    from rbs.store import Store
+    from rbs.ui.session import WorkspaceSession
+    from rbs.workspaces import WorkspaceController
+
+    store = Store(tmp_path / "rbs.sqlite")
+    store.init()
+    rendered = store.create("Session workspace", sample_instance())
+    WorkspaceController(store).save_instance(
+        rendered,
+        rendered.instance.revised(lock_through_today=True),
+    )
+    schedule = Schedule(
+        meta=ScheduleMeta(
+            academic_year=rendered.academic_year,
+            engine=SolverEngineName.STUB,
+            status=SolverStatus.UNKNOWN,
+            solver_status=SolverStatus.UNKNOWN,
+        )
+    )
+    session = WorkspaceSession(store=store, workspace_id=rendered.id)
+
+    with pytest.raises(WorkspaceConflictError, match="reload it before saving"):
+        session.persist_schedule(rendered, schedule)
+
+    current = store.get(rendered.id)
+    assert current.schedule is None
+    assert current.workspace_revision == rendered.workspace_revision + 1
+
+
+def test_reading_a_workspace_does_not_implicitly_refresh_automatic_locks(
+    tmp_path,
+) -> None:
+    from datetime import timedelta
+
+    from rbs.catalog import sample_instance
+    from rbs.models.enums import RotationKind, SolverEngineName, SolverStatus
+    from rbs.models.schedule import Assignment, Schedule, ScheduleMeta
+    from rbs.store import Store
+    from rbs.ui.locks import THROUGH_TODAY_SOURCE
+    from rbs.ui.session import WorkspaceSession
+
+    instance = sample_instance().revised(lock_through_today=True)
+    resident_id = instance.residents[0].id
+    schedule = Schedule(
+        meta=ScheduleMeta(
+            academic_year=instance.academic_year,
+            engine=SolverEngineName.STUB,
+            status=SolverStatus.UNKNOWN,
+            solver_status=SolverStatus.UNKNOWN,
+        ),
+        assignments=[
+            Assignment(
+                resident_id=resident_id,
+                rotation_id="fmed",
+                kind=RotationKind.FMED,
+                start_week=1,
+                end_week=4,
+                weeks=[1, 2, 3, 4],
+            )
+        ],
+    )
+    store = Store(tmp_path / "rbs.sqlite")
+    store.init()
+    workspace = store.create("Automatic locks", instance, schedule)
+    session = WorkspaceSession(store=store, workspace_id=workspace.id)
+
+    observed = session.workspace()
+
+    assert observed is not None
+    assert observed.workspace_revision == workspace.workspace_revision
+    assert not any(lock.source == THROUGH_TODAY_SOURCE for lock in observed.instance.locks)
+    assert store.get(workspace.id).workspace_revision == workspace.workspace_revision
+
+    refreshed = session.refresh_automatic_locks(
+        observed,
+        today=instance.calendar.first_week_start + timedelta(weeks=2),
+    )
+
+    automatic = [
+        lock for lock in refreshed.instance.locks if lock.source == THROUGH_TODAY_SOURCE
+    ]
+    assert [(lock.rotation_id, lock.weeks) for lock in automatic] == [
+        ("fmed", [1, 2, 3, 4])
+    ]
+    assert refreshed.workspace_revision == workspace.workspace_revision + 1
+    assert refreshed.schedule is not None
+
+
+def test_instance_edit_policy_preserves_names_and_stales_solver_changes(tmp_path) -> None:
+    from rbs.catalog import sample_instance
+    from rbs.models.enums import SolverEngineName, SolverStatus
+    from rbs.models.schedule import Schedule, ScheduleMeta
+    from rbs.store import Store
+    from rbs.ui.edit_policy import instance_edit_impact
+    from rbs.ui.residents.ops import replace_resident
+    from rbs.ui.session import WorkspaceSession
+    from rbs.workspaces import InstanceEditImpact
+
+    instance = sample_instance()
+    schedule = Schedule(
+        meta=ScheduleMeta(
+            academic_year=instance.academic_year,
+            engine=SolverEngineName.STUB,
+            status=SolverStatus.UNKNOWN,
+            solver_status=SolverStatus.UNKNOWN,
+        )
+    )
+    store = Store(tmp_path / "rbs.sqlite")
+    store.init()
+    workspace = store.create("Resident edits", instance, schedule)
+    session = WorkspaceSession(store=store, workspace_id=workspace.id)
+    previous = workspace.instance.residents[0]
+    renamed = previous.revised(name="A presentation-only name")
+    renamed_instance = replace_resident(workspace.instance, previous.id, renamed)
+
+    rename_impact = instance_edit_impact(workspace.instance, renamed_instance)
+    renamed_workspace = session.persist_instance(
+        workspace,
+        renamed_instance,
+        impact=rename_impact,
+    )
+
+    assert rename_impact is InstanceEditImpact.PRESENTATION
+    assert renamed_workspace.schedule is not None
+    assert renamed_workspace.stale_schedule is None
+
+    changed = renamed.revised(pgy=2 if renamed.pgy != 2 else 1)
+    changed_instance = replace_resident(renamed_workspace.instance, renamed.id, changed)
+    solver_impact = instance_edit_impact(
+        renamed_workspace.instance,
+        changed_instance,
+    )
+    changed_workspace = session.persist_instance(
+        renamed_workspace,
+        changed_instance,
+        impact=solver_impact,
+    )
+
+    assert solver_impact is InstanceEditImpact.SOLVER_INPUT
+    assert changed_workspace.schedule is None
+    assert changed_workspace.stale_schedule is not None
 
 
 def test_first_tab_visit_renders_a_stale_panel(tmp_path) -> None:

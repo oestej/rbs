@@ -22,6 +22,20 @@ SOLVER_FORBIDDEN_IMPORTS = {"rbs.cloud", "rbs.store", "rbs.ui", "nicegui", "repo
 PRIVATE_SOLVER_PACKAGE = "rbs.solver.core"
 UI_COMPOSITION_MODULES = {"__main__.py"}
 PYOBJC_MODULES = {"AppKit", "Foundation", "objc", "PyObjCTools"}
+UI_TRANSFORMATION_MODULES = {
+    "rbs.ui.case_ops",
+    "rbs.ui.clinic.ops",
+    "rbs.ui.clinic.projection",
+    "rbs.ui.drafts",
+    "rbs.ui.edit_policy",
+    "rbs.ui.locks",
+    "rbs.ui.residents.ops",
+    "rbs.ui.rotations.elective_draft",
+    "rbs.ui.rotations.ops",
+    "rbs.ui.rotations.special_ops",
+    "rbs.ui.rotations.summary_projection",
+    "rbs.ui.schedule_projection",
+}
 
 
 def test_project_version_is_single_sourced_for_build_and_runtime() -> None:
@@ -57,6 +71,35 @@ def _imported_names(path: Path) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             names.add(node.module)
     return names
+
+
+def _source_path(module: str) -> Path | None:
+    module_path = SRC / Path(*module.split("."))
+    file_path = module_path.with_suffix(".py")
+    if file_path.is_file():
+        return file_path
+    package_path = module_path / "__init__.py"
+    return package_path if package_path.is_file() else None
+
+
+def _nicegui_dependency_chain(
+    module: str,
+    seen: frozenset[str] = frozenset(),
+) -> tuple[str, ...] | None:
+    if module in seen:
+        return None
+    path = _source_path(module)
+    if path is None:
+        return None
+    visited = seen | {module}
+    for imported in sorted(_imported_names(path)):
+        if imported == "nicegui" or imported.startswith("nicegui."):
+            return module, imported
+        if imported.startswith("rbs."):
+            nested = _nicegui_dependency_chain(imported, visited)
+            if nested is not None:
+                return (module, *nested)
+    return None
 
 
 def _shared_modules() -> list[Path]:
@@ -124,6 +167,20 @@ def test_ui_depends_on_the_repository_seam_not_sqlite() -> None:
     assert not violations, (
         "UI modules must use the WorkspaceRepository seam instead of the "
         f"concrete SQLite Store: {violations}"
+    )
+
+
+def test_ui_transformation_modules_do_not_depend_on_the_rendering_framework() -> None:
+    """Keep domain projections and edits usable without loading NiceGUI."""
+    violations = [
+        chain
+        for module in sorted(UI_TRANSFORMATION_MODULES)
+        if (chain := _nicegui_dependency_chain(module)) is not None
+    ]
+    assert not violations, (
+        "UI transformation modules must stay transitively independent of "
+        "NiceGUI rendering: "
+        f"{violations}"
     )
 
 

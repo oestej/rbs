@@ -31,7 +31,7 @@ from rbs.models.instance import SchedulerInput
 from rbs.models.rbsc import portable_case_payload, portable_catalog_payload
 from rbs.models.workspace import Workspace
 from rbs.store import Store
-from rbs.workspaces import WorkspaceController
+from rbs.workspaces import InstanceEditImpact, WorkspaceController
 
 MAX_RBSC_BYTES = 32 * 1024 * 1024
 
@@ -205,7 +205,7 @@ class DesktopDocumentController:
                 workspace = WorkspaceController(self.store).save_instance(
                     workspace,
                     revised,
-                    preserve_schedule=workspace.schedule is not None,
+                    impact=InstanceEditImpact.APPLICATION_PREFERENCE,
                 )
         except BaseException:
             # Keep the automatic application file aligned with the open UI if
@@ -567,7 +567,7 @@ class DesktopDocumentController:
         return WorkspaceController(self.store).save_instance(
             workspace,
             revised,
-            preserve_schedule=workspace.schedule is not None,
+            impact=InstanceEditImpact.APPLICATION_PREFERENCE,
         )
 
 

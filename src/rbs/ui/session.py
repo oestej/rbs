@@ -11,12 +11,12 @@ from rbs.catalog import current_blank_instance, current_sample_instance
 from rbs.models.color_scheme import ColorScheme
 from rbs.models.instance import SchedulerInput
 from rbs.models.schedule import Schedule
-from rbs.models.workspace import Workspace
+from rbs.models.workspace import Workspace, WorkspaceConflictError
 from rbs.product import ProductConfig
 from rbs.repository import WorkspaceRepository
 from rbs.ui.host import LocalHost, Principal, WorkspaceHost
 from rbs.ui.locks import refresh_locks_through_today
-from rbs.workspaces import WorkspaceController
+from rbs.workspaces import InstanceEditImpact, WorkspaceController
 
 TAB_NAMES = (
     "block_schedule",
@@ -109,23 +109,33 @@ class WorkspaceSession:
         return self.workspace_host.product
 
     def workspace(self) -> Workspace | None:
+        """Return the current workspace without changing it."""
         if self.workspace_id is None:
             return None
         try:
-            workspace = self.store.get(self.workspace_id)
+            return self.store.get(self.workspace_id)
         except KeyError:
             return None
+
+    def refresh_automatic_locks(
+        self,
+        workspace: Workspace,
+        *,
+        today: date | None = None,
+    ) -> Workspace:
+        """Apply the through-today policy as an explicit, revisioned command."""
+        self._require_active_snapshot(workspace)
         if workspace.instance.lock_through_today and workspace.schedule is not None:
             refreshed = refresh_locks_through_today(
                 workspace.instance,
                 workspace.schedule,
-                date.today(),
+                today or date.today(),
             )
             if refreshed != workspace.instance:
                 workspace = WorkspaceController(self.store).save_instance(
                     workspace,
                     refreshed,
-                    preserve_schedule=workspace.schedule is not None,
+                    impact=InstanceEditImpact.CURRENT_SCHEDULE_CONSTRAINT,
                 )
         return workspace
 
@@ -148,22 +158,23 @@ class WorkspaceSession:
 
     def persist_instance(
         self,
+        workspace: Workspace,
         instance: SchedulerInput,
         *,
-        preserve_schedule: bool = False,
+        impact: InstanceEditImpact = InstanceEditImpact.SOLVER_INPUT,
         draft_schedule: Schedule | None = None,
-    ) -> None:
-        if self.workspace_id is None:
-            return
-        workspace = self.workspace()
-        if workspace is None:
-            return
-        saved = WorkspaceController(self.store).save_instance(
-            workspace,
-            instance,
-            preserve_schedule=preserve_schedule,
-            draft_schedule=draft_schedule,
-        )
+    ) -> Workspace:
+        self._require_active_snapshot(workspace)
+        try:
+            saved = WorkspaceController(self.store).save_instance(
+                workspace,
+                instance,
+                impact=impact,
+                draft_schedule=draft_schedule,
+            )
+        except WorkspaceConflictError:
+            self._refresh_after_conflict()
+            raise
         documents = getattr(self.workspace_host, "document_io", None)
         sync_settings = getattr(documents, "sync_application_settings", None)
         if sync_settings is not None:
@@ -171,16 +182,42 @@ class WorkspaceSession:
         self.touch()
         self.mark_stale()
         self.refresh_visible()
+        return saved
 
-    def persist_schedule(self, schedule: Schedule, *, refresh: bool = True) -> None:
-        workspace = self.workspace()
-        if workspace is None:
-            return
-        WorkspaceController(self.store).save_schedule(workspace, schedule)
+    def persist_schedule(
+        self,
+        workspace: Workspace,
+        schedule: Schedule,
+        *,
+        refresh: bool = True,
+    ) -> Workspace:
+        self._require_active_snapshot(workspace)
+        try:
+            saved = WorkspaceController(self.store).save_schedule(workspace, schedule)
+        except WorkspaceConflictError:
+            self._refresh_after_conflict()
+            raise
         self.touch()
         self.mark_stale()
         if refresh:
             self.refresh_visible()
+        return saved
+
+    def _require_active_snapshot(self, workspace: Workspace) -> None:
+        if self.workspace_id is None or workspace.id != self.workspace_id:
+            raise WorkspaceConflictError(
+                "the open workspace changed; reload it before saving"
+            )
+
+    def _refresh_after_conflict(self) -> None:
+        """Replace a stale editor with current data before surfacing its conflict."""
+        if self.workspace_dialog is not None:
+            close = getattr(self.workspace_dialog, "close", None)
+            if callable(close):
+                close()
+            self.workspace_dialog = None
+        self.mark_stale()
+        self.refresh_visible()
 
     def touch(self) -> None:
         """Record that this caller changed something.
@@ -239,15 +276,6 @@ class WorkspaceSession:
         instance = current_blank_instance()
         workspace = self.store.create("Untitled", instance)
         self.reset_navigation(workspace.id)
-        self.rebuild()
-
-    def delete_current(self) -> None:
-        workspace = self.workspace()
-        if workspace is None:
-            return
-        WorkspaceController(self.store).delete(workspace)
-        remaining = self.store.list()
-        self.reset_navigation(remaining[0].id if remaining else None)
         self.rebuild()
 
     def switch_workspace(self, workspace_id: int) -> None:

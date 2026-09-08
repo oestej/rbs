@@ -10,7 +10,7 @@ from io import StringIO
 from rbs.models.clinic import clinic_slot_date
 from rbs.models.instance import SchedulerInput
 from rbs.models.schedule import Schedule
-from rbs.ui.clinic.board import (
+from rbs.ui.clinic.projection import (
     ACADEMIC_LABEL,
     SESSION_SHORT,
     WEEKDAY_SHORT,
@@ -22,7 +22,7 @@ from rbs.ui.clinic.board import (
     site_headcount,
     special_events_for_slot,
 )
-from rbs.ui.grid import visible_week_numbers, week_monday
+from rbs.ui.schedule_projection import visible_week_numbers, week_monday
 
 
 def clinic_schedule_csv_columns(

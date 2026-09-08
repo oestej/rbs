@@ -25,7 +25,7 @@ from rbs.ui.app_documents import _document_io
 from rbs.ui.app_status import _refresh_status_chips
 from rbs.ui.locks import refresh_locks_through_today
 from rbs.ui.session import WorkspaceSession
-from rbs.workspaces import WorkspaceController
+from rbs.workspaces import InstanceEditImpact, WorkspaceController
 
 
 @dataclass(slots=True)
@@ -92,7 +92,7 @@ async def _solve(session: WorkspaceSession) -> None:
                 workspace = WorkspaceController(session.store).save_instance(
                     workspace,
                     refreshed,
-                    preserve_schedule=True,
+                    impact=InstanceEditImpact.CURRENT_SCHEDULE_CONSTRAINT,
                 )
                 instance = workspace.instance
         reference_schedule = workspace.latest_schedule
@@ -130,7 +130,7 @@ async def _solve(session: WorkspaceSession) -> None:
                 workspace = WorkspaceController(session.store).save_instance(
                     workspace,
                     refreshed,
-                    preserve_schedule=True,
+                    impact=InstanceEditImpact.CURRENT_SCHEDULE_CONSTRAINT,
                 )
         progress.close()
         changed_weeks, compared_weeks = changed_resident_weeks(

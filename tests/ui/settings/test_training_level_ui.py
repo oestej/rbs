@@ -5,11 +5,9 @@ from rbs.store import Store
 from rbs.training_levels import add_training_level, reorder_training_levels
 from rbs.ui.clinic.tab import _open_clinic_block_rules_dialog
 from rbs.ui.grid import render_grid_html
-from rbs.ui.rotations.editor import (
-    _open_fmed_pgy_rules_dialog,
-    _rotation_summary_html,
-    render_rotations_tab,
-)
+from rbs.ui.rotations.editor import render_rotations_tab
+from rbs.ui.rotations.fmed import _open_fmed_pgy_rules_dialog
+from rbs.ui.rotations.summary import _rotation_summary_html
 from rbs.ui.rotations.table import rotation_rows
 from rbs.ui.settings.training_levels import _open_add_dialog
 from rbs.ui.settings.view import _settings_tab
@@ -115,7 +113,6 @@ def test_add_dialog_explains_that_new_levels_start_empty() -> None:
     _open_add_dialog(
         sample_instance(),
         lambda *_args, **_kwargs: None,
-        schedule_is_current=False,
     )
 
     created = _created_elements(ui, before)

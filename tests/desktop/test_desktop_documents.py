@@ -26,7 +26,7 @@ from rbs.models.instance import SchedulerInput
 from rbs.store import DownloadState, Store
 from rbs.ui.host import LocalHost
 from rbs.ui.session import WorkspaceSession
-from rbs.workspaces import WorkspaceController
+from rbs.workspaces import InstanceEditImpact, WorkspaceController
 
 
 class Dialogs:
@@ -333,8 +333,9 @@ def test_application_setting_edits_persist_without_dirtying_the_document(tmp_pat
         workspace_id=workspace.id,
     )
     session.persist_instance(
+        workspace,
         revised,
-        preserve_schedule=workspace.schedule is not None,
+        impact=InstanceEditImpact.APPLICATION_PREFERENCE,
     )
 
     assert not controller.dirty

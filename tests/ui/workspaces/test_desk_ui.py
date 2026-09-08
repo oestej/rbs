@@ -879,6 +879,40 @@ def test_the_workspace_dialog_only_edits_the_current_workspace(tmp_path) -> None
     assert session.workspace_dialog is not None
 
 
+def test_workspace_color_save_uses_its_rendered_snapshot_and_closes(tmp_path) -> None:
+    from nicegui import ui
+
+    from rbs.ui.app_documents import open_workspace_dialog
+
+    session, store = _session(tmp_path)
+    first = store.get(session.workspace_id)
+    second = store.create("Second year", sample_instance())
+    before = set(ui.context.client.elements)
+    open_workspace_dialog(session, first)
+    dialog = session.workspace_dialog
+    created = _created(before)
+    scheme_name = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Input"
+        and "rbs-color-scheme-name-input" in element._classes
+    )
+    save = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Save color scheme"
+    )
+
+    scheme_name.set_value("First workspace colors")
+    next(iter(save._event_listeners.values())).handler(None)
+
+    assert store.get(first.id).instance.color_scheme.name == "First workspace colors"
+    assert store.get(second.id).instance.color_scheme.name != "First workspace colors"
+    assert session.workspace_dialog is None
+    assert dialog.value is False
+
+
 def test_closing_a_workspace_dismisses_the_dialog_it_was_opened_from(tmp_path) -> None:
     """The dialog belongs to a page that closing remounts, so it must not outlive it."""
     from rbs.ui.app_documents import open_workspace_dialog

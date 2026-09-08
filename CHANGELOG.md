@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Editing:** A form opened before another edit now reloads the current
+  workspace instead of overwriting newer work.
+- **Schedules:** Name, label, and color-only edits no longer mark the current
+  schedule as out of date.
+- **Rotations:** Standalone electives can now be changed between once per
+  resident and repeatable when they are created or edited.
+
 ## [0.1.9] - 2026-09-08
 
 ### Fixed

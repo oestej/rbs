@@ -263,7 +263,7 @@ def pdf_export_response(workspace_host: WorkspaceHost, token: str, request) -> R
     if principal is None:
         get_logger("documents").info("pdf.export_denied", status_code=403)
         return Response(status_code=403)
-    staged = take_staged_pdf_export(token)
+    staged = take_staged_pdf_export(token, owner=principal.subject)
     if staged is None:
         get_logger("documents").info("pdf.export_missing", status_code=404)
         return Response(status_code=404)

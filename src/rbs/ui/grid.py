@@ -2,33 +2,22 @@
 
 from __future__ import annotations
 
-import hashlib
 import html
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from urllib.parse import urlencode
 
 from rbs.models.color_scheme import contrasting_text_color
 from rbs.models.instance import SchedulerInput
 from rbs.models.resident import Resident, resident_display_sort_key
-from rbs.models.rotation import ROTATION_COLOR_PALETTE
 from rbs.models.schedule import Schedule
 from rbs.models.special import SpecialRotationKind
-
-
-def rotation_color_class(rotation_color: str) -> str:
-    """Return the CSS class for a configured palette color.
-
-    The hash fallback keeps older callers and malformed external schedule labels
-    deterministic; configured rotations always take the palette branch.
-    """
-    normalized = rotation_color.strip().upper()
-    try:
-        index = tuple(ROTATION_COLOR_PALETTE).index(normalized)
-    except ValueError:
-        digest = hashlib.sha256(rotation_color.encode()).hexdigest()
-        index = int(digest[:2], 16) % 24
-    return f"rbs-rotation-color-{index}"
+from rbs.ui.schedule_projection import (
+    four_week_block_groups,
+    rotation_color_class,
+    visible_week_numbers,
+    week_monday,
+)
 
 
 def parse_weeks(text: str) -> list[int]:
@@ -74,44 +63,10 @@ def group_label(weeks: list[int]) -> str:
     return f"{weeks[0]}–{weeks[-1]}"
 
 
-def week_monday(first_week_start: date, week: int) -> date:
-    return first_week_start + timedelta(weeks=week - 1)
-
-
-def visible_week_numbers(
-    first_week_start: date,
-    n_weeks: int,
-    *,
-    show_past_weeks: bool,
-    today: date | None = None,
-) -> list[int]:
-    """Weeks to display, retaining the current Monday-through-Sunday week."""
-    weeks = list(range(1, n_weeks + 1))
-    if show_past_weeks:
-        return weeks
-    cutoff = today or date.today()
-    return [
-        week for week in weeks if week_monday(first_week_start, week) + timedelta(days=6) >= cutoff
-    ]
-
-
 def monday_header(first_week_start: date, week: int) -> str:
     """Column label: Monday of this week, e.g. Jun 29."""
     day = week_monday(first_week_start, week)
     return f"{day:%b} {day.day:02d}"
-
-
-def four_week_block_groups(weeks: list[int]) -> list[tuple[str, list[int]]]:
-    """Group visible weeks into academic Blocks A through M."""
-    groups: list[tuple[str, list[int]]] = []
-    for week in weeks:
-        block_index = (week - 1) // 4
-        label = chr(ord("A") + block_index)
-        if groups and groups[-1][0] == label:
-            groups[-1][1].append(week)
-        else:
-            groups.append((label, [week]))
-    return groups
 
 
 def assignment_runs(

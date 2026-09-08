@@ -61,10 +61,7 @@ class StoreWorkspaceMixin:
     ) -> None:
         current = int(row["workspace_revision"])
         if current != expected_workspace_revision:
-            raise WorkspaceConflictError(
-                f"workspace changed from revision {expected_workspace_revision} "
-                f"to {current}; reload it before saving"
-            )
+            raise WorkspaceConflictError("workspace changed; reload it before saving")
 
     def create(
         self,
@@ -74,10 +71,11 @@ class StoreWorkspaceMixin:
         *,
         is_sample: bool = False,
     ) -> Workspace:
+        instance = SchedulerInput.model_validate(instance.model_dump(mode="json"))
         if schedule is not None:
-            validate_persistable_schedule_or_raise(instance, schedule)
-            schedule = schedule.model_copy(
-                update={"meta": schedule.meta.model_copy(update={"source_instance_revision": 1})}
+            schedule = validate_persistable_schedule_or_raise(instance, schedule)
+            schedule = schedule.revised(
+                meta=schedule.meta.revised(source_instance_revision=1)
             )
         now = _now()
         with self.connect() as conn:
@@ -124,6 +122,7 @@ class StoreWorkspaceMixin:
     ) -> Workspace:
         if preserve_schedule and draft_schedule is not None:
             raise ValueError("cannot preserve and replace a schedule in the same save")
+        instance = SchedulerInput.model_validate(instance.model_dump(mode="json"))
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = self._workspace_row(conn, workspace_id)
@@ -138,13 +137,11 @@ class StoreWorkspaceMixin:
                 schedule = None
             write_schedule = schedule is not None
             if schedule is not None:
-                validate_persistable_schedule_or_raise(instance, schedule)
-                schedule = schedule.model_copy(
-                    update={
-                        "meta": schedule.meta.model_copy(
-                            update={"source_instance_revision": next_instance_revision}
-                        )
-                    }
+                schedule = validate_persistable_schedule_or_raise(instance, schedule)
+                schedule = schedule.revised(
+                    meta=schedule.meta.revised(
+                        source_instance_revision=next_instance_revision
+                    )
                 )
             previous_catalog_id = workspace.catalog_id
             catalog_id = self._put_catalog(
@@ -215,13 +212,14 @@ class StoreWorkspaceMixin:
                 )
             if schedule is not None:
                 workspace = self._row_to_workspace(row)
-                validate_persistable_schedule_or_raise(workspace.instance, schedule)
-                schedule = schedule.model_copy(
-                    update={
-                        "meta": schedule.meta.model_copy(
-                            update={"source_instance_revision": expected_instance_revision}
-                        )
-                    }
+                schedule = validate_persistable_schedule_or_raise(
+                    workspace.instance,
+                    schedule,
+                )
+                schedule = schedule.revised(
+                    meta=schedule.meta.revised(
+                        source_instance_revision=expected_instance_revision
+                    )
                 )
             cursor = conn.execute(
                 """

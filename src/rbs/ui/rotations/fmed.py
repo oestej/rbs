@@ -17,13 +17,13 @@ from rbs.ui.editor_common import (
     _optional_float,
     _validation_message,
 )
+from rbs.ui.rotations.elective_draft import elective_option_draft
 from rbs.ui.rotations.forms import (
     _elective_repeatable_header,
     _rotation_detail_contents,
     _staffing_and_blocks,
 )
 from rbs.ui.rotations.ops import (
-    elective_shapes_for_rotation,
     replace_fmed_pgy_rules,
     replace_rotation_color,
     rotation_editor_state,
@@ -101,11 +101,7 @@ def _open_fmed_pgy_rules_dialog(
     rotation = instance.rotation(rotation_id)
     draft = rotation_editor_state(rotation)
     color_draft: Draft = {"color": rotation.color}
-    elective_option = instance.electives.option_for(rotation.id)
-    elective_draft: Draft = {
-        "repeatable": bool(elective_option and elective_option.repeatable),
-        "shapes": elective_shapes_for_rotation(instance, rotation.id),
-    }
+    elective_draft = elective_option_draft(instance, rotation)
     resident_override_drafts = [
         override.model_dump(mode="json")
         for override in instance.resident_rotation_overrides

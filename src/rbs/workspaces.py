@@ -3,11 +3,37 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 from rbs.models.instance import SchedulerInput
 from rbs.models.schedule import Schedule
 from rbs.models.workspace import Workspace
 from rbs.repository import WorkspaceRepository
+
+
+class InstanceEditImpact(StrEnum):
+    """How an accepted instance edit affects the current schedule.
+
+    The repository only needs a persistence mechanism (preserve or stale), but
+    callers should state the domain reason. Keeping that decision here avoids
+    a growing collection of unexplained ``preserve_schedule=True`` flags in UI
+    components.
+    """
+
+    SOLVER_INPUT = "solver_input"
+    PRESENTATION = "presentation"
+    APPLICATION_PREFERENCE = "application_preference"
+    CURRENT_SCHEDULE_CONSTRAINT = "current_schedule_constraint"
+    COMPATIBLE_CONFIGURATION = "compatible_configuration"
+
+    @property
+    def preserves_current_schedule(self) -> bool:
+        return self in {
+            InstanceEditImpact.PRESENTATION,
+            InstanceEditImpact.APPLICATION_PREFERENCE,
+            InstanceEditImpact.CURRENT_SCHEDULE_CONSTRAINT,
+            InstanceEditImpact.COMPATIBLE_CONFIGURATION,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,14 +47,18 @@ class WorkspaceController:
         workspace: Workspace,
         instance: SchedulerInput,
         *,
-        preserve_schedule: bool = False,
+        impact: InstanceEditImpact = InstanceEditImpact.SOLVER_INPUT,
         draft_schedule: Schedule | None = None,
     ) -> Workspace:
+        if draft_schedule is not None and impact.preserves_current_schedule:
+            raise ValueError(
+                "cannot preserve and replace a schedule in the same instance edit"
+            )
         return self.repository.save_instance(
             workspace.id,
             instance,
             expected_workspace_revision=workspace.workspace_revision,
-            preserve_schedule=preserve_schedule,
+            preserve_schedule=impact.preserves_current_schedule,
             draft_schedule=draft_schedule,
         )
 

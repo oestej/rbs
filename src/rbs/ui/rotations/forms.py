@@ -47,9 +47,9 @@ from rbs.ui.editor_common import (
     _weeks_label,
 )
 from rbs.ui.rotations.availability import _elective_availability_editor
+from rbs.ui.rotations.elective_draft import elective_option_draft
 from rbs.ui.rotations.ops import (
     add_mandatory_rotation,
-    elective_shapes_for_rotation,
     next_mandatory_rotation_id,
     replace_standard_rotation,
     rotation_editor_state,
@@ -216,14 +216,10 @@ def _rotation_editor(
         if rotation is not None
         else _new_mandatory_rotation_draft(instance)
     )
-    elective_option = instance.electives.option_for(rotation.id) if rotation is not None else None
-    elective_draft: Draft = {
-        "repeatable": bool(elective_option and elective_option.repeatable),
-        "blackout_weeks": set(elective_option.blackout_weeks if elective_option else ()),
-        "shapes": (
-            elective_shapes_for_rotation(instance, rotation.id) if rotation is not None else set()
-        ),
-    }
+    elective_option = (
+        instance.electives.option_for(rotation.id) if rotation is not None else None
+    )
+    elective_draft = elective_option_draft(instance, rotation)
     academic_half_day = instance.clinic_policy.recurring_academic_half_day
     site_options = {site.id: site.name for site in instance.clinic_policy.sites}
     default_site_ids = list(instance.clinic_policy.site_ids)
@@ -1506,6 +1502,8 @@ def _elective_repeatable_header(
     elective_draft: Draft,
     *,
     title: str = "Elective availability",
+    description: str | None = None,
+    requires_shapes: bool = True,
 ) -> Callable[[], None]:
     """Render the shared repeat-takes checkbox; return its refresher.
 
@@ -1520,8 +1518,11 @@ def _elective_repeatable_header(
     ):
         ui.label(title).classes("rbs-type-control-label")
         ui.label(
-            "Repeat takes apply to every block shape marked Elective "
-            "or Both below. Elective block sizes follow those shapes."
+            description
+            or (
+                "Repeat takes apply to every block shape marked Elective "
+                "or Both below. Elective block sizes follow those shapes."
+            )
         ).classes("rbs-type-caption rbs-text-muted")
         repeatable = ui.checkbox(
             "Can be taken more than once as an elective",
@@ -1530,7 +1531,9 @@ def _elective_repeatable_header(
         repeatable.bind_value(elective_draft, "repeatable")
 
     def refresh() -> None:
-        repeatable.set_enabled(bool(elective_draft.get("shapes", set())))
+        repeatable.set_enabled(
+            not requires_shapes or bool(elective_draft.get("shapes", set()))
+        )
 
     refresh()
     return refresh
