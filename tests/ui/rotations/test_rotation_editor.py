@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -1509,6 +1509,24 @@ def test_clinic_tab_edits_site_specific_holidays_and_closure_days() -> None:
         and element._props.get("label") == "Closed clinic sites"
         for element in created
     )
+
+
+def test_adding_closure_day_outside_the_academic_year_is_rejected() -> None:
+    instance = sample_instance()
+    last_day = instance.calendar.first_week_start + timedelta(
+        days=instance.calendar.weeks * 7 - 1
+    )
+    outside = (last_day + timedelta(days=1)).isoformat()
+    with pytest.raises(ValidationError, match="outside academic year"):
+        replace_clinic_closure_days(
+            instance,
+            [{"date": outside, "name": "Too late", "sites": ["maple"]}],
+        )
+
+    draft = instance.clinic_policy.site("maple").model_dump(mode="json")
+    draft["closure_days"] = [*draft["closure_days"], {"date": outside, "name": "Too late"}]
+    with pytest.raises(ValidationError, match="outside academic year"):
+        replace_clinic(instance, "maple", draft)
 
 
 def test_copy_clinic_closure_days_merges_without_replacing_destination_dates() -> None:

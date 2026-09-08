@@ -6,6 +6,7 @@ from datetime import date
 
 from rbs.models.case_blocks import ManualClinicBlock, ResidentRotationOverride
 from rbs.models.enums import RotationKind, Session
+from rbs.models.locks import LockedPlacement
 from rbs.models.special import SpecialRotation
 
 
@@ -46,6 +47,14 @@ class SolverIntegrityMixin:
                         occupied[key] = special
 
     def _check_locks(self, rotation_ids: set[str]) -> None:
+        # Identical duplicate pins describe one placement, so collapse them
+        # here instead of rejecting work the user already saved. A week pinned
+        # to two different rotations is still an error below.
+        deduped: list[LockedPlacement] = []
+        for lock in self.locks:
+            if lock not in deduped:
+                deduped.append(lock)
+        self.locks = deduped
         by_id = self.residents_by_id
         seen: dict[tuple[str, int], tuple[str, bool]] = {}
         for lock in self.locks:

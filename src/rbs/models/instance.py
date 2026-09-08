@@ -264,6 +264,13 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
                         f"outside academic year {first_day.isoformat()}.."
                         f"{last_day.isoformat()}"
                     )
+            for closure in clinic.closure_days:
+                if not first_day <= closure.date <= last_day:
+                    raise ValueError(
+                        f"{clinic.name} closure day {closure.date.isoformat()} is "
+                        f"outside academic year {first_day.isoformat()}.."
+                        f"{last_day.isoformat()}"
+                    )
 
         recurring_day = self.clinic_policy.academic.weekday
         for override in self.academic_half_day_overrides:

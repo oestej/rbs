@@ -86,6 +86,22 @@ def test_rejects_two_rotations_same_week() -> None:
         loads_instance(json.dumps(payload))
 
 
+def test_identical_duplicate_locks_collapse_to_one() -> None:
+    payload = sample_instance().model_dump(mode="json")
+    payload["locks"] = [
+        {"resident_id": "resident-001", "rotation_id": "clinic", "weeks": [20]},
+        {"resident_id": "resident-001", "rotation_id": "clinic", "weeks": [20]},
+    ]
+    instance = loads_instance(json.dumps(payload))
+    matching = [
+        lock
+        for lock in instance.locks
+        if lock.resident_id == "resident-001" and lock.rotation_id == "clinic"
+    ]
+    assert len(matching) == 1
+    assert matching[0].weeks == [20]
+
+
 def test_lock_weeks_are_sorted_unique() -> None:
     lock = LockedPlacement(resident_id="resident-001", rotation_id="icu", weeks=[22, 20, 21, 23])
     assert lock.weeks == [20, 21, 22, 23]
@@ -427,6 +443,28 @@ def test_manual_exact_block_can_be_added_locked_and_unlocked() -> None:
         or not set(lock.weeks) & set(block.weeks)
         for lock in unlocked.locks
     )
+
+
+def test_replace_manual_block_does_not_duplicate_an_identical_block() -> None:
+    instance = sample_instance()
+    resident_id = instance.residents[0].id
+    added = replace_manual_block(
+        instance,
+        resident_id=resident_id,
+        rotation_id="icu",
+        start_week=20,
+        duration_weeks=4,
+    )
+    assert len(added.locks) == len(instance.locks) + 1
+    repeated = replace_manual_block(
+        added,
+        resident_id=resident_id,
+        rotation_id="icu",
+        start_week=20,
+        duration_weeks=4,
+    )
+    assert len(repeated.locks) == len(added.locks)
+    assert repeated == added
 
 
 def test_manual_exact_block_can_explicitly_exempt_rotation_grouping() -> None:
