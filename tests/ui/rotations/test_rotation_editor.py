@@ -33,6 +33,8 @@ from rbs.ui.editor_common import (
     _academic_block_start_for_week,
     _academic_block_start_options,
 )
+from rbs.ui.locks import ScheduleBlock, replace_schedule_block
+from rbs.ui.residents.ops import resident_schedule_report_rows
 from rbs.ui.rotations.editor import (
     NEW_MANDATORY_ROTATION_ID,
     _apply_away_selection,
@@ -55,6 +57,7 @@ from rbs.ui.rotations.ops import (
     add_manual_clinic_block,
     add_resident_rotation_waiver,
     next_mandatory_rotation_id,
+    place_manual_clinic_block,
     remove_mandatory_rotation,
     remove_manual_clinic_block,
     remove_resident_rotation_waiver,
@@ -70,6 +73,7 @@ from rbs.ui.rotations.ops import (
     set_elective_allocation,
     special_rotations,
     standard_rotations,
+    withdraw_manual_clinic_block,
 )
 from rbs.ui.rotations.widgets import (
     add_block_config,
@@ -1881,6 +1885,115 @@ def test_manual_clinic_block_replaces_elective_and_round_trips() -> None:
     assert manual.replaces_rotation_id == "elective"
     assert updated.scheduling_case().manual_clinic_blocks == [manual]
     assert remove_manual_clinic_block(updated, 0).manual_clinic_blocks == []
+
+
+def test_place_manual_clinic_block_shows_on_the_block_schedule() -> None:
+    instance = sample_instance()
+
+    updated, draft = place_manual_clinic_block(
+        instance,
+        None,
+        {
+            "resident_id": "resident-001",
+            "rotation_id": "clinic",
+            "start_week": 1,
+            "duration_weeks": 2,
+            "replaces_rotation_id": "elective",
+        },
+    )
+
+    assert len(updated.manual_clinic_blocks) == 1
+    assert draft is not None
+    placed = next(
+        assignment
+        for assignment in draft.assignments
+        if assignment.resident_id == "resident-001" and assignment.rotation_id == "clinic"
+    )
+    assert placed.weeks == [1, 2]
+    assert placed.locked_weeks == [1, 2]
+    assert placed.clinic_slots == []
+    assert "solve required" in " ".join(draft.meta.notes)
+    rows = resident_schedule_report_rows(updated, draft, "resident-001")
+    assert [(row["rotation_code"], row["weeks"]) for row in rows] == [("CLINIC", "1–2")]
+
+
+def test_place_manual_clinic_block_matches_an_existing_draft() -> None:
+    instance = sample_instance()
+    draft = replace_schedule_block(
+        instance,
+        None,
+        ScheduleBlock(
+            resident_id="resident-001",
+            rotation_id="clinic",
+            start_week=1,
+            duration_weeks=2,
+        ),
+    )
+
+    updated, unchanged = place_manual_clinic_block(
+        instance,
+        draft,
+        {
+            "resident_id": "resident-001",
+            "rotation_id": "clinic",
+            "start_week": 1,
+            "duration_weeks": 2,
+            "replaces_rotation_id": "elective",
+        },
+    )
+
+    assert len(updated.manual_clinic_blocks) == 1
+    assert unchanged is None
+
+
+def test_withdraw_manual_clinic_block_clears_the_draft() -> None:
+    instance = sample_instance()
+    updated, draft = place_manual_clinic_block(
+        instance,
+        None,
+        {
+            "resident_id": "resident-001",
+            "rotation_id": "clinic",
+            "start_week": 1,
+            "duration_weeks": 2,
+            "replaces_rotation_id": "elective",
+        },
+    )
+    assert draft is not None
+
+    withdrawn, cleared = withdraw_manual_clinic_block(updated, draft, 0)
+
+    assert withdrawn.manual_clinic_blocks == []
+    assert cleared is not None
+    assert [
+        assignment
+        for assignment in cleared.assignments
+        if assignment.resident_id == "resident-001"
+    ] == []
+    assert resident_schedule_report_rows(withdrawn, cleared, "resident-001") == []
+
+
+def test_withdraw_manual_clinic_block_without_a_draft() -> None:
+    instance = sample_instance()
+    updated, _draft = place_manual_clinic_block(
+        instance,
+        None,
+        {
+            "resident_id": "resident-001",
+            "rotation_id": "clinic",
+            "start_week": 1,
+            "duration_weeks": 2,
+            "replaces_rotation_id": "elective",
+        },
+    )
+
+    withdrawn, cleared = withdraw_manual_clinic_block(updated, None, 0)
+
+    assert withdrawn.manual_clinic_blocks == []
+    assert cleared is None
+
+    with pytest.raises(ValueError, match="manual Clinic block not found"):
+        withdraw_manual_clinic_block(withdrawn, None, 0)
 
 
 def test_manual_clinic_block_can_use_resident_unallocated_time() -> None:

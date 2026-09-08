@@ -6,6 +6,9 @@
 
 - **Files:** Only the current file format opens. Older `.rbsc` files are
   rejected instead of being upgraded in place.
+- **Clinic:** Scheduling a fixed Clinic block for a resident now places it
+  on their block schedule immediately, with a solve still required
+  afterwards. Removing the block clears that placement again.
 
 ## [0.1.7] - 2026-09-07
 

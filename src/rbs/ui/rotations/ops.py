@@ -27,7 +27,12 @@ from rbs.models.rotation import (
 )
 from rbs.models.schedule import Schedule
 from rbs.ui.drafts import Draft
-from rbs.ui.locks import ScheduleBlock, schedule_blocks
+from rbs.ui.locks import (
+    ScheduleBlock,
+    clear_schedule_block,
+    replace_schedule_block,
+    schedule_blocks,
+)
 
 __all__ = [
     "standard_rotations",
@@ -55,6 +60,8 @@ __all__ = [
     "replace_fmed_pgy_rules",
     "add_manual_clinic_block",
     "remove_manual_clinic_block",
+    "place_manual_clinic_block",
+    "withdraw_manual_clinic_block",
     "add_resident_rotation_waiver",
     "remove_resident_rotation_waiver",
     "resident_missing_mandatory_rotations",
@@ -1768,6 +1775,68 @@ def remove_manual_clinic_block(
     blocks = list(instance.manual_clinic_blocks)
     blocks.pop(index)
     return instance.revised(manual_clinic_blocks=blocks)
+
+
+def place_manual_clinic_block(
+    instance: SchedulerInput,
+    schedule: Schedule | None,
+    block: ManualClinicBlock | Draft,
+) -> tuple[SchedulerInput, Schedule | None]:
+    """Add a fixed resident Clinic block and place it on the working schedule.
+
+    The manual block itself is the hard input for the next solve; the returned
+    schedule carries the same placement immediately so the resident's block
+    schedule shows it before that solve. Returns no draft schedule when the
+    placement already matches the working schedule.
+    """
+    updated = add_manual_clinic_block(instance, block)
+    added = updated.manual_clinic_blocks[-1]
+    draft = replace_schedule_block(
+        updated,
+        schedule,
+        ScheduleBlock(
+            resident_id=added.resident_id,
+            rotation_id=added.rotation_id,
+            start_week=added.start_week,
+            duration_weeks=added.duration_weeks,
+            elective=False,
+        ),
+    )
+    if schedule is not None and draft is schedule:
+        return updated, None
+    return updated, draft
+
+
+def withdraw_manual_clinic_block(
+    instance: SchedulerInput,
+    schedule: Schedule | None,
+    index: int,
+) -> tuple[SchedulerInput, Schedule | None]:
+    """Remove a fixed resident Clinic block and clear its draft placement.
+
+    Returns no draft schedule when there is no working schedule or the block
+    is not on it.
+    """
+    if not 0 <= index < len(instance.manual_clinic_blocks):
+        raise ValueError("manual Clinic block not found")
+    removed = instance.manual_clinic_blocks[index]
+    updated = remove_manual_clinic_block(instance, index)
+    if schedule is None:
+        return updated, None
+    try:
+        draft = clear_schedule_block(
+            schedule,
+            ScheduleBlock(
+                resident_id=removed.resident_id,
+                rotation_id=removed.rotation_id,
+                start_week=removed.start_week,
+                duration_weeks=removed.duration_weeks,
+                elective=False,
+            ),
+        )
+    except ValueError:
+        return updated, None
+    return updated, draft
 
 
 def add_resident_rotation_waiver(

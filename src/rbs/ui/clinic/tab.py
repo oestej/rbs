@@ -13,6 +13,7 @@ from rbs.models.enums import WEEKDAYS_MF, RotationKind, Session, Weekday
 from rbs.models.instance import ManualClinicBlock, SchedulerInput
 from rbs.models.resident import resident_display_sort_key
 from rbs.models.rotation import Rotation, rotation_display_sort_key
+from rbs.models.schedule import Schedule
 from rbs.ui import page_shells
 from rbs.ui.buttons import SECONDARY_BUTTON_PROPS
 from rbs.ui.clinic.ops import (
@@ -43,12 +44,12 @@ from rbs.ui.editor_common import (
     _weeks_label,
 )
 from rbs.ui.rotations.ops import (
-    add_manual_clinic_block,
     add_resident_rotation_waiver,
-    remove_manual_clinic_block,
+    place_manual_clinic_block,
     remove_resident_rotation_waiver,
     replace_clinic_block_rules,
     rotation_editor_state,
+    withdraw_manual_clinic_block,
 )
 from rbs.ui.rotations.widgets import (
     add_block_config,
@@ -60,6 +61,7 @@ from rbs.ui.rotations.widgets import (
 )
 
 SaveRotation = Callable[[SchedulerInput, str | None], None]
+SaveClinicBlockSchedule = Callable[[SchedulerInput, Schedule], None]
 
 
 def render_clinic_tab(
@@ -68,6 +70,8 @@ def render_clinic_tab(
     on_save: SaveRotation,
     active_section: str = "clinic_sites",
     on_section_change=None,
+    schedule: Schedule | None = None,
+    on_block_schedule_save: SaveClinicBlockSchedule | None = None,
 ) -> None:
     """Render Clinic block rules, manual placements, and clinic sites."""
     from nicegui import ui
@@ -111,7 +115,12 @@ def render_clinic_tab(
             with ui.tab_panel(rules_tab).classes("p-0 pt-4"):
                 _clinic_block_rules_configuration(instance, on_save=on_save)
             with ui.tab_panel(manual_tab).classes("p-0 pt-4"):
-                _manual_clinic_blocks_configuration(instance, on_save=on_save)
+                _manual_clinic_blocks_configuration(
+                    instance,
+                    on_save=on_save,
+                    schedule=schedule,
+                    on_block_schedule_save=on_block_schedule_save,
+                )
 
 
 def _clinic_block_rules_configuration(
@@ -706,6 +715,8 @@ def _manual_clinic_blocks_configuration(
     instance: SchedulerInput,
     *,
     on_save: SaveRotation,
+    schedule: Schedule | None = None,
+    on_block_schedule_save: SaveClinicBlockSchedule | None = None,
 ) -> None:
     from nicegui import ui
 
@@ -733,6 +744,8 @@ def _manual_clinic_blocks_configuration(
                         _open_manual_clinic_block_dialog,
                         instance,
                         on_save=on_save,
+                        schedule=schedule,
+                        on_block_schedule_save=on_block_schedule_save,
                     ),
                 ).props("unelevated no-caps")
                 add_button.set_enabled(bool(eligible_residents))
@@ -766,9 +779,20 @@ def _manual_clinic_blocks_configuration(
 
         def remove_block(index: int) -> None:
             try:
-                updated = remove_manual_clinic_block(instance, index)
-                ui.notify("Manual Clinic block removed", type="positive")
-                on_save(updated, None)
+                updated, draft_schedule = withdraw_manual_clinic_block(
+                    instance,
+                    schedule,
+                    index,
+                )
+                if draft_schedule is not None and on_block_schedule_save is not None:
+                    ui.notify(
+                        "Manual Clinic block removed · solve required",
+                        type="positive",
+                    )
+                    on_block_schedule_save(updated, draft_schedule)
+                else:
+                    ui.notify("Manual Clinic block removed", type="positive")
+                    on_save(updated, None)
             except (ValidationError, ValueError) as exc:
                 ui.notify(
                     _validation_message(exc),
@@ -1085,6 +1109,8 @@ def _open_manual_clinic_block_dialog(
     instance: SchedulerInput,
     *,
     on_save: SaveRotation,
+    schedule: Schedule | None = None,
+    on_block_schedule_save: SaveClinicBlockSchedule | None = None,
 ) -> None:
     from nicegui import ui
 
@@ -1251,8 +1277,9 @@ def _open_manual_clinic_block_dialog(
                     replacement_id = (
                         None if funding_id == _UNALLOCATED_FUNDING_KEY else funding_id
                     )
-                    updated = add_manual_clinic_block(
+                    updated, draft_schedule = place_manual_clinic_block(
                         instance,
+                        schedule,
                         {
                             "resident_id": str(resident_select.value),
                             "rotation_id": str(clinic_select.value),
@@ -1262,8 +1289,15 @@ def _open_manual_clinic_block_dialog(
                         },
                     )
                     dialog.close()
-                    ui.notify("Clinic block scheduled", type="positive")
-                    on_save(updated, None)
+                    if draft_schedule is not None and on_block_schedule_save is not None:
+                        ui.notify(
+                            "Clinic block scheduled · solve required",
+                            type="positive",
+                        )
+                        on_block_schedule_save(updated, draft_schedule)
+                    else:
+                        ui.notify("Clinic block scheduled", type="positive")
+                        on_save(updated, None)
                 except (ValidationError, ValueError) as exc:
                     ui.notify(
                         _validation_message(exc),
