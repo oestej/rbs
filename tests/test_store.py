@@ -787,7 +787,7 @@ def test_persisted_v1_catalogs_are_rejected_on_load(tmp_path) -> None:
         store.get(workspace_id)
 
 
-def test_persisted_v7_catalogs_are_upgraded_on_load(tmp_path) -> None:
+def test_persisted_v7_catalogs_are_rejected_on_load(tmp_path) -> None:
     path = tmp_path / "v7-catalog.sqlite"
     store = Store(path)
     store.init()
@@ -820,13 +820,5 @@ def test_persisted_v7_catalogs_are_upgraded_on_load(tmp_path) -> None:
             ),
         ).lastrowid
 
-    reloaded = Store(path)
-    loaded = reloaded.ensure_sample()
-
-    assert loaded.id == workspace_id
-    assert loaded.instance.electives.rotation_options
-    assert all(
-        group.anchor_rotation_id is None
-        for group in loaded.instance.rotation_groups
-    )
-    assert reloaded.get_catalog(catalog_id).catalog.schema_version == 8
+    with pytest.raises(ValidationError, match="Input should be 8"):
+        Store(path).get(workspace_id)

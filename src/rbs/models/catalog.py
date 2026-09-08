@@ -32,13 +32,13 @@ class ConstraintCatalog(StrictModel):
 
     @model_validator(mode="before")
     @classmethod
-    def migrate_v7(cls, value: Any) -> Any:
-        """Upgrade catalogs written before directional rotation groups existed."""
-        if not isinstance(value, dict) or value.get("schema_version") != 7:
-            return value
-        migrated = dict(value)
-        migrated["schema_version"] = 8
-        return migrated
+    def migrate_legacy(cls, value: Any) -> Any:
+        """Upgrade path for catalogs written by older schema versions.
+
+        No older version is accepted right now: only the current schema
+        loads. When the next schema ships, upgrade its predecessor here.
+        """
+        return value
 
     @model_validator(mode="after")
     def check_integrity(self) -> ConstraintCatalog:

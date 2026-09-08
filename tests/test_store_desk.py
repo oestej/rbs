@@ -236,23 +236,28 @@ def test_pre_v9_files_are_rejected(tmp_path) -> None:
         _store(tmp_path / "b").import_workspace_rbsc(json.dumps(payload))
 
 
-def test_v8_files_are_upgraded_with_directional_groups_disabled(tmp_path) -> None:
+def test_v8_files_are_rejected(tmp_path) -> None:
+    from pydantic import ValidationError
+
     source = _store(tmp_path / "a")
     payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
     payload["schema_version"] = 8
+
+    with pytest.raises(ValidationError, match="Input should be 9"):
+        _store(tmp_path / "b").import_workspace_rbsc(json.dumps(payload))
+
+
+def test_v7_files_with_v6_catalogs_are_rejected(tmp_path) -> None:
+    from pydantic import ValidationError
+
+    source = _store(tmp_path / "a")
+    payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
+    payload["schema_version"] = 7
     for record in payload["catalogs"]:
-        record["catalog"]["schema_version"] = 7
-        for group in record["catalog"]["rotation_groups"]:
-            group.pop("anchor_rotation_id")
+        record["catalog"]["schema_version"] = 6
 
-    target = _store(tmp_path / "b")
-    imported = target.import_workspace_rbsc(json.dumps(payload))[0]
-
-    assert imported.instance.rotation_groups
-    assert all(
-        group.anchor_rotation_id is None
-        for group in imported.instance.rotation_groups
-    )
+    with pytest.raises(ValidationError, match="Input should be 9"):
+        _store(tmp_path / "b").import_workspace_rbsc(json.dumps(payload))
 
 
 # ---- desk cap ----------------------------------------------------------

@@ -187,9 +187,9 @@ class Store(StoreCatalogMixin, StoreWorkspaceMixin, StoreExchangeMixin):
     def init(self) -> None:
         """Create current-schema tables and seed the bundled catalog.
 
-        Compatible records from the immediately preceding catalog schema are
-        upgraded while loading. Older incompatible records fail validation
-        with a descriptive error.
+        Only the current schema is supported: databases or documents written
+        by older builds fail validation with a descriptive error instead of
+        being upgraded in place.
         """
         with self.connect() as conn:
             conn.executescript(SCHEMA)
