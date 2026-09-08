@@ -1,5 +1,6 @@
 import sys
 import time
+from types import SimpleNamespace
 
 from rbs.ui.pdf_export import (
     _pending_exports,
@@ -168,3 +169,45 @@ def test_resident_export_to_pdf_uses_open_callback() -> None:
     content, filename = opened[0]
     assert content.startswith(b"%PDF")
     assert filename.endswith(".pdf")
+
+
+def test_full_block_schedule_export_uses_the_shared_pdf_presenter(monkeypatch) -> None:
+    from nicegui import ui
+
+    from rbs.catalog import sample_instance
+    from rbs.ui import app_shell
+
+    instance = sample_instance()
+    workspace = SimpleNamespace(instance=instance, latest_schedule=None)
+    session = SimpleNamespace(show_past_block_weeks=False)
+    opened: list[tuple[object, bytes, str]] = []
+    monkeypatch.setattr(
+        app_shell,
+        "build_block_schedule_pdf",
+        lambda exported_instance, schedule: (
+            b"%PDF-block" if exported_instance is instance and schedule is None else b""
+        ),
+    )
+    monkeypatch.setattr(
+        app_shell,
+        "block_schedule_pdf_filename",
+        lambda academic_year: f"block-schedule-{academic_year}.pdf",
+    )
+    monkeypatch.setattr(
+        app_shell,
+        "_open_exported_pdf",
+        lambda exported_session, content, filename: opened.append(
+            (exported_session, content, filename)
+        ),
+    )
+
+    before = set(ui.context.client.elements)
+    app_shell._render_block_schedule(session, workspace)
+    export = next(
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before and element._props.get("label") == "Export to PDF"
+    )
+    next(iter(export._event_listeners.values())).handler(None)
+
+    assert opened == [(session, b"%PDF-block", "block-schedule-2026-2027.pdf")]

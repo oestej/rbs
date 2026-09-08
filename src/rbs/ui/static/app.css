@@ -12,6 +12,16 @@
   min-height: 44px;
 }
 
+.rbs-schedule-heading-row {
+  flex-wrap: wrap;
+}
+
+.rbs-schedule-heading-actions {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  margin-left: auto;
+}
+
 .rbs-page-toolbar {
   min-height: 44px;
   padding: var(--rbs-space-1) 0 var(--rbs-space-2);

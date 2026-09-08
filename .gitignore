@@ -15,6 +15,9 @@ venv/
 htmlcov/
 .DS_Store
 out/
+# Generated report artifacts and render previews.
+output/
+tmp/
 schedule.json
 *.sqlite
 *.sqlite3
