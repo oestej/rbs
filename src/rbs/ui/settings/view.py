@@ -6,7 +6,7 @@ from datetime import date
 
 from pydantic import ValidationError
 
-from rbs.academic_year import rebase_academic_year, rebase_week_start, week_start_choices
+from rbs.academic_year import rebase_week_start, start_new_academic_year, week_start_choices
 from rbs.clinic_locks import automatic_clinic_lock_count
 from rbs.logging import get_logger
 from rbs.models.color_scheme import (
@@ -316,15 +316,24 @@ def save_general_workspace_settings(
     academic_year: str,
     first_week_start: date | None = None,
 ) -> tuple[Workspace, bool]:
-    """Persist General settings and revive a compatible prior solve when possible."""
-    updated_instance = rebase_academic_year(workspace.instance, academic_year)
+    """Persist General settings, discarding schedules when the year changes."""
+    updated_instance = start_new_academic_year(workspace.instance, academic_year)
+    year_changed = updated_instance.academic_year != workspace.instance.academic_year
     if first_week_start is not None:
         updated_instance = rebase_week_start(updated_instance, first_week_start)
     saved = workspace
     changed = False
     if updated_instance != workspace.instance:
-        prior_schedule = workspace.latest_schedule
-        saved = WorkspaceController(store).save_instance(workspace, updated_instance)
+        prior_schedule = None if year_changed else workspace.latest_schedule
+        saved = WorkspaceController(store).save_instance(
+            workspace,
+            updated_instance,
+            impact=(
+                InstanceEditImpact.ACADEMIC_YEAR_CHANGE
+                if year_changed
+                else InstanceEditImpact.SOLVER_INPUT
+            ),
+        )
         changed = True
         if prior_schedule is not None:
             try:

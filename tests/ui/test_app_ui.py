@@ -802,7 +802,7 @@ def test_settings_keeps_scheduling_behaviour_and_gives_up_the_workspace(tmp_path
     )
 
 
-def test_restoring_academic_year_reactivates_a_compatible_solve(tmp_path) -> None:
+def test_changing_academic_year_permanently_discards_the_schedule(tmp_path) -> None:
     from rbs.catalog import sample_instance
     from rbs.solver.core import get_engine
     from rbs.store import Store
@@ -826,7 +826,10 @@ def test_restoring_academic_year_reactivates_a_compatible_solve(tmp_path) -> Non
 
     assert did_change
     assert changed.schedule is None
-    assert changed.solution_is_out_of_date
+    assert changed.stale_schedule is None
+    assert changed.latest_schedule is None
+    assert not changed.solution_is_out_of_date
+    assert changed.schedule_revision is None
 
     restored, did_restore = save_general_workspace_settings(
         store,
@@ -836,9 +839,9 @@ def test_restoring_academic_year_reactivates_a_compatible_solve(tmp_path) -> Non
     )
 
     assert did_restore
-    assert restored.schedule is not None
+    assert restored.schedule is None
+    assert restored.stale_schedule is None
     assert not restored.solution_is_out_of_date
-    assert restored.schedule.meta.source_instance_revision == restored.instance_revision
 
 
 def test_moving_the_annual_start_date_persists_and_revives_a_compatible_solve(

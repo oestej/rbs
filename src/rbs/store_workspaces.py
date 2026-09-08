@@ -119,7 +119,10 @@ class StoreWorkspaceMixin:
         expected_workspace_revision: int,
         preserve_schedule: bool = False,
         draft_schedule: Schedule | None = None,
+        discard_schedule: bool = False,
     ) -> Workspace:
+        if discard_schedule and (preserve_schedule or draft_schedule is not None):
+            raise ValueError("cannot discard and retain a schedule in the same save")
         if preserve_schedule and draft_schedule is not None:
             raise ValueError("cannot preserve and replace a schedule in the same save")
         instance = SchedulerInput.model_validate(instance.model_dump(mode="json"))
@@ -135,7 +138,7 @@ class StoreWorkspaceMixin:
                 schedule = workspace.schedule
             else:
                 schedule = None
-            write_schedule = schedule is not None
+            write_schedule = schedule is not None or discard_schedule
             if schedule is not None:
                 schedule = validate_persistable_schedule_or_raise(instance, schedule)
                 schedule = schedule.revised(
@@ -165,7 +168,7 @@ class StoreWorkspaceMixin:
                         catalog_id,
                         dumps(instance.scheduling_case()),
                         dumps(schedule) if schedule is not None else None,
-                        next_instance_revision,
+                        next_instance_revision if schedule is not None else None,
                         _now(),
                         workspace_id,
                         expected_workspace_revision,

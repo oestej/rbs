@@ -879,6 +879,133 @@ def test_the_workspace_dialog_only_edits_the_current_workspace(tmp_path) -> None
     assert session.workspace_dialog is not None
 
 
+def test_academic_year_change_requires_confirmation_and_cancel_keeps_schedule(
+    tmp_path,
+) -> None:
+    from nicegui import ui
+
+    from rbs.ui.app_documents import open_workspace_dialog
+
+    session, store = _session(tmp_path)
+    workspace = store.get(session.workspace_id)
+    workspace = WorkspaceController(store).save_schedule(
+        workspace,
+        _solved(store, workspace.id),
+    )
+    before = set(ui.context.client.elements)
+    open_workspace_dialog(session, workspace)
+    created = _created(before)
+    academic_year = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Select"
+        and element._props.get("label") == "Academic year"
+    )
+    apply_changes = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Apply changes"
+    )
+
+    academic_year.set_value("2027-2028")
+    next(iter(apply_changes._event_listeners.values())).handler(None)
+
+    unchanged = store.get(workspace.id)
+    assert unchanged.academic_year == "2026-2027"
+    assert unchanged.schedule is not None
+    confirmation_elements = _created(before)
+    labels = _labels(confirmation_elements)
+    assert "Change academic year?" in labels
+    assert (
+        "Changing the academic year to 2027-2028 will clear the entire block and "
+        "clinic schedule and all year-specific entries, including vacation weeks, "
+        "individual days off, dated conferences and events, clinic date exceptions, "
+        "and manual placements."
+    ) in labels
+    assert (
+        "Residents, rotations, recurring clinic settings, and scheduling rules will "
+        "carry forward to the new year."
+    ) in labels
+    cancel = next(
+        element
+        for element in confirmation_elements
+        if element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Cancel"
+    )
+    next(iter(cancel._event_listeners.values())).handler(None)
+
+    unchanged = store.get(workspace.id)
+    assert unchanged.academic_year == "2026-2027"
+    assert unchanged.schedule is not None
+    assert session.workspace_dialog.value is True
+
+
+def test_confirmed_academic_year_change_uses_current_revision_and_clears_schedule(
+    tmp_path,
+) -> None:
+    from nicegui import ui
+
+    from rbs.ui.app_documents import open_workspace_dialog
+
+    session, store = _session(tmp_path)
+    rendered = store.get(session.workspace_id)
+    rendered = WorkspaceController(store).save_schedule(
+        rendered,
+        _solved(store, rendered.id),
+    )
+    before = set(ui.context.client.elements)
+    open_workspace_dialog(session, rendered)
+    created = _created(before)
+
+    # Automatic locking or another accepted edit may advance the revision while
+    # the settings dialog remains open. The year change rebases that current
+    # instance rather than trying to replace it with the stale rendered copy.
+    concurrent = WorkspaceController(store).save_instance(
+        rendered,
+        rendered.instance.revised(lock_through_today=True),
+    )
+    assert concurrent.latest_schedule is not None
+
+    academic_year = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Select"
+        and element._props.get("label") == "Academic year"
+    )
+    apply_changes = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Apply changes"
+    )
+    academic_year.set_value("2027-2028")
+    next(iter(apply_changes._event_listeners.values())).handler(None)
+    continue_button = next(
+        element
+        for element in _created(before)
+        if element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Continue"
+    )
+
+    next(iter(continue_button._event_listeners.values())).handler(None)
+
+    changed = store.get(rendered.id)
+    assert changed.academic_year == "2027-2028"
+    assert changed.instance.lock_through_today
+    assert all(not resident.vacation_weeks for resident in changed.instance.residents)
+    assert all(not resident.days_off for resident in changed.instance.residents)
+    assert not changed.instance.academic_half_day_overrides
+    assert not changed.instance.locks
+    assert not changed.instance.special_rotations
+    assert not changed.instance.clinic_policy.closure_days
+    assert changed.schedule is None
+    assert changed.stale_schedule is None
+    assert changed.latest_schedule is None
+    assert changed.schedule_revision is None
+    assert session.workspace_dialog.value is False
+
+
 def test_workspace_color_save_uses_its_rendered_snapshot_and_closes(tmp_path) -> None:
     from nicegui import ui
 

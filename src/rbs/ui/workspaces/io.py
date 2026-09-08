@@ -11,12 +11,19 @@ such.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
 from rbs.logging import get_logger
 from rbs.models.rbsc import RBSCState
+from rbs.models.workspace import Workspace, WorkspaceConflictError
 from rbs.repository import WorkspaceRepository
+from rbs.ui.buttons import (
+    DESTRUCTIVE_BUTTON_PROPS,
+    TERTIARY_BUTTON_PROPS,
+    button_props,
+)
 from rbs.ui.host import DEFAULT_UPLOAD_MAX_BYTES
 from rbs.ui.session import WorkspaceSession
 
@@ -138,20 +145,25 @@ def _identity_section(
     from nicegui import ui
     from pydantic import ValidationError
 
-    from rbs.academic_year import academic_year_choices
+    from rbs.academic_year import academic_year_choices, start_new_academic_year
     from rbs.ui.settings.view import _open_workspace_delete_dialog, save_general_workspace_settings
 
     if workspace is None:
         return
     today = date.today()
 
-    def save_workspace() -> None:
+    def apply_workspace_settings(
+        current: Workspace,
+        *,
+        name: str,
+        academic_year: str,
+    ) -> None:
         try:
             _saved, changed = save_general_workspace_settings(
                 store,
-                workspace,
-                name=str(workspace_name.value or "").strip() or "Untitled",
-                academic_year=str(academic_year.value or ""),
+                current,
+                name=name,
+                academic_year=academic_year,
             )
             if not changed:
                 return
@@ -163,8 +175,44 @@ def _identity_section(
             )
             dismiss()
             redraw()
+        except WorkspaceConflictError:
+            ui.notify(
+                "The workspace changed while the confirmation was open. "
+                "Review the latest settings and try again.",
+                type="warning",
+                multi_line=True,
+            )
+            dismiss()
+            redraw()
         except (ValidationError, ValueError) as exc:
             ui.notify(_safe_error(exc), type="negative")
+
+    def save_workspace() -> None:
+        name = str(workspace_name.value or "").strip() or "Untitled"
+        selected_year = str(academic_year.value or "")
+        try:
+            current = store.get(workspace.id)
+            rebased = start_new_academic_year(current.instance, selected_year)
+        except (ValidationError, ValueError) as exc:
+            ui.notify(_safe_error(exc), type="negative")
+            return
+
+        if rebased.academic_year == current.instance.academic_year:
+            apply_workspace_settings(
+                current,
+                name=name,
+                academic_year=selected_year,
+            )
+            return
+
+        _open_academic_year_change_dialog(
+            selected_year,
+            on_continue=lambda: apply_workspace_settings(
+                current,
+                name=name,
+                academic_year=selected_year,
+            ),
+        )
 
     section = (
         nullcontext()
@@ -206,6 +254,47 @@ def _identity_section(
                     icon="delete_outline",
                     on_click=lambda: _open_workspace_delete_dialog(store, workspace, state, redraw),
                 ).props("flat no-caps color=negative")
+
+
+def _open_academic_year_change_dialog(
+    academic_year: str,
+    *,
+    on_continue: Callable[[], None],
+) -> None:
+    """Confirm the schedule-clearing boundary before moving to another year."""
+    from nicegui import ui
+
+    with ui.dialog() as dialog, ui.card().classes(
+        "rbs-popout-dialog w-full max-w-md p-0 gap-0"
+    ):
+        with ui.row().classes("w-full items-center gap-3 p-5 pb-4"):
+            ui.icon("warning_amber").props("size=30px").classes("rbs-text-warning")
+            ui.label("Change academic year?").classes("rbs-type-dialog-title")
+        with ui.column().classes("w-full gap-2 px-5 pb-5"):
+            ui.label(
+                f"Changing the academic year to {academic_year} will clear the entire "
+                "block and clinic schedule and all year-specific entries, including "
+                "vacation weeks, individual days off, dated conferences and events, "
+                "clinic date exceptions, and manual placements."
+            ).classes("rbs-type-body")
+            ui.label(
+                "Residents, rotations, recurring clinic settings, and scheduling rules "
+                "will carry forward to the new year."
+            ).classes("rbs-type-body rbs-text-muted")
+
+        def continue_change() -> None:
+            dialog.close()
+            on_continue()
+
+        ui.separator()
+        with ui.row().classes("w-full items-center justify-end gap-2 px-5 py-4"):
+            ui.button("Cancel", on_click=dialog.close).props(TERTIARY_BUTTON_PROPS)
+            ui.button(
+                "Continue",
+                icon="arrow_forward",
+                on_click=continue_change,
+            ).props(button_props(DESTRUCTIVE_BUTTON_PROPS))
+    dialog.open()
 
 
 def _desktop_document_section(state, documents, *, dismiss=lambda: None) -> None:

@@ -107,11 +107,13 @@ def academic_year_choices(
 
 
 def rebase_academic_year(instance: SchedulerInput, value: str) -> SchedulerInput:
-    """Move a workspace to another academic year, including absolute-date inputs.
+    """Adapt a template to another academic year, including absolute-date inputs.
 
     Week-based inputs retain their week numbers. Calendar dates such as individual
     days off, clinic closures, and capacity overrides retain their month and day in
-    the corresponding year of the newly selected academic year.
+    the corresponding year of the newly selected academic year. User-initiated
+    academic-year changes must use :func:`start_new_academic_year` instead so dated
+    entries from one year are not silently copied into another.
     """
     normalized = academic_year_label(academic_year_start_year(value))
     if normalized == instance.academic_year:
@@ -190,6 +192,44 @@ def rebase_academic_year(instance: SchedulerInput, value: str) -> SchedulerInput
         # These pins came from the previous year's solved schedule. Manual
         # week-based choices remain useful, but generated through-today locks do not.
         locks=[lock for lock in instance.locks if lock.source != "through_today"],
+    )
+
+
+def start_new_academic_year(instance: SchedulerInput, value: str) -> SchedulerInput:
+    """Start another academic year without carrying year-specific work forward.
+
+    Reusable resident, rotation, curriculum, recurring-clinic, and solver settings
+    remain. Time away, dated calendar exceptions, week-specific exceptions, and
+    manual placements belong to the old year and are cleared rather than shifted.
+    """
+    normalized = academic_year_label(academic_year_start_year(value))
+    if normalized == instance.academic_year:
+        return instance
+
+    residents = [
+        resident.revised(vacation_weeks=[], days_off=[])
+        for resident in instance.residents
+    ]
+    sites = [
+        site.revised(capacity_overrides=[], closure_days=[])
+        for site in instance.clinic_policy.sites
+    ]
+    clinic_policy = instance.clinic_policy.revised(
+        sites=sites,
+        closure_days=[],
+    )
+    calendar = instance.calendar.revised(
+        first_week_start=first_week_start_for_academic_year(normalized)
+    )
+    return instance.revised(
+        academic_year=normalized,
+        calendar=calendar,
+        residents=residents,
+        clinic_policy=clinic_policy,
+        academic_half_day_overrides=[],
+        locks=[],
+        manual_clinic_blocks=[],
+        special_rotations=[],
     )
 
 

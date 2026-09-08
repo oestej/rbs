@@ -442,6 +442,31 @@ def test_save_instance_can_preserve_a_matching_schedule(tmp_path) -> None:
     assert saved.schedule.meta.source_instance_revision == saved.instance_revision
 
 
+def test_save_instance_can_atomically_discard_every_schedule(tmp_path) -> None:
+    from rbs.solver.core import get_engine
+
+    store = Store(tmp_path / "rbs.sqlite")
+    store.init()
+    instance = sample_instance()
+    schedule = get_engine("stub").solve(instance, options=instance.solver)
+    workspace = store.create("new-year", instance, schedule)
+
+    saved = store.save_instance(
+        workspace.id,
+        instance.revised(lock_through_today=True),
+        expected_workspace_revision=workspace.workspace_revision,
+        discard_schedule=True,
+    )
+
+    assert saved.instance.lock_through_today
+    assert saved.schedule is None
+    assert saved.stale_schedule is None
+    assert saved.latest_schedule is None
+    assert saved.schedule_revision is None
+    assert saved.instance_revision == workspace.instance_revision + 1
+    assert saved.workspace_revision == workspace.workspace_revision + 1
+
+
 def test_save_instance_can_atomically_replace_the_working_schedule(tmp_path) -> None:
     from rbs.models.enums import RotationKind, SolverEngineName, SolverStatus
     from rbs.models.schedule import Assignment, Schedule, ScheduleMeta

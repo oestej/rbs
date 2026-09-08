@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- **Academic year:** Moving a workspace to another academic year now asks for
+  confirmation, carries reusable setup forward, and starts without schedules,
+  time away, dated calendar entries, or manual placements from the prior year.
 - **Clinic schedule:** CSV exports now use a native save dialog in RBS Desktop
   and write to the selected file.
 - **Editing:** A form opened before another edit now reloads the current
