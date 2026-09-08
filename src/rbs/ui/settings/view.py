@@ -6,7 +6,7 @@ from datetime import date
 
 from pydantic import ValidationError
 
-from rbs.academic_year import rebase_academic_year, rebase_week_start, week_start_choices
+from rbs.academic_year import rebase_week_start, start_new_academic_year, week_start_choices
 from rbs.clinic_locks import automatic_clinic_lock_count
 from rbs.logging import get_logger
 from rbs.models.color_scheme import (
@@ -22,7 +22,7 @@ from rbs.ui import page_shells
 from rbs.ui.locks import THROUGH_TODAY_SOURCE, set_lock_through_today
 from rbs.ui.settings.color_scheme import replace_color_scheme
 from rbs.ui.settings.training_levels import training_level_settings
-from rbs.workspaces import WorkspaceController
+from rbs.workspaces import InstanceEditImpact, WorkspaceController
 
 _WEIGHT_FIELDS = (
     ("clinic_block_week_evenness", "Even Clinic blocks across the year"),
@@ -42,7 +42,6 @@ def _settings_tab(
     persist_instance,
     redraw,
     *,
-    schedule_is_current: bool = True,
     active_section: str = "settings_general",
     on_section_change=None,
     apply_theme=None,
@@ -83,19 +82,16 @@ def _settings_tab(
                     persist_instance,
                     redraw,
                     apply_theme,
-                    schedule_is_current=schedule_is_current,
                 )
             with ui.tab_panel(training_levels_tab).classes("p-0 pt-4"):
                 training_level_settings(
                     workspace,
                     persist_instance,
-                    schedule_is_current=schedule_is_current,
                 )
             with ui.tab_panel(advanced_tab).classes("p-0 pt-4"):
                 _advanced_settings(
                     workspace,
                     persist_instance,
-                    schedule_is_current=schedule_is_current,
                     automatic_num_workers=_application_settings_io(state) is not None,
                 )
 
@@ -107,8 +103,6 @@ def _general_settings(
     persist_instance,
     redraw,
     apply_theme,
-    *,
-    schedule_is_current: bool,
 ) -> None:
     """Settings that shape the schedule. Workspace identity lives on its own tab."""
     from nicegui import ui
@@ -192,7 +186,10 @@ def _general_settings(
                 today,
                 enabled=enabled,
             )
-            persist_instance(updated, preserve_schedule=schedule_is_current)
+            persist_instance(
+                updated,
+                impact=InstanceEditImpact.CURRENT_SCHEDULE_CONSTRAINT,
+            )
         except (ValidationError, ValueError) as exc:
             ui.notify(str(exc), type="negative")
 
@@ -319,15 +316,24 @@ def save_general_workspace_settings(
     academic_year: str,
     first_week_start: date | None = None,
 ) -> tuple[Workspace, bool]:
-    """Persist General settings and revive a compatible prior solve when possible."""
-    updated_instance = rebase_academic_year(workspace.instance, academic_year)
+    """Persist General settings, discarding schedules when the year changes."""
+    updated_instance = start_new_academic_year(workspace.instance, academic_year)
+    year_changed = updated_instance.academic_year != workspace.instance.academic_year
     if first_week_start is not None:
         updated_instance = rebase_week_start(updated_instance, first_week_start)
     saved = workspace
     changed = False
     if updated_instance != workspace.instance:
-        prior_schedule = workspace.latest_schedule
-        saved = WorkspaceController(store).save_instance(workspace, updated_instance)
+        prior_schedule = None if year_changed else workspace.latest_schedule
+        saved = WorkspaceController(store).save_instance(
+            workspace,
+            updated_instance,
+            impact=(
+                InstanceEditImpact.ACADEMIC_YEAR_CHANGE
+                if year_changed
+                else InstanceEditImpact.SOLVER_INPUT
+            ),
+        )
         changed = True
         if prior_schedule is not None:
             try:
@@ -353,8 +359,6 @@ def _colors_settings(
     workspace: Workspace,
     persist_instance,
     apply_theme,
-    *,
-    schedule_is_current: bool,
 ) -> None:
     """Define the institutional theme and shared schedule-selector palette."""
     from nicegui import ui
@@ -426,10 +430,10 @@ def _colors_settings(
             if revised == instance:
                 ui.notify("Color scheme is already up to date", type="info")
                 return
-            ui.notify("Institutional color scheme saved", type="positive")
+            persist_instance(revised, impact=InstanceEditImpact.PRESENTATION)
             if apply_theme is not None:
                 apply_theme(scheme)
-            persist_instance(revised, preserve_schedule=schedule_is_current)
+            ui.notify("Institutional color scheme saved", type="positive")
         except (ValidationError, ValueError) as exc:
             ui.notify(str(exc), type="negative")
 
@@ -529,7 +533,6 @@ def _advanced_settings(
     workspace: Workspace,
     persist_instance,
     *,
-    schedule_is_current: bool,
     automatic_num_workers: bool = False,
 ) -> None:
     """Solver budget, clinic balance rules, and objective weights."""
@@ -551,7 +554,10 @@ def _advanced_settings(
             # notify before persisting: persist_instance redraws, which deletes
             # the slot this handler is running in.
             ui.notify("Advanced settings saved", type="positive")
-            persist_instance(revised, preserve_schedule=schedule_is_current)
+            persist_instance(
+                revised,
+                impact=InstanceEditImpact.APPLICATION_PREFERENCE,
+            )
         except (ValidationError, ValueError) as exc:
             ui.notify(str(exc), type="negative")
 
@@ -569,7 +575,10 @@ def _advanced_settings(
                 )
             )
             ui.notify("Advanced settings restored to defaults", type="positive")
-            persist_instance(revised, preserve_schedule=schedule_is_current)
+            persist_instance(
+                revised,
+                impact=InstanceEditImpact.APPLICATION_PREFERENCE,
+            )
         except (ValidationError, ValueError) as exc:
             ui.notify(str(exc), type="negative")
 

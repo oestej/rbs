@@ -102,6 +102,57 @@ def validate_schedule(instance: SolverProblem, schedule: Schedule) -> ScheduleVa
     return ScheduleValidationResult(tuple(errors), tuple(warnings))
 
 
+def _validate_working_draft_integrity(
+    instance: SolverProblem,
+    schedule: Schedule,
+) -> ScheduleValidationResult:
+    """Validate invariants a later solve cannot safely repair.
+
+    Working drafts may be incomplete and may temporarily violate cohort-wide
+    capacity, adjacency, and annual-total constraints. They still have to
+    reference this problem's residents, rotations, clinic sites, calendar,
+    and viable block definitions.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    expected_weeks = set(range(1, instance.calendar.weeks + 1))
+    block_vacations: dict[tuple[str, str, int, int], set[int]] = defaultdict(set)
+    block_rules: dict[tuple[str, str, int, int], RotationBlockConfig] = {}
+
+    if schedule.meta.academic_year != instance.academic_year:
+        errors.append(
+            f"schedule academic year {schedule.meta.academic_year!r} does not match "
+            f"instance {instance.academic_year!r}"
+        )
+    _validate_assignments(
+        instance,
+        schedule,
+        expected_weeks,
+        block_vacations,
+        block_rules,
+        errors,
+    )
+    _validate_block_vacation_limits(block_vacations, block_rules, errors)
+    _validate_elective_policies(instance, schedule, errors)
+    _validate_resident_coverage(
+        instance,
+        schedule,
+        schedule.week_grid,
+        expected_weeks,
+        False,
+        errors,
+        warnings,
+    )
+    _validate_placement_rules(
+        instance,
+        schedule.week_grid,
+        instance.residents_by_id,
+        errors,
+        successful=False,
+    )
+    return ScheduleValidationResult(tuple(errors), tuple(warnings))
+
+
 def validate_schedule_or_raise(instance: SolverProblem, schedule: Schedule) -> None:
     result = validate_schedule(instance, schedule)
     if result.errors:
@@ -112,18 +163,27 @@ def validate_schedule_or_raise(instance: SolverProblem, schedule: Schedule) -> N
 def validate_persistable_schedule_or_raise(
     instance: SolverProblem,
     schedule: Schedule,
-) -> None:
-    """Validate solved output while permitting an explicitly unsolved working draft.
+) -> Schedule:
+    """Return revalidated output, permitting an explicitly unsolved working draft.
 
     A manual block edit can temporarily exceed capacity, consecutive-week, or
     annual-total constraints until the next solve rearranges the cohort. The
-    draft must still belong to the same academic year.
+    draft must remain structurally valid and refer only to data in the current
+    academic-year problem.
     """
+    # ``model_copy(update=...)`` does not run Pydantic validators. A UI edit
+    # may therefore hand persistence a Schedule object whose individual
+    # fields look valid but whose assignments overlap or whose nested ranges
+    # are contradictory. Reparse the wire shape before applying the more
+    # permissive working-draft policy so malformed values can never reach a
+    # transaction.
+    schedule = Schedule.model_validate(schedule.model_dump(mode="json"))
+
     if schedule.is_working_draft:
-        if schedule.meta.academic_year != instance.academic_year:
-            raise ValueError(
-                f"schedule academic year {schedule.meta.academic_year!r} does not match "
-                f"instance {instance.academic_year!r}"
-            )
-        return
+        result = _validate_working_draft_integrity(instance, schedule)
+        if result.errors:
+            preview = "; ".join(result.errors[:5])
+            raise ValueError(f"working draft does not match instance: {preview}")
+        return schedule
     validate_schedule_or_raise(instance, schedule)
+    return schedule

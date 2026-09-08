@@ -27,6 +27,16 @@ from rbs.ui.buttons import (
     TERTIARY_BUTTON_PROPS,
     button_props,
 )
+from rbs.ui.case_ops import (
+    add_named_elective_take,
+    add_resident_rotation_waiver,
+    elective_waiver_duration_options,
+    named_elective_take_duration_options,
+    named_elective_take_service_options,
+    named_elective_takes,
+    remaining_direct_elective_blocks,
+    resolve_elective_waiver_rotation,
+)
 from rbs.ui.clinic.ops import (
     _default_clinic_rule,
 )
@@ -38,6 +48,7 @@ from rbs.ui.editor_common import (
     _weeks_label,
 )
 from rbs.ui.rotations.availability import _elective_availability_editor
+from rbs.ui.rotations.elective_draft import elective_option_draft
 from rbs.ui.rotations.fmed import _open_fmed_pgy_rules_dialog
 from rbs.ui.rotations.forms import (
     RotationEditorGuard,
@@ -45,26 +56,19 @@ from rbs.ui.rotations.forms import (
     _confirm_close_editor,
     _core_settings,
     _draft_has_clinic_configuration,
+    _elective_repeatable_header,
     _rotation_detail_contents,
     _rotation_editor,
     _staffing_and_blocks,
 )
 from rbs.ui.rotations.ops import (
     add_elective_rotation,
-    add_named_elective_take,
-    add_resident_rotation_waiver,
     direct_elective_counts,
     elective_rotations,
-    elective_waiver_duration_options,
-    named_elective_take_duration_options,
-    named_elective_take_service_options,
-    named_elective_takes,
     next_mandatory_rotation_id,
-    remaining_direct_elective_blocks,
     remove_elective_rotation,
     replace_elective_color,
     replace_elective_rotation,
-    resolve_elective_waiver_rotation,
     rotation_editor_state,
     rotation_from_editor_state,
     rotation_group_members_by_pgy,
@@ -1509,16 +1513,7 @@ def _elective_rotation_editor(
     )
     draft["color"] = instance.electives.color
     draft["kind"] = RotationKind.ELECTIVE.value
-    size_draft: Draft = {
-        "eligible_block_sizes": (
-            list(instance.eligible_elective_block_sizes(rotation.id))
-            if rotation is not None
-            else list(instance.elective_block_sizes)
-        ),
-    }
-    blackout_weeks = set(
-        instance.elective_blackout_weeks(rotation.id) if rotation is not None else ()
-    )
+    elective_draft = elective_option_draft(instance, rotation)
     group_draft = (
         rotation_group_members_by_pgy(instance, rotation.id)
         if rotation is not None
@@ -1558,7 +1553,7 @@ def _elective_rotation_editor(
             draft["kind"] = RotationKind.ELECTIVE.value
             replacement = rotation_from_editor_state(draft)
             eligible_block_sizes = [
-                int(size) for size in size_draft.get("eligible_block_sizes", [])
+                int(size) for size in elective_draft.get("eligible_block_sizes", [])
             ]
             if not eligible_block_sizes:
                 raise ValueError("select at least one eligible Elective block size")
@@ -1567,7 +1562,8 @@ def _elective_rotation_editor(
                     instance,
                     replacement,
                     eligible_block_sizes=eligible_block_sizes,
-                    blackout_weeks=sorted(blackout_weeks),
+                    repeatable=bool(elective_draft.get("repeatable")),
+                    blackout_weeks=sorted(elective_draft.get("blackout_weeks", set())),
                     group_members_by_pgy=group_draft,
                 )
                 if creating
@@ -1577,7 +1573,8 @@ def _elective_rotation_editor(
                     replacement,
                     eligible_pgys=_elective_rule_pgys(draft),
                     eligible_block_sizes=eligible_block_sizes,
-                    blackout_weeks=sorted(blackout_weeks),
+                    repeatable=bool(elective_draft.get("repeatable")),
+                    blackout_weeks=sorted(elective_draft.get("blackout_weeks", set())),
                     group_members_by_pgy=group_draft,
                 )
             )
@@ -1596,8 +1593,7 @@ def _elective_rotation_editor(
     def current_editor_state() -> dict:
         return {
             "draft": draft,
-            "sizes": size_draft,
-            "blackout_weeks": blackout_weeks,
+            "elective": elective_draft,
             "group": group_draft,
         }
 
@@ -1689,14 +1685,24 @@ def _elective_rotation_editor(
                     elective_sizes = (
                         ui.select(
                             _elective_block_size_options(instance.elective_block_sizes),
-                            value=list(size_draft["eligible_block_sizes"]),
+                            value=list(elective_draft["eligible_block_sizes"]),
                             label="Eligible elective block sizes",
                             multiple=True,
                         )
                         .props("outlined options-dense use-chips")
                         .classes("w-full")
                     )
-                    elective_sizes.bind_value(size_draft, "eligible_block_sizes")
+                    elective_sizes.bind_value(elective_draft, "eligible_block_sizes")
+                    _elective_repeatable_header(
+                        elective_draft,
+                        title="Elective repeat rules",
+                        description=(
+                            "Leave this off to limit each resident to one block. "
+                            "When it is on, use Maximum total weeks above to limit "
+                            "their total time on this elective."
+                        ),
+                        requires_shapes=False,
+                    )
 
             with ui.tab_panel(pgy_tab).classes("p-0"):
                 with ui.column().classes("w-full gap-4 p-5"):
@@ -1724,7 +1730,10 @@ def _elective_rotation_editor(
                             "Use the block controls to make a whole four-week block "
                             "available or unavailable at once."
                         ).classes("rbs-type-caption rbs-text-muted")
-                    _elective_availability_editor(instance, blackout_weeks)
+                    _elective_availability_editor(
+                        instance,
+                        elective_draft["blackout_weeks"],
+                    )
 
         with ui.row().classes(
             "rbs-rotation-editor-actions w-full items-center justify-end gap-2 px-5 py-3"

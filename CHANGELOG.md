@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Academic year:** Moving a workspace to another academic year now asks for
+  confirmation, carries reusable setup forward, and starts without schedules,
+  time away, dated calendar entries, or manual placements from the prior year.
+- **Clinic schedule:** CSV exports now use a native save dialog in RBS Desktop
+  and write to the selected file.
+- **Editing:** A form opened before another edit now reloads the current
+  workspace instead of overwriting newer work.
+- **Schedules:** Name, label, and color-only edits no longer mark the current
+  schedule as out of date.
+- **Rotations:** Standalone electives can now be changed between once per
+  resident and repeatable when they are created or edited.
+
 ## [0.1.9] - 2026-09-08
 
 ### Fixed

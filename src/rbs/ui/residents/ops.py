@@ -17,7 +17,7 @@ from rbs.models.resident import Resident
 from rbs.models.schedule import AssignedClinic, Assignment, Schedule
 from rbs.models.special import SpecialRotationKind
 from rbs.solver.validation import validate_schedule_or_raise
-from rbs.ui.clinic.board import (
+from rbs.ui.clinic.projection import (
     ClinicOccupant,
     clinic_kind_slots_for_week,
     clinic_weekdays,
@@ -25,8 +25,9 @@ from rbs.ui.clinic.board import (
     occupant_site,
     site_headcount,
 )
-from rbs.ui.grid import rotation_color_class, visible_week_numbers
-from rbs.ui.schedule_styles import SPECIAL_EVENT_COLOR, SPECIAL_EVENT_TINT
+from rbs.ui.schedule_projection import rotation_color_class, visible_week_numbers
+from rbs.ui.visual_tokens import SPECIAL_EVENT as SPECIAL_EVENT_COLOR
+from rbs.ui.visual_tokens import SPECIAL_EVENT_TINT
 
 ClinicOccupancy = dict[tuple[int, Weekday, Session], list[ClinicOccupant]]
 
@@ -1348,8 +1349,8 @@ def _replace_assignment_clinic_slots(
     update: dict = {"clinic_slots": slots}
     if manual_clinic_baselines is not None:
         update["manual_clinic_baselines"] = manual_clinic_baselines
-    assignments[assignment_index] = assignments[assignment_index].model_copy(update=update)
-    return schedule.model_copy(update={"assignments": assignments})
+    assignments[assignment_index] = assignments[assignment_index].revised(**update)
+    return schedule.revised(assignments=assignments)
 
 
 def _manual_clinic_baseline_for_change(

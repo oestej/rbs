@@ -26,7 +26,6 @@ from rbs.models.instance import SchedulerInput
 from rbs.models.resident import Resident, resident_display_sort_key
 from rbs.models.schedule import Schedule
 from rbs.models.special import SpecialRotationKind
-from rbs.ui.grid import four_week_block_groups, week_monday
 from rbs.ui.pdf_pages import with_export_timestamp
 from rbs.ui.print_tokens import (
     PRINT_BODY_LEADING,
@@ -40,6 +39,7 @@ from rbs.ui.print_tokens import (
     PRINT_TITLE_LEADING,
     PRINT_TITLE_SIZE,
 )
+from rbs.ui.schedule_projection import four_week_block_groups, week_monday
 from rbs.ui.schedule_styles import (
     CONFERENCE_COLOR,
     CONFERENCE_TINT,

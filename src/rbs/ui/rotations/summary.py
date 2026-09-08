@@ -26,7 +26,7 @@ from rbs.ui.editor_common import (
     _vacation_label,
     _weeks_label,
 )
-from rbs.ui.rotations.ops import (
+from rbs.ui.rotations.summary_projection import (
     resident_missing_mandatory_rotations,
     resident_rotation_week_totals,
 )

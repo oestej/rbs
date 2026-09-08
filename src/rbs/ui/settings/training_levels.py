@@ -22,6 +22,7 @@ from rbs.ui.buttons import (
     TERTIARY_BUTTON_PROPS,
     button_props,
 )
+from rbs.workspaces import InstanceEditImpact
 
 PersistInstance = Callable[..., None]
 
@@ -88,8 +89,6 @@ _TRAINING_LEVEL_DROP_JS = """
 def training_level_settings(
     workspace: Workspace,
     persist_instance: PersistInstance,
-    *,
-    schedule_is_current: bool,
 ) -> None:
     """Render stable short codes and descriptive names for program tracks."""
     from nicegui import ui
@@ -114,7 +113,6 @@ def training_level_settings(
                 on_click=lambda: _open_add_dialog(
                     instance,
                     persist_instance,
-                    schedule_is_current=schedule_is_current,
                 ),
             ).props(PRIMARY_BUTTON_PROPS)
 
@@ -150,7 +148,7 @@ def training_level_settings(
                     ui.notify("Training level order saved", type="positive")
                     persist_instance(
                         updated,
-                        preserve_schedule=schedule_is_current,
+                        impact=InstanceEditImpact.PRESENTATION,
                     )
                 except (TypeError, ValidationError, ValueError) as exc:
                     ui.notify(str(exc), type="negative", multi_line=True)
@@ -225,7 +223,7 @@ def training_level_settings(
                                 ui.notify("Training level saved", type="positive")
                                 persist_instance(
                                     updated,
-                                    preserve_schedule=schedule_is_current,
+                                    impact=InstanceEditImpact.PRESENTATION,
                                 )
                             except (ValidationError, ValueError) as exc:
                                 ui.notify(str(exc), type="negative", multi_line=True)
@@ -245,7 +243,6 @@ def training_level_settings(
                                     instance,
                                     pgy,
                                     persist_instance,
-                                    schedule_is_current=schedule_is_current,
                                 ),
                             ).props(
                                 button_props(
@@ -263,8 +260,6 @@ def training_level_settings(
 def _open_add_dialog(
     instance: SchedulerInput,
     persist_instance: PersistInstance,
-    *,
-    schedule_is_current: bool,
 ) -> None:
     from nicegui import ui
 
@@ -295,7 +290,10 @@ def _open_add_dialog(
                 )
                 dialog.close()
                 ui.notify("Training level added", type="positive")
-                persist_instance(updated, preserve_schedule=schedule_is_current)
+                persist_instance(
+                    updated,
+                    impact=InstanceEditImpact.COMPATIBLE_CONFIGURATION,
+                )
             except (ValidationError, ValueError) as exc:
                 ui.notify(str(exc), type="negative", multi_line=True)
 
@@ -309,8 +307,6 @@ def _open_remove_dialog(
     instance: SchedulerInput,
     pgy: int,
     persist_instance: PersistInstance,
-    *,
-    schedule_is_current: bool,
 ) -> None:
     from nicegui import ui
 
@@ -327,7 +323,10 @@ def _open_remove_dialog(
                 updated = remove_training_level(instance, pgy)
                 dialog.close()
                 ui.notify("Training level deleted", type="positive")
-                persist_instance(updated, preserve_schedule=schedule_is_current)
+                persist_instance(
+                    updated,
+                    impact=InstanceEditImpact.COMPATIBLE_CONFIGURATION,
+                )
             except (ValidationError, ValueError) as exc:
                 ui.notify(str(exc), type="negative", multi_line=True)
 

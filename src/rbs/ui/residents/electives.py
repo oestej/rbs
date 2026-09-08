@@ -11,8 +11,9 @@ from rbs.models.instance import SchedulerInput
 from rbs.models.resident import ElectivePreferenceRequest, Resident
 from rbs.models.rotation import rotation_display_sort_key
 from rbs.models.schedule import Schedule
+from rbs.workspaces import InstanceEditImpact
 
-SaveResidentSchedule = Callable[[SchedulerInput, str, bool], None]
+SaveResidentSchedule = Callable[[SchedulerInput, str, InstanceEditImpact], None]
 
 _PREFERENCE_DRAG_START_JS = """
 (event) => {
@@ -206,7 +207,11 @@ def render_elective_preferences(
                     resident.id,
                     preferences,
                 )
-                on_schedule_save(updated, resident.id, False)
+                on_schedule_save(
+                    updated,
+                    resident.id,
+                    InstanceEditImpact.SOLVER_INPUT,
+                )
             except (ValidationError, ValueError) as exc:
                 ui.notify(str(exc), type="negative", multi_line=True)
 

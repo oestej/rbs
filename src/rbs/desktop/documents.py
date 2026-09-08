@@ -31,7 +31,7 @@ from rbs.models.instance import SchedulerInput
 from rbs.models.rbsc import portable_case_payload, portable_catalog_payload
 from rbs.models.workspace import Workspace
 from rbs.store import Store
-from rbs.workspaces import WorkspaceController
+from rbs.workspaces import InstanceEditImpact, WorkspaceController
 
 MAX_RBSC_BYTES = 32 * 1024 * 1024
 
@@ -56,6 +56,13 @@ class NativeFileDialogs(Protocol):
         suggested_name: str,
     ) -> str | Path | None:
         """Choose a settings JSON destination, or return ``None`` on cancel."""
+        ...
+
+    async def choose_csv_export_path(
+        self,
+        suggested_name: str,
+    ) -> str | Path | None:
+        """Choose a CSV export destination, or return ``None`` on cancel."""
         ...
 
 
@@ -205,7 +212,7 @@ class DesktopDocumentController:
                 workspace = WorkspaceController(self.store).save_instance(
                     workspace,
                     revised,
-                    preserve_schedule=workspace.schedule is not None,
+                    impact=InstanceEditImpact.APPLICATION_PREFERENCE,
                 )
         except BaseException:
             # Keep the automatic application file aligned with the open UI if
@@ -216,6 +223,19 @@ class DesktopDocumentController:
                 pass
             raise
         return workspace
+
+    async def save_csv_export(
+        self,
+        content: str,
+        suggested_name: str,
+    ) -> Path | None:
+        """Write a generated schedule CSV through the native save picker."""
+        selected = await self.dialogs.choose_csv_export_path(suggested_name)
+        if selected is None or str(selected).strip() == "":
+            return None
+        destination = _with_csv_suffix(Path(selected).expanduser()).resolve()
+        _atomic_write_text(destination, content)
+        return destination
 
     def load(self, path: str | Path) -> Workspace:
         """Validate and load one ``.rbsc`` document, replacing the ephemeral store.
@@ -567,7 +587,7 @@ class DesktopDocumentController:
         return WorkspaceController(self.store).save_instance(
             workspace,
             revised,
-            preserve_schedule=workspace.schedule is not None,
+            impact=InstanceEditImpact.APPLICATION_PREFERENCE,
         )
 
 
@@ -616,6 +636,12 @@ def _with_json_suffix(path: Path) -> Path:
     if path.suffix.lower() == ".json":
         return path
     return path.with_suffix(".json")
+
+
+def _with_csv_suffix(path: Path) -> Path:
+    if path.suffix.lower() == ".csv":
+        return path
+    return path.with_suffix(".csv")
 
 
 def _atomic_write_text(destination: Path, payload: str) -> None:

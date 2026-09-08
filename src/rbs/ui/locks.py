@@ -136,17 +136,15 @@ def clear_schedule_block(
         f"Manual override cleared {block.resident_id} weeks "
         f"{block.start_week}-{block.end_week}; solve required"
     )
-    meta = schedule.meta.model_copy(
-        update={
-            "status": SolverStatus.UNKNOWN,
-            "solver_status": SolverStatus.UNKNOWN,
-            "metrics": ScheduleMetrics(),
-            "validation_errors": [],
-            "validation_warnings": [],
-            "notes": [*schedule.meta.notes, note],
-        }
+    meta = schedule.meta.revised(
+        status=SolverStatus.UNKNOWN,
+        solver_status=SolverStatus.UNKNOWN,
+        metrics=ScheduleMetrics(),
+        validation_errors=[],
+        validation_warnings=[],
+        notes=[*schedule.meta.notes, note],
     )
-    return schedule.model_copy(update={"assignments": kept, "meta": meta})
+    return schedule.revised(assignments=kept, meta=meta)
 
 
 def replace_schedule_block(
@@ -245,16 +243,14 @@ def replace_schedule_block(
         f"Manual block placed {block.resident_id} weeks "
         f"{block.start_week}-{block.end_week}; solve required"
     )
-    meta = schedule.meta.model_copy(
-        update={
-            "status": SolverStatus.UNKNOWN,
-            "solver_status": SolverStatus.UNKNOWN,
-            "metrics": ScheduleMetrics(),
-            "validation_errors": [],
-            "validation_warnings": [],
-            "diagnostics": [],
-            "notes": [*schedule.meta.notes, note],
-        }
+    meta = schedule.meta.revised(
+        status=SolverStatus.UNKNOWN,
+        solver_status=SolverStatus.UNKNOWN,
+        metrics=ScheduleMetrics(),
+        validation_errors=[],
+        validation_warnings=[],
+        diagnostics=[],
+        notes=[*schedule.meta.notes, note],
     )
     assignments = sorted(
         kept,
@@ -266,16 +262,14 @@ def replace_schedule_block(
             assignment.elective,
         ),
     )
-    return schedule.model_copy(
-        update={
-            "assignments": assignments,
-            "unassigned": [
-                resident_id
-                for resident_id in schedule.unassigned
-                if resident_id != block.resident_id
-            ],
-            "meta": meta,
-        }
+    return schedule.revised(
+        assignments=assignments,
+        unassigned=[
+            resident_id
+            for resident_id in schedule.unassigned
+            if resident_id != block.resident_id
+        ],
+        meta=meta,
     )
 
 

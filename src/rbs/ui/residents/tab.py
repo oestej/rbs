@@ -35,10 +35,11 @@ from rbs.ui.residents.schedule import (
     _resident_clinic_half_day_editor,
     _resident_schedule_workspace,
 )
+from rbs.workspaces import InstanceEditImpact
 
 SelectResident = Callable[[str | None], None]
 SaveResident = Callable[[SchedulerInput, str], None]
-SaveResidentSchedule = Callable[[SchedulerInput, str, bool], None]
+SaveResidentSchedule = Callable[[SchedulerInput, str, InstanceEditImpact], None]
 SaveResidentScheduleResult = Callable[[Schedule, str, bool], None]
 SaveResidentBlockSchedule = Callable[[SchedulerInput, Schedule, str], None]
 NEW_RESIDENT_ID = "__new_resident__"

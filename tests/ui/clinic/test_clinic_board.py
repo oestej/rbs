@@ -14,6 +14,10 @@ from rbs.models.schedule import AssignedClinic, Assignment, Schedule, ScheduleMe
 from rbs.solver.validation import validate_schedule
 from rbs.ui.clinic.board import (
     ACADEMIC_LABEL,
+    render_clinic_html,
+    render_clinic_legend_html,
+)
+from rbs.ui.clinic.projection import (
     ClinicOccupant,
     attending_load,
     calendar_occupants,
@@ -22,8 +26,6 @@ from rbs.ui.clinic.board import (
     clinic_kind_slots,
     is_academic,
     occupancy,
-    render_clinic_html,
-    render_clinic_legend_html,
     weekly_attending_sessions,
 )
 

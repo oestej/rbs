@@ -19,7 +19,7 @@ from rbs.models.resident import Resident, ResidentClinicHalfDay
 from rbs.models.rotation import rotation_display_sort_key
 from rbs.models.schedule import AssignedClinic, Schedule
 from rbs.ui import master_detail
-from rbs.ui.clinic.board import clinic_weekdays, occupancy
+from rbs.ui.clinic.projection import clinic_weekdays, occupancy
 from rbs.ui.editor_common import _default_block_duration
 from rbs.ui.locks import (
     THROUGH_TODAY_SOURCE,
@@ -60,8 +60,9 @@ from rbs.ui.residents.schedule_pdf import (
     build_resident_schedule_pdf,
     resident_schedule_pdf_filename,
 )
+from rbs.workspaces import InstanceEditImpact
 
-SaveResidentSchedule = Callable[[SchedulerInput, str, bool], None]
+SaveResidentSchedule = Callable[[SchedulerInput, str, InstanceEditImpact], None]
 SaveResidentScheduleResult = Callable[[Schedule, str, bool], None]
 SaveResidentBlockSchedule = Callable[[SchedulerInput, Schedule, str], None]
 ChangeResidentScheduleEditing = Callable[[bool], None]
@@ -373,7 +374,12 @@ def _resident_block_schedule_manager(
     pending_weeks = {week for lock in unmatched_manual for week in lock.weeks}
     gaps = _split_week_ranges_around(base_gaps, pending_weeks)
 
-    def save_action(action, success: str, *, preserve_schedule: bool) -> None:
+    def save_action(
+        action,
+        success: str,
+        *,
+        impact: InstanceEditImpact,
+    ) -> None:
         try:
             updated = action()
             if updated == instance:
@@ -383,7 +389,7 @@ def _resident_block_schedule_manager(
             on_schedule_save(
                 updated,
                 resident.id,
-                bool(preserve_schedule and schedule_is_current),
+                impact,
             )
         except (ValidationError, ValueError) as exc:
             ui.notify(str(exc), type="negative", multi_line=True)
@@ -425,7 +431,7 @@ def _resident_block_schedule_manager(
                         resident.id,
                     ),
                     "Current schedule locked",
-                    preserve_schedule=True,
+                    impact=InstanceEditImpact.CURRENT_SCHEDULE_CONSTRAINT,
                 ),
             ).props("outline no-caps")
             lock_all.set_enabled(bool(blocks))
@@ -439,7 +445,7 @@ def _resident_block_schedule_manager(
                 on_click=lambda: save_action(
                     lambda: unlock_resident_schedule(instance, resident.id),
                     "Manual locks removed",
-                    preserve_schedule=True,
+                    impact=InstanceEditImpact.CURRENT_SCHEDULE_CONSTRAINT,
                 ),
             ).props("flat no-caps")
             unlock_all.set_enabled(manual_count > 0)
@@ -590,7 +596,7 @@ def _resident_block_management_row(
                 on_click=lambda: save_action(
                     lambda: unlock_schedule_block(instance, block),
                     "Manual lock removed; block remains automatically locked",
-                    preserve_schedule=True,
+                    impact=InstanceEditImpact.CURRENT_SCHEDULE_CONSTRAINT,
                 ),
             ).props("flat dense no-caps")
         elif manual:
@@ -600,7 +606,7 @@ def _resident_block_management_row(
                 on_click=lambda: save_action(
                     lambda: unlock_schedule_block(instance, block),
                     "Block unlocked",
-                    preserve_schedule=True,
+                    impact=InstanceEditImpact.CURRENT_SCHEDULE_CONSTRAINT,
                 ),
             ).props("flat dense no-caps")
         elif automatic:
@@ -615,7 +621,7 @@ def _resident_block_management_row(
                 on_click=lambda: save_action(
                     lambda: lock_schedule_block(instance, block),
                     "Block locked",
-                    preserve_schedule=True,
+                    impact=InstanceEditImpact.CURRENT_SCHEDULE_CONSTRAINT,
                 ),
             ).props("flat dense no-caps")
             remove_button = ui.button(
@@ -756,7 +762,7 @@ def _resident_manual_lock_row(
             on_click=lambda: save_action(
                 lambda: remove_manual_lock(instance, lock),
                 "Pending block deleted" if lock.exact_block else "Manual block unlocked",
-                preserve_schedule=True,
+                impact=InstanceEditImpact.CURRENT_SCHEDULE_CONSTRAINT,
             ),
         ).props("flat dense no-caps")
 
@@ -1298,7 +1304,7 @@ def _open_resident_block_dialog(
                         on_schedule_save(
                             updated,
                             resident.id,
-                            bool(schedule_is_current),
+                            InstanceEditImpact.CURRENT_SCHEDULE_CONSTRAINT,
                         )
                     else:
                         if on_block_schedule_save is None:

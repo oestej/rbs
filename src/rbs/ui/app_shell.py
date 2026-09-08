@@ -16,7 +16,7 @@ from rbs.models.color_scheme import (
 )
 from rbs.models.instance import SchedulerInput
 from rbs.models.schedule import Schedule
-from rbs.models.workspace import Workspace
+from rbs.models.workspace import Workspace, WorkspaceConflictError
 from rbs.ui import page_shells
 from rbs.ui.app_branding import (
     DANGER_COLOR,
@@ -48,6 +48,7 @@ from rbs.ui.clinic.board import render_clinic_html, render_clinic_legend_html
 from rbs.ui.clinic.schedule_csv import build_clinic_schedule_csv, clinic_schedule_csv_filename
 from rbs.ui.clinic.schedule_pdf import build_clinic_schedule_pdf, clinic_schedule_pdf_filename
 from rbs.ui.clinic.tab import render_clinic_tab
+from rbs.ui.edit_policy import instance_edit_impact
 from rbs.ui.grid import render_grid_html
 from rbs.ui.pdf_export import present_pdf_export
 from rbs.ui.residents.tab import render_residents_tab
@@ -60,6 +61,7 @@ from rbs.ui.workspaces.io import (
     _open_workspace_file,
     _rbsc_restore_upload,
 )
+from rbs.workspaces import InstanceEditImpact
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +82,7 @@ def _mount_shell(session: WorkspaceSession) -> None:
     session.body.clear()
     session.panels.clear()
     session.navigation = None
-    workspace = session.workspace()
+    workspace = _workspace_for_render(session)
     product_name = "RBS Desktop" if _document_io(session) is not None else "RBS"
     _set_nicegui_theme(session, _chrome_color_scheme(session, workspace))
     with session.header:
@@ -268,7 +270,7 @@ def _empty_workspace_page() -> None:
 
 
 def _render_tab(session: WorkspaceSession, name: str) -> None:
-    workspace = session.workspace()
+    workspace = _workspace_for_render(session)
     if workspace is None:
         return
     if name == "block_schedule":
@@ -281,14 +283,22 @@ def _render_tab(session: WorkspaceSession, name: str) -> None:
 
         def persist_clinic(updated: SchedulerInput, _rotation_id: str | None = None) -> None:
             session.active_tab = "clinic"
-            session.persist_instance(updated)
+            session.persist_instance(
+                workspace,
+                updated,
+                impact=instance_edit_impact(workspace.instance, updated),
+            )
 
         def persist_clinic_block_schedule(
             updated: SchedulerInput,
             draft_schedule: Schedule,
         ) -> None:
             session.active_tab = "clinic"
-            session.persist_instance(updated, draft_schedule=draft_schedule)
+            session.persist_instance(
+                workspace,
+                updated,
+                draft_schedule=draft_schedule,
+            )
 
         render_clinic_tab(
             workspace.instance,
@@ -301,17 +311,44 @@ def _render_tab(session: WorkspaceSession, name: str) -> None:
     elif name == "residents":
         _render_residents(session, workspace)
     elif name == "settings":
+
+        def persist_settings(
+            updated: SchedulerInput,
+            *,
+            impact: InstanceEditImpact = InstanceEditImpact.SOLVER_INPUT,
+            draft_schedule: Schedule | None = None,
+        ) -> None:
+            session.persist_instance(
+                workspace,
+                updated,
+                impact=impact,
+                draft_schedule=draft_schedule,
+            )
+
         _settings_tab(
             session.store,
             workspace,
             session,
-            session.persist_instance,
+            persist_settings,
             session.rebuild,
-            schedule_is_current=workspace.schedule is not None,
             active_section=session.settings_section,
             on_section_change=lambda event: _remember_settings_section(session, event.value),
             apply_theme=lambda scheme: _set_nicegui_theme(session, scheme),
         )
+
+
+def _workspace_for_render(session: WorkspaceSession) -> Workspace | None:
+    """Load render state and explicitly apply the idempotent lock policy."""
+    workspace = session.workspace()
+    if workspace is None:
+        return None
+    try:
+        return session.refresh_automatic_locks(workspace)
+    except WorkspaceConflictError:
+        # A concurrent edit won the revision race. Rendering its current value
+        # is safe; a later render or Solve can apply any still-needed derived
+        # through-today locks against that new snapshot.
+        return session.workspace()
 
 
 def _render_block_schedule(session: WorkspaceSession, workspace: Workspace) -> None:
@@ -412,47 +449,65 @@ def _render_clinic_schedule(session: WorkspaceSession, workspace: Workspace) -> 
         session.clinic_site = str(event.value or "all")
         render_board()
 
-    def export_clinic_schedule(extension: str) -> None:
+    def export_options() -> tuple[str | None, bool]:
+        site = selected_clinic_site()
+        return site, bool(session.show_past_clinic_weeks)
+
+    def report_export_failure(extension: str, exc: Exception) -> None:
+        get_logger("documents").error(
+            "schedule.export_failed",
+            source=extension,
+            error_code=type(exc).__name__,
+            exc_info=True,
+        )
+        ui.notify(str(exc), type="negative")
+
+    async def export_clinic_csv() -> None:
         try:
-            site = selected_clinic_site()
-            export_options = {
-                "show_past_weeks": bool(session.show_past_clinic_weeks),
-                "site": site,
-            }
-            if extension == "csv":
-                content = build_clinic_schedule_csv(
-                    instance,
-                    schedule,
-                    **export_options,
+            site, show_past_weeks = export_options()
+            content = build_clinic_schedule_csv(
+                instance,
+                schedule,
+                show_past_weeks=show_past_weeks,
+                site=site,
+            )
+            filename = clinic_schedule_csv_filename(
+                instance.academic_year,
+                site=site,
+            )
+            if not await _present_csv_export(session, content, filename):
+                get_logger("documents").info(
+                    "schedule.export_cancelled",
+                    source="csv",
                 )
-                filename = clinic_schedule_csv_filename(
-                    instance.academic_year,
-                    site=site,
-                )
-                ui.download.content(content, filename)
-            else:
-                content = build_clinic_schedule_pdf(
-                    instance,
-                    schedule,
-                    **export_options,
-                )
-                filename = clinic_schedule_pdf_filename(
-                    instance.academic_year,
-                    site=site,
-                )
-                _open_exported_pdf(session, content, filename)
+                return
             get_logger("documents").info(
                 "schedule.exported",
-                source=extension,
+                source="csv",
             )
         except Exception as exc:
-            get_logger("documents").error(
-                "schedule.export_failed",
-                source=extension,
-                error_code=type(exc).__name__,
-                exc_info=True,
+            report_export_failure("csv", exc)
+
+    def export_clinic_pdf() -> None:
+        try:
+            site, show_past_weeks = export_options()
+            content = build_clinic_schedule_pdf(
+                instance,
+                schedule,
+                show_past_weeks=show_past_weeks,
+                site=site,
             )
-            ui.notify(str(exc), type="negative")
+            filename = clinic_schedule_pdf_filename(
+                instance.academic_year,
+                site=site,
+            )
+            _open_exported_pdf(session, content, filename)
+            get_logger("documents").info(
+                "schedule.exported",
+                source="pdf",
+            )
+        except Exception as exc:
+            report_export_failure("pdf", exc)
 
     with page_shells.schedule_canvas(
         "Clinic schedule",
@@ -483,12 +538,12 @@ def _render_clinic_schedule(session: WorkspaceSession, workspace: Workspace) -> 
                 ui.button(
                     "Export CSV",
                     icon="table_view",
-                    on_click=lambda: export_clinic_schedule("csv"),
+                    on_click=export_clinic_csv,
                 ).props(button_props(SECONDARY_BUTTON_PROPS, "dense"))
                 ui.button(
                     "Export PDF",
                     icon="picture_as_pdf",
-                    on_click=lambda: export_clinic_schedule("pdf"),
+                    on_click=export_clinic_pdf,
                 ).props(button_props(SECONDARY_BUTTON_PROPS, "dense"))
 
         clinic_schedule = ui.column().classes("w-full min-w-0 gap-2")
@@ -506,12 +561,20 @@ def _render_rotations(session: WorkspaceSession, workspace: Workspace) -> None:
     def persist_rotation(updated: SchedulerInput, rotation_id: str | None) -> None:
         session.rotation_id = rotation_id
         session.active_tab = "rotations"
-        session.persist_instance(updated)
+        session.persist_instance(
+            workspace,
+            updated,
+            impact=instance_edit_impact(workspace.instance, updated),
+        )
 
     def persist_rotation_color(updated: SchedulerInput, rotation_id: str | None) -> None:
         session.rotation_id = rotation_id
         session.active_tab = "rotations"
-        session.persist_instance(updated, preserve_schedule=True)
+        session.persist_instance(
+            workspace,
+            updated,
+            impact=InstanceEditImpact.PRESENTATION,
+        )
 
     render_rotations_tab(
         workspace.instance,
@@ -533,7 +596,29 @@ def _open_exported_pdf(session: WorkspaceSession, content: bytes, filename: str)
         content,
         filename,
         native=bool(getattr(documents, "opens_exports_natively", False)),
+        owner=session.principal.subject if session.principal is not None else None,
     )
+
+
+async def _present_csv_export(
+    session: WorkspaceSession,
+    content: str,
+    filename: str,
+) -> bool:
+    """Download in browsers or save through a native desktop file picker."""
+    from nicegui import ui
+
+    documents = getattr(session.workspace_host, "document_io", None)
+    if documents is None:
+        ui.download.content(content, filename, "text/csv")
+        return True
+
+    destination = await documents.save_csv_export(content, filename)
+    if destination is None:
+        ui.notify("CSV export cancelled - nothing was written", type="info")
+        return False
+    ui.notify(f"CSV saved to {destination.name}", type="positive")
+    return True
 
 
 def _render_residents(session: WorkspaceSession, workspace: Workspace) -> None:
@@ -551,17 +636,21 @@ def _render_residents(session: WorkspaceSession, workspace: Workspace) -> None:
         session.resident_schedule_editing = False
         session.resident_id = resident_id
         session.active_tab = "residents"
-        session.persist_instance(updated)
+        session.persist_instance(
+            workspace,
+            updated,
+            impact=instance_edit_impact(workspace.instance, updated),
+        )
 
     def persist_resident_schedule(
         updated: SchedulerInput,
         resident_id: str,
-        preserve_schedule: bool,
+        impact: InstanceEditImpact,
     ) -> None:
         session.resident_schedule_editing = False
         session.resident_id = resident_id
         session.active_tab = "residents"
-        session.persist_instance(updated, preserve_schedule=preserve_schedule)
+        session.persist_instance(workspace, updated, impact=impact)
 
     def persist_resident_block_schedule(
         updated: SchedulerInput,
@@ -571,7 +660,11 @@ def _render_residents(session: WorkspaceSession, workspace: Workspace) -> None:
         session.resident_schedule_editing = False
         session.resident_id = resident_id
         session.active_tab = "residents"
-        session.persist_instance(updated, draft_schedule=draft_schedule)
+        session.persist_instance(
+            workspace,
+            updated,
+            draft_schedule=draft_schedule,
+        )
 
     def persist_resident_schedule_change(
         updated: Schedule,
@@ -580,7 +673,7 @@ def _render_residents(session: WorkspaceSession, workspace: Workspace) -> None:
     ) -> None:
         session.resident_id = resident_id
         session.active_tab = "residents"
-        session.persist_schedule(updated, refresh=refresh)
+        session.persist_schedule(workspace, updated, refresh=refresh)
 
     def set_block_schedule_editing(editing: bool) -> None:
         session.resident_block_schedule_editing = editing

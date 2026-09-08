@@ -8,6 +8,22 @@ from rbs.catalog import blank_instance, sample_instance
 from rbs.models.enums import WEEKDAYS_MF, RotationKind, Session, Weekday
 from rbs.models.rotation import ALL_CLINIC_SITES, ClinicRule, Rotation
 from rbs.solver.planning import expand_occurrences
+from rbs.ui.case_ops import (
+    add_manual_clinic_block,
+    add_named_elective_take,
+    add_resident_rotation_waiver,
+    elective_waiver_duration_options,
+    named_elective_take_duration_options,
+    named_elective_take_service_options,
+    named_elective_takes,
+    place_manual_clinic_block,
+    remaining_direct_elective_blocks,
+    remove_manual_clinic_block,
+    remove_named_elective_take,
+    remove_resident_rotation_waiver,
+    resolve_elective_waiver_rotation,
+    withdraw_manual_clinic_block,
+)
 from rbs.ui.clinic.ops import (
     add_clinic,
     cancel_academic_half_day_for_week,
@@ -35,54 +51,42 @@ from rbs.ui.editor_common import (
 )
 from rbs.ui.locks import ScheduleBlock, replace_schedule_block
 from rbs.ui.residents.ops import resident_schedule_report_rows
-from rbs.ui.rotations.editor import (
-    NEW_MANDATORY_ROTATION_ID,
+from rbs.ui.rotations.editor import _rotation_list_item, render_rotations_tab
+from rbs.ui.rotations.fmed import _open_fmed_pgy_rules_dialog
+from rbs.ui.rotations.forms import (
     _apply_away_selection,
     _apply_clinic_sites,
     _clinic_rule_editor,
-    _confirm_remove_mandatory_rotation,
     _core_settings,
-    _open_fmed_pgy_rules_dialog,
-    _open_resident_rotation_override_dialog,
-    _resident_override_group_bundle,
     _rotation_detail_contents,
     _rotation_editor,
-    _rotation_kind_label,
-    _rotation_list_item,
-    _rotation_summary_html,
-    render_rotations_tab,
 )
+from rbs.ui.rotations.mandatory import _confirm_remove_mandatory_rotation
 from rbs.ui.rotations.ops import (
     add_mandatory_rotation,
-    add_manual_clinic_block,
-    add_named_elective_take,
-    add_resident_rotation_waiver,
-    elective_waiver_duration_options,
-    named_elective_take_duration_options,
-    named_elective_take_service_options,
-    named_elective_takes,
     next_mandatory_rotation_id,
-    place_manual_clinic_block,
-    remaining_direct_elective_blocks,
     remove_mandatory_rotation,
-    remove_manual_clinic_block,
-    remove_named_elective_take,
-    remove_resident_rotation_waiver,
     replace_clinic_block_rules,
     replace_fmed_pgy_rules,
     replace_rotation_color,
     replace_standard_rotation,
-    resident_missing_mandatory_rotations,
-    resident_rotation_week_totals,
-    resolve_elective_waiver_rotation,
     rotation_editor_state,
     rotation_from_editor_state,
     rotation_group_members_by_pgy,
     set_elective_allocation,
     special_rotations,
     standard_rotations,
-    withdraw_manual_clinic_block,
 )
+from rbs.ui.rotations.overrides import (
+    _open_resident_rotation_override_dialog,
+    _resident_override_group_bundle,
+)
+from rbs.ui.rotations.summary import _rotation_kind_label, _rotation_summary_html
+from rbs.ui.rotations.summary_projection import (
+    resident_missing_mandatory_rotations,
+    resident_rotation_week_totals,
+)
+from rbs.ui.rotations.types import NEW_MANDATORY_ROTATION_ID
 from rbs.ui.rotations.widgets import (
     add_block_config,
     rotation_color_palette,
@@ -3535,7 +3539,7 @@ def test_standard_rotation_editor_saves_a_changed_block_length() -> None:
 def test_block_config_rows_stay_on_one_line() -> None:
     from nicegui import ui
 
-    from rbs.ui.rotations.editor import _rotation_editor
+    from rbs.ui.rotations.forms import _rotation_editor
 
     instance = sample_instance()
     before = set(ui.context.client.elements)
@@ -3560,7 +3564,7 @@ def test_block_config_rows_stay_on_one_line() -> None:
 def test_standard_rotation_editor_offers_a_per_year_weeks_cap() -> None:
     from nicegui import ui
 
-    from rbs.ui.rotations.editor import _rotation_editor
+    from rbs.ui.rotations.forms import _rotation_editor
 
     instance = sample_instance()
     before = set(ui.context.client.elements)
@@ -3626,7 +3630,7 @@ def test_per_year_cap_cannot_undercut_mandatory_weeks() -> None:
 def test_rotation_required_nowhere_shows_a_soft_hint() -> None:
     from nicegui import ui
 
-    from rbs.ui.rotations.editor import _rotation_detail_contents
+    from rbs.ui.rotations.forms import _rotation_detail_contents
 
     instance = sample_instance()
     rotation = instance.rotation("night_float")
@@ -3709,7 +3713,7 @@ def test_elective_shapes_derive_after_funding() -> None:
 def test_standard_rotation_editor_shows_blocks_per_resident() -> None:
     from nicegui import ui
 
-    from rbs.ui.rotations.editor import _rotation_editor
+    from rbs.ui.rotations.forms import _rotation_editor
 
     instance = sample_instance()
     before = set(ui.context.client.elements)

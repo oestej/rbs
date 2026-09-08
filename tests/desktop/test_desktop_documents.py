@@ -26,7 +26,7 @@ from rbs.models.instance import SchedulerInput
 from rbs.store import DownloadState, Store
 from rbs.ui.host import LocalHost
 from rbs.ui.session import WorkspaceSession
-from rbs.workspaces import WorkspaceController
+from rbs.workspaces import InstanceEditImpact, WorkspaceController
 
 
 class Dialogs:
@@ -37,13 +37,16 @@ class Dialogs:
         save_path: Path | None = None,
         settings_open_path: Path | None = None,
         settings_save_path: Path | None = None,
+        csv_export_path: Path | None = None,
     ) -> None:
         self.open_path = open_path
         self.save_path = save_path
         self.settings_open_path = settings_open_path
         self.settings_save_path = settings_save_path
+        self.csv_export_path = csv_export_path
         self.suggested_names: list[str] = []
         self.settings_suggested_names: list[str] = []
+        self.csv_suggested_names: list[str] = []
 
     async def choose_open_path(self) -> Path | None:
         return self.open_path
@@ -58,6 +61,10 @@ class Dialogs:
     async def choose_settings_save_path(self, suggested_name: str) -> Path | None:
         self.settings_suggested_names.append(suggested_name)
         return self.settings_save_path
+
+    async def choose_csv_export_path(self, suggested_name: str) -> Path | None:
+        self.csv_suggested_names.append(suggested_name)
+        return self.csv_export_path
 
 
 def _store(path: Path, *names: str) -> Store:
@@ -129,6 +136,30 @@ def test_open_uses_the_native_dialog_and_cancel_changes_nothing(tmp_path) -> Non
     dialogs.open_path = None
     assert asyncio.run(controller.open()) is None
     assert controller.workspace.name == "Selected"
+
+
+def test_csv_export_uses_native_dialog_and_appends_csv_suffix(tmp_path) -> None:
+    store = _store(tmp_path / "desktop.sqlite", "Current")
+    dialogs = Dialogs(csv_export_path=tmp_path / "clinic schedule")
+    controller = DesktopDocumentController(store, dialogs)
+    content = "Week,Monday AM\n1,Quinn\n"
+
+    exported = asyncio.run(
+        controller.save_csv_export(content, "clinic-schedule-2026-2027.csv")
+    )
+
+    assert exported == tmp_path / "clinic schedule.csv"
+    assert exported.read_text(encoding="utf-8") == content
+    assert dialogs.csv_suggested_names == ["clinic-schedule-2026-2027.csv"]
+    assert controller.path is None
+
+
+def test_cancelled_csv_export_writes_nothing(tmp_path) -> None:
+    store = _store(tmp_path / "desktop.sqlite", "Current")
+    controller = DesktopDocumentController(store, Dialogs())
+
+    assert asyncio.run(controller.save_csv_export("Week\n1\n", "schedule.csv")) is None
+    assert not list(tmp_path.glob("*.csv"))
 
 
 def test_close_clears_the_ephemeral_document_without_touching_its_file(tmp_path) -> None:
@@ -333,8 +364,9 @@ def test_application_setting_edits_persist_without_dirtying_the_document(tmp_pat
         workspace_id=workspace.id,
     )
     session.persist_instance(
+        workspace,
         revised,
-        preserve_schedule=workspace.schedule is not None,
+        impact=InstanceEditImpact.APPLICATION_PREFERENCE,
     )
 
     assert not controller.dirty

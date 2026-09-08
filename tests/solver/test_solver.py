@@ -16,7 +16,7 @@ from rbs.solver.core.context import PlanningContext, new_clinic_decision
 from rbs.solver.core.kinds import fmed as fmed_kind
 from rbs.solver.core.objective import _preferred_slot_penalties
 from rbs.solver.planning import Occurrence, expand_occurrences, legal_starts, rotate_domain
-from rbs.ui.clinic.board import (
+from rbs.ui.clinic.projection import (
     attending_load,
     clinic_headcount,
     is_academic,
