@@ -615,6 +615,24 @@ def test_clinic_capacity_overrides_require_unique_slots_and_valid_minimums() -> 
         SchedulerInput.model_validate(instance_raw)
 
 
+def test_clinic_closure_days_must_fall_within_the_academic_year() -> None:
+    instance_raw = sample_instance().model_dump(mode="json")
+    instance_raw["clinic_policy"]["closure_days"] = [
+        {"date": "2030-01-01", "name": "Far future", "sites": ["maple"]}
+    ]
+    with pytest.raises(ValidationError, match="outside academic year"):
+        SchedulerInput.model_validate(instance_raw)
+
+    instance_raw = sample_instance().model_dump(mode="json")
+    first_day = instance_raw["calendar"]["first_week_start"]
+    instance_raw["clinic_policy"]["closure_days"] = [
+        {"date": first_day, "name": "First day", "sites": ["maple"]}
+    ]
+    assert SchedulerInput.model_validate(instance_raw).clinic_policy.site(
+        "maple"
+    ).is_closed(date.fromisoformat(first_day))
+
+
 def test_clinic_allocation_uses_resident_then_pgy_then_overall_rule() -> None:
     raw = default_clinic_policy().model_dump(mode="json")
     raw["allocation_rules"].extend(
