@@ -5,6 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+from pydantic import ValidationError
+
+from rbs.logging import get_logger
 from rbs.models.enums import SolverStatus
 from rbs.models.instance import SchedulerInput
 from rbs.models.locks import LockedPlacement
@@ -317,6 +320,30 @@ def _with_locks(
     return instance.revised(locks=locks)
 
 
+def _without_locks(
+    instance: SchedulerInput,
+    locks: list[LockedPlacement],
+) -> SchedulerInput:
+    """Remove locks without letting unrelated validation block the relaxation.
+
+    Fewer locks can only relax the lock checks, so a validation failure here
+    describes pre-existing state the removal did not cause — a rule changed
+    under a saved workspace, or validators drifted since it was written.
+    Removing a manual lock is always allowed: the removal still applies, and
+    persistence keeps its own integrity gate downstream.
+    """
+    try:
+        return instance.revised(locks=locks)
+    except (ValidationError, ValueError) as exc:
+        get_logger("ui.locks").warning(
+            "locks.removal_bypassed_validation",
+            removed=len(instance.locks) - len(locks),
+            remaining=len(locks),
+            error_code=type(exc).__name__,
+        )
+        return instance.model_copy(update={"locks": locks})
+
+
 def block_lock_sources(
     instance: SchedulerInput,
     block: ScheduleBlock,
@@ -399,7 +426,7 @@ def unlock_schedule_block(
                 }
             )
         )
-    return _with_locks(instance, locks)
+    return _without_locks(instance, locks)
 
 
 def lock_resident_schedule(
@@ -419,7 +446,7 @@ def unlock_resident_schedule(
     resident_id: str,
 ) -> SchedulerInput:
     """Remove all of a resident's manual locks, preserving the auto overlay."""
-    return _with_locks(
+    return _without_locks(
         instance,
         [
             lock
@@ -502,7 +529,7 @@ def remove_manual_lock(
         kept.append(lock)
     if not removed:
         raise ValueError("the manual lock no longer exists")
-    return _with_locks(instance, kept)
+    return _without_locks(instance, kept)
 
 
 def automatic_locks_through_today(

@@ -19,6 +19,13 @@ from rbs.solver.core.context import ModelBuildError
 from rbs.solver.core.decode import decode_solution
 from rbs.solver.core.diagnostics import explain_infeasibility
 from rbs.solver.planning import resolve_clinic_block_band
+from rbs.solver.reference import (
+    REFERENCE_LOCK_CONFLICT,
+    honored_reference_lock_diagnostic,
+    reference_clinic_lock_barriers,
+    reference_lock_conflict_diagnostic,
+    viable_reference_clinic_locks,
+)
 from rbs.solver.tuning import portfolio_plan
 
 
@@ -151,6 +158,7 @@ class CpSatEngine:
         worker_count = max(1, workers if workers is not None else options.num_workers)
         chosen_seed = seed if seed is not None else options.random_seed
         best_solver = None
+        honored_locks, lock_barriers = _reference_lock_state(problem)
 
         final_objective = (
             (problem.clinic.quality_bound + 1) * problem.clinic.stability_cost
@@ -192,6 +200,24 @@ class CpSatEngine:
                     else None
                 ),
             )
+            for key in sorted(
+                honored_locks,
+                key=_lock_sort_key,
+            ):
+                schedule.meta.diagnostics.append(
+                    honored_reference_lock_diagnostic(
+                        instance, reference_schedule, key
+                    )
+                )
+            if honored_locks:
+                count = len(honored_locks)
+                schedule.meta.notes.append(
+                    f"{count} locked clinic "
+                    f"{'session' if count == 1 else 'sessions'} "
+                    "fell on a clinic day the rotation doesn't allow; an extra "
+                    f"{'session was' if count == 1 else 'sessions were'} scheduled "
+                    "to keep the lock"
+                )
             schedule.meta.wall_time_seconds = time.perf_counter() - started
             return schedule
 
@@ -202,11 +228,19 @@ class CpSatEngine:
                 notes.append(
                     f"no feasible schedule within {options.time_limit_seconds:g}s"
                 )
+            diagnostics: list[SolverDiagnostic] = []
+            if solver_status is SolverStatus.INFEASIBLE and lock_barriers:
+                diagnostics.append(
+                    reference_lock_conflict_diagnostic(
+                        instance, reference_schedule, lock_barriers
+                    )
+                )
             return empty_schedule(
                 instance,
                 engine=self.name,
                 status=solver_status,
                 notes=notes,
+                diagnostics=diagnostics,
                 wall_time_seconds=time.perf_counter() - started,
             )
 
@@ -317,6 +351,54 @@ def _needs_band_relaxation(
     return automatic
 
 
+def _lock_sort_key(item) -> tuple:
+    return (item[0], item[1], item[2].value, item[3].value)
+
+
+def _reference_lock_state(problem) -> tuple[dict, dict]:
+    """Split reference clinic locks into honored ones and barriers.
+
+    Honored locks were kept through a one-off extra session and warn on
+    success. Barriers explain the locks no extra session can rescue; they
+    stay enforced, so they are the prime suspects when the solve is
+    infeasible.
+    """
+    reference = problem.reference_schedule
+    if reference is None:
+        return {}, {}
+    instance = problem.context.instance
+    occurrences = {
+        occurrence.key: occurrence for occurrence in problem.context.occurrences
+    }
+    viable = viable_reference_clinic_locks(
+        instance,
+        reference,
+        occurrences,
+        problem.context.starts,
+    )
+    recorded = problem.clinic.synthetic_reference_locks
+    honored = {key: state for key, state in viable.items() if key in recorded}
+    barriers = {
+        key: barrier
+        for key, barrier in reference_clinic_lock_barriers(
+            instance,
+            reference,
+            occurrences,
+            problem.context.starts,
+        ).items()
+        # Only a lock that compiled to a hard equality can contradict the
+        # model. A barrier without entries (a vacation week, for example)
+        # adds no constraint, so it cannot be the cause.
+        if any(
+            weekday is key[2] and session is key[3]
+            for _keys, weekday, session, _literal in problem.clinic.in_clinic.get(
+                (key[0], key[1]), ()
+            )
+        )
+    }
+    return honored, barriers
+
+
 def _with_infeasibility_diagnostics(
     instance: SolverProblem,
     options: SolverConfig,
@@ -324,6 +406,20 @@ def _with_infeasibility_diagnostics(
 ) -> Schedule:
     if schedule.meta.status is not SolverStatus.INFEASIBLE:
         return schedule
+    # A reference-lock conflict is provisional: the focused probes below run
+    # without the previous draft, so a conclusive one supersedes it. The
+    # reference explanation is restored only when the probes find nothing.
+    provisional = [
+        diagnostic
+        for diagnostic in schedule.meta.diagnostics
+        if diagnostic.code == REFERENCE_LOCK_CONFLICT
+    ]
+    if provisional:
+        schedule.meta.diagnostics = [
+            diagnostic
+            for diagnostic in schedule.meta.diagnostics
+            if diagnostic.code != REFERENCE_LOCK_CONFLICT
+        ]
     # A compile-time configuration error already names the exact problem. Do
     # not replace it with resident-level probes that will all fail for the same
     # shared reason. Coverage-build errors are the exception: the focused
@@ -332,6 +428,15 @@ def _with_infeasibility_diagnostics(
         return schedule
     diagnostics = explain_infeasibility(instance, options)
     if not diagnostics:
+        if provisional:
+            schedule.meta.diagnostics = [
+                *schedule.meta.diagnostics,
+                *provisional,
+            ]
+            schedule.meta.notes = [
+                *schedule.meta.notes,
+                *(diagnostic.message for diagnostic in provisional),
+            ]
         return schedule
     schedule.meta.diagnostics = diagnostics
     schedule.meta.notes = [

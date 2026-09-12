@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Schedules:** A locked clinic session from a previous draft is now kept as
+  a one-off extra session when later edits leave it outside the rotation's
+  clinic days, with a warning naming the session, instead of failing the
+  solve as infeasible. A lock that genuinely cannot be kept — time off, the
+  academic half-day, a vacation week, or an Away block — now explains exactly
+  which rule blocks it instead of failing unexplained.
+- **Editing:** Removing a manual lock is never refused because of unrelated
+  workspace state. Loosening a lock always applies; other configuration the
+  current rules reject is left for its own editor to repair.
+
 ## [0.1.10] - 2026-09-08
 
 ### Fixed

@@ -280,6 +280,17 @@ def _solved_clinic(
     ]
 
 
+def _honored_sessions(problem, resident_id: str) -> set[tuple]:
+    """Weeks and half-days with a recorded one-off honored clinic session."""
+    return {
+        (week, weekday, session)
+        for resident, week, weekday, session in (
+            problem.clinic.synthetic_reference_locks or ()
+        )
+        if resident == resident_id
+    }
+
+
 def _decode_clinic_slots(
     occurrence: Occurrence,
     rotation,
@@ -289,7 +300,8 @@ def _decode_clinic_slots(
     solver,
     vacation: set[int],
 ) -> list[AssignedClinic]:
-    if rotation.clinic_hours_disabled:
+    honored = _honored_sessions(problem, occurrence.resident_id)
+    if rotation.clinic_hours_disabled and not honored:
         return []
     in_clinic = problem.clinic.in_clinic
     slots: list[AssignedClinic] = []
@@ -328,6 +340,13 @@ def _decode_clinic_slots(
             (occurrence.resident_id, week), ()
         ):
             if not solver.Value(literal):
+                continue
+            if (
+                rotation.clinic_hours_disabled
+                and (week, weekday, session) not in honored
+            ):
+                # Clinic-free services decode no ordinary sessions; only the
+                # honored extra sessions survive here.
                 continue
             weekly = True
             slots.append(

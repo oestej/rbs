@@ -15,11 +15,13 @@ from rbs.ui.locks import (
     block_overlapping_lock_sources,
     clear_schedule_block,
     lock_schedule_block,
+    remove_manual_lock,
     replace_manual_block,
     replace_schedule_block,
     schedule_blocks,
     schedule_gaps,
     set_lock_through_today,
+    unlock_resident_schedule,
     unlock_schedule_block,
 )
 
@@ -546,3 +548,49 @@ def test_manual_unlock_keeps_automatic_overlay_until_setting_is_disabled() -> No
         lock.resident_id == resident_id and set(lock.weeks) & {1, 2, 3, 4}
         for lock in disabled.locks
     )
+
+
+def _with_unrelated_broken_lock(instance):
+    """Append a lock the current rules reject, bypassing validation."""
+    broken = LockedPlacement(
+        resident_id="resident-002", rotation_id="no-such-rotation", weeks=[1]
+    )
+    loaded = instance.model_copy(update={"locks": [*instance.locks, broken]})
+    with pytest.raises(ValidationError, match="unknown rotation"):
+        loads_instance(loaded.model_dump_json())
+    return loaded, broken
+
+
+def test_remove_manual_lock_is_never_blocked_by_unrelated_state() -> None:
+    instance = sample_instance()
+    target = next(lock for lock in instance.locks if lock.source == "manual")
+    loaded, broken = _with_unrelated_broken_lock(instance)
+
+    result = remove_manual_lock(loaded, target)
+
+    assert target not in result.locks
+    assert broken in result.locks
+
+
+def test_unlock_all_is_never_blocked_by_unrelated_state() -> None:
+    instance = sample_instance()
+    target = next(lock for lock in instance.locks if lock.source == "manual")
+    loaded, broken = _with_unrelated_broken_lock(instance)
+
+    result = unlock_resident_schedule(loaded, target.resident_id)
+
+    assert not any(
+        lock.source == "manual" and lock.resident_id == target.resident_id
+        for lock in result.locks
+    )
+    assert broken in result.locks
+
+
+def test_remove_manual_lock_still_rejects_a_missing_lock() -> None:
+    instance = sample_instance()
+    missing = LockedPlacement(
+        resident_id="resident-001", rotation_id="icu", weeks=[49, 50, 51, 52]
+    )
+    assert missing not in instance.locks
+    with pytest.raises(ValueError, match="no longer exists"):
+        remove_manual_lock(instance, missing)
