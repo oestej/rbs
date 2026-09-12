@@ -19,7 +19,7 @@ from rbs.solver.readiness import (
     ReadinessResult,
     check_solve_readiness,
 )
-from rbs.solver.reference import changed_resident_weeks
+from rbs.solver.reference import HONORED_REFERENCE_LOCK, changed_resident_weeks
 from rbs.ui.app_branding import dialog_wordmark
 from rbs.ui.app_documents import _document_io
 from rbs.ui.app_status import _refresh_status_chips
@@ -141,6 +141,20 @@ async def _solve(session: WorkspaceSession) -> None:
         result_message = f"Solver {schedule.meta.status.value}"
         if ok and compared_weeks:
             result_message += f" · {changed_weeks} resident-weeks changed"
+        honored_locks = (
+            sum(
+                diagnostic.code == HONORED_REFERENCE_LOCK
+                for diagnostic in schedule.meta.diagnostics
+            )
+            if ok
+            else 0
+        )
+        if honored_locks:
+            session_noun = "session" if honored_locks == 1 else "sessions"
+            result_message += (
+                f" · {honored_locks} locked clinic {session_noun} kept as "
+                f"extra {session_noun}"
+            )
         elif draft_kept:
             result_message += " · current draft kept"
         elif schedule.meta.validation_errors:

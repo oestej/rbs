@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from rbs.models.clinic import ClinicSlot
@@ -59,6 +59,7 @@ class ClinicModelState:
     stability_cost: Any = 0
     quality_cost: Any = 0
     quality_bound: int = 0
+    synthetic_reference_locks: set = field(default_factory=set)
 
 
 @dataclass(frozen=True)

@@ -19,6 +19,7 @@ from rbs.models.rotation import Rotation
 from rbs.solver.core.context import ClinicDecision, PlanningContext, new_clinic_decision
 from rbs.solver.core.objective_slots import _Conditional, _slot_literals
 from rbs.solver.planning import covers, rotate_domain
+from rbs.solver.reference import occurrence_can_cover_week
 
 if TYPE_CHECKING:
     from rbs.solver.core.objective import _ClinicObjectiveState
@@ -80,6 +81,7 @@ def _collect_week_entries(
     decisions: dict[str, ClinicDecision],
     clinic_kind,
     state: _ClinicObjectiveState,
+    honored_locks: dict[tuple[str, int], list[tuple]] | None = None,
 ) -> list[tuple]:
     entries: list[tuple] = []
     for occurrence in occurrences:
@@ -96,6 +98,12 @@ def _collect_week_entries(
             _resident_clinic_entries(context, occurrence, rotation, week, present)
         )
         if rotation.clinic_hours_disabled:
+            # No template entries exist below, so a honored lock is the only
+            # possible source of clinic for this occurrence.
+            _extend_honored_lock_entries(
+                context, occurrence, rotation, week, present, entries, honored_locks,
+                state,
+            )
             continue
         if rotation.kind is RotationKind.CLINIC:
             state.clinic_kind_week[occurrence.pgy, week].append(present)
@@ -119,7 +127,82 @@ def _collect_week_entries(
                 decisions,
             )
         )
+        _extend_honored_lock_entries(
+            context, occurrence, rotation, week, present, entries, honored_locks,
+            state,
+        )
     return _deduplicate_entries(entries)
+
+
+def _extend_honored_lock_entries(
+    context: PlanningContext,
+    occurrence,
+    rotation: Rotation,
+    week: int,
+    present,
+    entries: list[tuple],
+    honored_locks: dict[tuple[str, int], list[tuple]] | None,
+    state: _ClinicObjectiveState,
+) -> None:
+    """Append one-off entries for honored locks and record them."""
+    synthetic = _honored_lock_entries(
+        context,
+        occurrence,
+        rotation,
+        week,
+        present,
+        entries,
+        honored_locks,
+    )
+    for _entry_occurrence, weekday, session, _literal, _pinned in synthetic:
+        state.synthetic_reference_locks.add(
+            (occurrence.resident_id, week, weekday, session)
+        )
+    entries.extend(synthetic)
+
+
+def _honored_lock_entries(
+    context: PlanningContext,
+    occurrence,
+    rotation: Rotation,
+    week: int,
+    present,
+    entries: list[tuple],
+    honored_locks: dict[tuple[str, int], list[tuple]] | None,
+) -> list[tuple]:
+    """Offer one-off sessions for reference locks outside the rotation template.
+
+    The honored locks passed viability (no academic, time-off, special-event,
+    or vacation barrier), so the template is the only thing standing between
+    the locked session and a feasible solve. Each entry rides the occurrence's
+    own placement literal, exactly like a configured fixed slot. The template's
+    own entry wins when it already offers the half-day.
+    """
+    if not honored_locks:
+        return []
+    if rotation.away:
+        return []
+    half_days = honored_locks.get((occurrence.resident_id, week), ())
+    if not half_days:
+        return []
+    if not occurrence_can_cover_week(
+        occurrence,
+        context.starts,
+        context.instance.locks,
+        occurrence.resident_id,
+        week,
+    ):
+        return []
+    offered = {
+        (weekday, session)
+        for entry_occurrence, weekday, session, _literal, _pinned in entries
+        if entry_occurrence.key == occurrence.key
+    }
+    return [
+        (occurrence, weekday, session, present, None)
+        for weekday, session in half_days
+        if (weekday, session) not in offered
+    ]
 
 
 def _covering_literals(context: PlanningContext, occurrence, week: int) -> list[Any]:

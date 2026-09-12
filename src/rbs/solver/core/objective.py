@@ -56,6 +56,7 @@ from rbs.solver.core.objective_terms import (
     _session_pgy_mix,
     _sum_literals,
 )
+from rbs.solver.reference import occurrence_can_cover_week, viable_reference_clinic_locks
 
 __all__ = [
     "add_clinic_objective",
@@ -97,6 +98,7 @@ __all__ = [
 
 @dataclass
 class _ClinicObjectiveState:
+    synthetic_reference_locks: set = field(default_factory=set)
     in_clinic: dict = field(default_factory=lambda: defaultdict(list))
     attending_variables: list[Any] = field(default_factory=list)
     attending_upper_bound: int = 0
@@ -127,12 +129,24 @@ def add_clinic_objective(
         excluded_keys=admin_keys,
     )
     occurrences = _clinic_occurrences(context, decisions)
+    viable_locks = (
+        viable_reference_clinic_locks(
+            context.instance,
+            reference_schedule,
+            {occurrence.key: occurrence for occurrence in context.occurrences},
+            context.starts,
+        )
+        if reference_schedule is not None
+        else {}
+    )
+    occurrences = _include_honored_occurrences(context, occurrences, viable_locks)
     state = _ClinicObjectiveState()
     pgys = [
         pgy
         for pgy, count in sorted(context.instance.cohort_counts().items())
         if count > 0
     ]
+    honored_locks = _honored_locks_by_resident_week(viable_locks)
 
     for week in context.weeks:
         entries = _collect_week_entries(
@@ -142,6 +156,7 @@ def add_clinic_objective(
             decisions,
             clinic_kind,
             state,
+            honored_locks,
         )
         grouped, surviving = _available_week_entries(context, week, entries)
         slot_groups = _materialize_week_entries(context, week, grouped, state)
@@ -165,6 +180,47 @@ def add_clinic_objective(
         pgys,
         reference_schedule,
     )
+
+
+def _include_honored_occurrences(context, occurrences, viable_locks):
+    """Keep occurrences a honored lock needs even without clinic hours.
+
+    Clinic-free services contribute no entries of their own, so their
+    occurrences never reach entry collection. A honored lock needs its
+    lock-compatible occurrence there to hang the one-off session on; normal
+    entry builders still yield nothing for it, so only synthetic entries can
+    result.
+    """
+    if not viable_locks:
+        return occurrences
+    included = {occurrence.key for occurrence in occurrences}
+    locks = context.instance.locks
+    extra = [
+        occurrence
+        for occurrence in context.occurrences
+        if occurrence.key not in included
+        and not context.rotations[occurrence.rotation_id].away
+        and any(
+            occurrence_can_cover_week(
+                occurrence,
+                context.starts,
+                locks,
+                resident_id,
+                week,
+            )
+            for resident_id, week, _weekday, _session in viable_locks
+            if resident_id == occurrence.resident_id
+        )
+    ]
+    return [*occurrences, *extra]
+
+
+def _honored_locks_by_resident_week(viable_locks):
+    """Group viable reference locks so entry collection can offer them."""
+    grouped: dict[tuple[str, int], list[tuple]] = defaultdict(list)
+    for resident_id, week, weekday, session in viable_locks:
+        grouped[resident_id, week].append((weekday, session))
+    return dict(grouped)
 
 
 def _finish_clinic_objective(
@@ -239,5 +295,6 @@ def _finish_clinic_objective(
         stability_cost=stability_cost,
         quality_cost=quality,
         quality_bound=quality_bound,
+        synthetic_reference_locks=set(state.synthetic_reference_locks),
     )
 
