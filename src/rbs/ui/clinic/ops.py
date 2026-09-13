@@ -6,6 +6,7 @@ the clinic policy rules they encode can be read and tested without a UI.
 
 from __future__ import annotations
 
+from rbs.models.attending import AttendingWorkType
 from rbs.models.clinic import (
     ALL_CLINIC_SITES,
     ClinicAllocationRule,
@@ -104,6 +105,28 @@ def remove_clinic(instance: SchedulerInput, clinic_id: str) -> SchedulerInput:
         raise ValueError(f"unknown clinic {clinic_id!r}")
     if len(instance.clinic_policy.sites) <= 1:
         raise ValueError("at least one clinic must remain configured")
+    assigned_attendings = [
+        attending.name
+        for attending in instance.attendings
+        if any(
+            assignment.work_type is AttendingWorkType.PRECEPTING_CLINIC
+            and assignment.clinic_id == clinic_id
+            for assignment in (
+                *attending.schedule_template_half_days,
+                *(
+                    half_day
+                    for schedule in attending.weekly_work_schedules
+                    for half_day in schedule.half_days
+                ),
+                *attending.ad_hoc_work_half_days,
+            )
+        )
+    ]
+    if assigned_attendings:
+        names = ", ".join(assigned_attendings)
+        raise ValueError(
+            "reassign Precepting Clinic work before removing this clinic: " + names
+        )
 
     raw = instance.model_dump(mode="json")
     policy = raw["clinic_policy"]
@@ -377,6 +400,7 @@ def _new_clinic_draft(instance: SchedulerInput) -> Draft:
         "id": clinic_id,
         "name": f"Clinic {index}",
         "color": colors[(index - 1) % len(colors)],
+        "staffing_mode": "capacity_managed",
         "residents_per_attending": 4,
         "half_days": [],
         "capacity_overrides": [],

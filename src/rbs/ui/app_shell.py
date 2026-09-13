@@ -304,6 +304,14 @@ def _render_tab(session: WorkspaceSession, name: str) -> None:
                 draft_schedule=draft_schedule,
             )
 
+        def manage_attendings() -> None:
+            session.attending_id = None
+            session.active_tab = "attendings"
+            session.mark_stale("attendings")
+            if session.navigation is not None:
+                session.navigation.tabs.value = session.navigation.attendings
+            session.refresh_panel("attendings")
+
         render_clinic_tab(
             workspace.instance,
             on_save=persist_clinic,
@@ -311,6 +319,7 @@ def _render_tab(session: WorkspaceSession, name: str) -> None:
             on_section_change=lambda event: _remember_clinic_section(session, event.value),
             schedule=workspace.latest_schedule,
             on_block_schedule_save=persist_clinic_block_schedule,
+            on_manage_attendings=manage_attendings,
         )
     elif name == "residents":
         _render_residents(session, workspace)

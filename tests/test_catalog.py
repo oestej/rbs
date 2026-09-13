@@ -151,8 +151,20 @@ def test_pre_v8_catalogs_are_rejected(legacy_version: int) -> None:
     raw = bootstrap_catalog().model_dump(mode="json")
     raw["schema_version"] = legacy_version
 
-    with pytest.raises(ValidationError, match="Input should be 8"):
+    with pytest.raises(ValidationError, match="Input should be 9"):
         ConstraintCatalog.model_validate(raw)
+
+
+def test_v8_catalog_migrates_clinics_to_capacity_managed() -> None:
+    raw = bootstrap_catalog().model_dump(mode="json")
+    raw["schema_version"] = 8
+    for site in raw["clinic_policy"]["sites"]:
+        site.pop("staffing_mode")
+
+    restored = ConstraintCatalog.model_validate(raw)
+
+    assert restored.schema_version == 9
+    assert all(site.staffing_mode == "capacity_managed" for site in restored.clinic_policy.sites)
 
 
 def test_instance_catalog_projection_preserves_explicit_elective_policy() -> None:
@@ -170,7 +182,7 @@ def test_instance_catalog_projection_preserves_explicit_elective_policy() -> Non
     catalog = instance.constraint_catalog()
     option = catalog.electives.option_for("night_float")
 
-    assert catalog.schema_version == 8
+    assert catalog.schema_version == 9
     assert option is not None
     assert option.eligible_pgys == [2]
     assert not option.repeatable

@@ -121,7 +121,7 @@ def assign_clinic_sites(
             allowed = [
                 clinic_id
                 for clinic_id in policy.open_site_ids(calendar_day, allowed)
-                if policy.max_capacity_on(clinic_id, calendar_day, slot.session) > 0
+                if instance.clinic_max_capacity_on(clinic_id, calendar_day, slot.session) > 0
             ]
             if not allowed:
                 # A closure or a clinic with no coverage removes this occurrence,
@@ -207,7 +207,7 @@ def assign_clinic_sites(
                 candidate
                 for candidate in unassigned
                 if clinic_id in candidate.clinic_ids
-                and _under_capacity(policy, clinic_id, candidate, filled)
+                and _under_capacity(instance, clinic_id, candidate, filled)
                 and assigned_by_resident[candidate.resident_id, clinic_id]
                 < targets.get((candidate.resident_id, clinic_id), 0)
             ]
@@ -254,7 +254,7 @@ def assign_clinic_sites(
         available = [
             clinic_id
             for clinic_id in candidate.clinic_ids
-            if _under_capacity(policy, clinic_id, candidate, filled)
+            if _under_capacity(instance, clinic_id, candidate, filled)
             and _under_allocation_max(
                 policy,
                 candidate.resident_id,
@@ -268,7 +268,7 @@ def assign_clinic_sites(
             available = [
                 clinic_id
                 for clinic_id in candidate.clinic_ids
-                if _under_capacity(policy, clinic_id, candidate, filled)
+                if _under_capacity(instance, clinic_id, candidate, filled)
             ]
         if not available:
             # Preserve the required clinic session and make any true staffing
@@ -279,7 +279,7 @@ def assign_clinic_sites(
             key=lambda candidate_clinic: _remainder_assignment_key(
                 candidate,
                 candidate_clinic,
-                policy,
+                instance,
                 targets,
                 filled,
                 assigned_by_resident,
@@ -421,13 +421,13 @@ def _assign(
 
 
 def _under_capacity(
-    policy: ClinicPolicy,
+    instance: SolverProblem,
     clinic_id: str,
     candidate: _Candidate,
     filled: dict[tuple[str, int, object, object], int],
 ) -> bool:
     week, weekday, session = candidate.key
-    return filled[clinic_id, week, weekday, session] < policy.max_capacity_on(
+    return filled[clinic_id, week, weekday, session] < instance.clinic_max_capacity_on(
         clinic_id, candidate.calendar_day, session
     )
 
@@ -495,7 +495,7 @@ def _target_assignment_key(
 def _remainder_assignment_key(
     candidate: _Candidate,
     clinic_id: str,
-    policy: ClinicPolicy,
+    instance: SolverProblem,
     targets: dict[tuple[str, str], int],
     filled: dict[tuple[str, int, object, object], int],
     assigned_by_resident: dict[tuple[str, str], int],
@@ -503,13 +503,14 @@ def _remainder_assignment_key(
     assigned_by_resident_week: dict[tuple[str, int, str], int],
     weekly_by_clinic: dict[tuple[str, int], int],
 ) -> tuple:
+    policy = instance.clinic_policy
     week, weekday, session = candidate.key
     deficit = (
         targets.get((candidate.resident_id, clinic_id), 0)
         - assigned_by_resident[candidate.resident_id, clinic_id]
     )
     maximum = max(
-        policy.max_capacity_on(clinic_id, candidate.calendar_day, session),
+        instance.clinic_max_capacity_on(clinic_id, candidate.calendar_day, session),
         1,
     )
     used = filled[clinic_id, week, weekday, session]

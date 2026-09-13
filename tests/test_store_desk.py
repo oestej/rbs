@@ -225,19 +225,38 @@ def test_importing_a_file_with_no_workspaces_is_refused(tmp_path) -> None:
         _store(tmp_path).import_workspace_rbsc(payload)
 
 
-def test_v9_file_migrates_to_an_empty_attending_directory(tmp_path) -> None:
+def test_v10_file_migrates_attending_schedules_and_clinic_staffing(tmp_path) -> None:
     source = _store(tmp_path / "a")
     payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
-    payload["schema_version"] = 9
-    payload["workspaces"][0]["case"].pop("attendings")
+    payload["schema_version"] = 10
+    attending = payload["workspaces"][0]["case"]["attendings"][0]
+    attending.pop("weekly_shift_targets")
+    attending.pop("schedule_template_half_days")
+    attending.pop("weekly_work_schedules")
+    for half_day in attending["ad_hoc_work_half_days"]:
+        half_day.pop("work_type")
+        half_day.pop("clinic_id")
+    for catalog in payload["catalogs"]:
+        catalog["catalog"]["schema_version"] = 8
+        for site in catalog["catalog"]["clinic_policy"]["sites"]:
+            site.pop("staffing_mode")
 
     target = _store(tmp_path / "b")
     imported = target.import_workspace_rbsc(json.dumps(payload))[0]
 
-    assert imported.instance.attendings == []
+    assert not imported.instance.attendings[0].weekly_shift_targets
+    assert not imported.instance.attendings[0].schedule_template_half_days
+    assert not imported.instance.attendings[0].weekly_work_schedules
+    assert all(
+        half_day.work_type == "special_other"
+        for half_day in imported.instance.attendings[0].ad_hoc_work_half_days
+    )
+    assert all(
+        site.staffing_mode == "capacity_managed"
+        for site in imported.instance.clinic_policy.sites
+    )
     reexported = json.loads(target.export_workspace_rbsc(imported.id))
-    assert reexported["schema_version"] == 10
-    assert reexported["workspaces"][0]["case"]["attendings"] == []
+    assert reexported["schema_version"] == 11
 
 
 def test_v10_attending_without_weekly_half_days_uses_ten(tmp_path) -> None:
@@ -261,14 +280,14 @@ def test_v10_attending_without_ad_hoc_work_uses_an_empty_list(tmp_path) -> None:
     assert all(not attending.ad_hoc_work_half_days for attending in imported.instance.attendings)
 
 
-def test_pre_v9_files_are_rejected(tmp_path) -> None:
+def test_pre_v10_files_are_rejected(tmp_path) -> None:
     from pydantic import ValidationError
 
     source = _store(tmp_path / "a")
     payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
     payload["schema_version"] = 1
 
-    with pytest.raises(ValidationError, match="Input should be 10"):
+    with pytest.raises(ValidationError, match="Input should be 11"):
         _store(tmp_path / "b").import_workspace_rbsc(json.dumps(payload))
 
 
@@ -279,7 +298,7 @@ def test_v8_files_are_rejected(tmp_path) -> None:
     payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
     payload["schema_version"] = 8
 
-    with pytest.raises(ValidationError, match="Input should be 10"):
+    with pytest.raises(ValidationError, match="Input should be 11"):
         _store(tmp_path / "b").import_workspace_rbsc(json.dumps(payload))
 
 
@@ -292,7 +311,7 @@ def test_v7_files_with_v6_catalogs_are_rejected(tmp_path) -> None:
     for record in payload["catalogs"]:
         record["catalog"]["schema_version"] = 6
 
-    with pytest.raises(ValidationError, match="Input should be 10"):
+    with pytest.raises(ValidationError, match="Input should be 11"):
         _store(tmp_path / "b").import_workspace_rbsc(json.dumps(payload))
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
+from enum import StrEnum
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
@@ -30,6 +31,13 @@ _WEEKDAY_OFFSETS = {
     Weekday.SATURDAY: 5,
     Weekday.SUNDAY: 6,
 }
+
+
+class ClinicStaffingMode(StrEnum):
+    """How a clinic's resident capacity is supplied."""
+
+    CAPACITY_MANAGED = "capacity_managed"
+    ATTENDING_MANAGED = "attending_managed"
 
 
 def lighten_hex_color(color: str, *, white_mix: float = 0.9) -> str:
@@ -103,6 +111,7 @@ class ClinicSiteConfig(StrictModel):
     id: str
     name: str = Field(min_length=1)
     color: str
+    staffing_mode: ClinicStaffingMode = ClinicStaffingMode.CAPACITY_MANAGED
     residents_per_attending: int = Field(default=4, ge=1)
     half_days: list[ClinicHalfDayCapacity] = Field(default_factory=list)
     capacity_overrides: list[ClinicCapacityOverride] = Field(default_factory=list)

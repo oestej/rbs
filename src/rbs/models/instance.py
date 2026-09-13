@@ -8,6 +8,9 @@ from pydantic.json_schema import SkipJsonSchema
 
 from rbs.models.attending import (
     Attending,
+    AttendingClinicCoverage,
+    AttendingWorkType,
+    attending_clinic_coverage,
     normalize_attendings,
     validate_attending_academic_year,
 )
@@ -19,7 +22,7 @@ from rbs.models.case_blocks import (
     ResidentRotationWaiver,
 )
 from rbs.models.catalog import ConstraintCatalog, validate_catalog_integrity
-from rbs.models.clinic import ClinicPolicy, ClinicSiteConfig
+from rbs.models.clinic import ClinicPolicy, ClinicSiteConfig, ClinicStaffingMode
 from rbs.models.color_scheme import ColorScheme
 from rbs.models.common import StrictModel
 from rbs.models.curriculum import (
@@ -44,6 +47,7 @@ from rbs.models.special import SpecialRotation, SpecialRotationKind
 
 __all__ = [
     "AcademicHalfDayOverride",
+    "AttendingClinicCoverage",
     "Calendar",
     "ManualClinicBlock",
     "ObjectiveWeights",
@@ -188,6 +192,13 @@ class SolverClinicSiteConfig(ClinicSiteConfig):
 
     color: SkipJsonSchema[str] = Field(default="#000000", exclude=True)
 
+    @model_validator(mode="after")
+    def omit_dormant_capacity_configuration(self) -> Self:
+        if self.staffing_mode is ClinicStaffingMode.ATTENDING_MANAGED:
+            self.half_days = []
+            self.capacity_overrides = []
+        return self
+
 
 class SolverClinicPolicy(ClinicPolicy):
     sites: list[SolverClinicSiteConfig] = Field(min_length=1)
@@ -206,6 +217,13 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
     rotation_groups: list[RotationGroup] = Field(default_factory=list)
     electives: SolverElectiveConfiguration
     clinic_policy: SolverClinicPolicy
+    attending_coverage: list[AttendingClinicCoverage] = Field(
+        default_factory=list,
+        description=(
+            "Derived dated preceptor counts for attending-managed clinics; "
+            "full attending records remain outside the solver boundary."
+        ),
+    )
     clinic_lock_cutoff_date: date | None = Field(
         default=None,
         description=(
@@ -213,6 +231,21 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
             "derived from workspace workflow state before crossing the solver boundary."
         ),
     )
+
+    @field_validator("attending_coverage")
+    @classmethod
+    def ordered_attending_coverage(
+        cls,
+        coverage: list[AttendingClinicCoverage],
+    ) -> list[AttendingClinicCoverage]:
+        return sorted(
+            coverage,
+            key=lambda item: (
+                item.date,
+                list(Session).index(item.session),
+                item.clinic_id,
+            ),
+        )
 
     @classmethod
     def from_instance(
@@ -226,6 +259,28 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
             mode="json",
             include=set(cls.model_fields),
         )
+        if hasattr(instance, "attendings"):
+            first_day = instance.calendar.first_week_start
+            last_day = first_day + timedelta(days=instance.calendar.weeks * 7 - 1)
+            managed_clinic_ids = {
+                site.id
+                for site in instance.clinic_policy.sites
+                if site.staffing_mode is ClinicStaffingMode.ATTENDING_MANAGED
+            }
+            payload["attending_coverage"] = [
+                item.model_dump(mode="json")
+                for item in attending_clinic_coverage(
+                    instance.attendings,
+                    managed_clinic_ids=managed_clinic_ids,
+                    closed_dates_by_clinic={
+                        site.id: {closure.date for closure in site.closure_days}
+                        for site in instance.clinic_policy.sites
+                        if site.id in managed_clinic_ids
+                    },
+                    first_day=first_day,
+                    last_day=last_day,
+                )
+            ]
         if getattr(instance, "lock_through_today", False):
             payload["clinic_lock_cutoff_date"] = today or date.today()
         projected = cls.model_validate(payload)
@@ -236,6 +291,63 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
     @cached_property
     def rotations_by_id(self) -> dict[str, Rotation]:
         return {rotation.id: rotation for rotation in self.rotations}
+
+    @cached_property
+    def _attending_coverage_by_slot(self) -> dict[tuple[str, date, Session], int]:
+        return {
+            (coverage.clinic_id, coverage.date, coverage.session): coverage.attendings
+            for coverage in self.attending_coverage
+        }
+
+    def clinic_attending_count_on(
+        self,
+        site_id: str,
+        calendar_day: date,
+        session: Session,
+    ) -> int:
+        """Return effective scheduled preceptors for one managed clinic slot."""
+        site = self.clinic_policy.site(site_id)
+        if site.is_closed(calendar_day):
+            return 0
+        if site.staffing_mode is ClinicStaffingMode.CAPACITY_MANAGED:
+            override = site.capacity_override(calendar_day, session)
+            if override is not None:
+                return override.attendings
+            weekday = tuple(Weekday)[calendar_day.weekday()]
+            half_day = site.half_day(weekday, session)
+            return half_day.attendings if half_day is not None else 0
+        return self._attending_coverage_by_slot.get(
+            (site.id, calendar_day, session),
+            0,
+        )
+
+    def clinic_max_capacity_on(
+        self,
+        site_id: str,
+        calendar_day: date,
+        session: Session,
+    ) -> int:
+        """Return resident capacity from the clinic's selected staffing source."""
+        site = self.clinic_policy.site(site_id)
+        if site.staffing_mode is ClinicStaffingMode.CAPACITY_MANAGED:
+            return site.max_capacity_on(calendar_day, session)
+        return self.clinic_attending_count_on(
+            site.id,
+            calendar_day,
+            session,
+        ) * site.residents_per_attending
+
+    def clinic_min_capacity_on(
+        self,
+        site_id: str,
+        calendar_day: date,
+        session: Session,
+    ) -> int:
+        """Return the configured resident minimum for one clinic slot."""
+        site = self.clinic_policy.site(site_id)
+        if site.staffing_mode is ClinicStaffingMode.CAPACITY_MANAGED:
+            return site.min_capacity_on(calendar_day, session)
+        return 0
 
     @cached_property
     def _curriculum_by_pgy(self) -> dict[int, PGYCurriculum]:
@@ -270,6 +382,28 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
 
         first_day = self.calendar.first_week_start
         last_day = first_day + timedelta(days=self.calendar.weeks * 7 - 1)
+        known_clinic_ids = set(self.clinic_policy.site_ids)
+        coverage_slots: set[tuple[str, date, Session]] = set()
+        for coverage in self.attending_coverage:
+            if coverage.clinic_id not in known_clinic_ids:
+                raise ValueError(
+                    "attending coverage references unknown clinic "
+                    f"{coverage.clinic_id!r}"
+                )
+            clinic = self.clinic_policy.site(coverage.clinic_id)
+            if clinic.staffing_mode is not ClinicStaffingMode.ATTENDING_MANAGED:
+                raise ValueError(
+                    f"attending coverage references capacity-managed clinic {clinic.name!r}"
+                )
+            if not first_day <= coverage.date <= last_day:
+                raise ValueError(
+                    f"attending coverage {coverage.date.isoformat()} is outside academic "
+                    f"year {first_day.isoformat()}..{last_day.isoformat()}"
+                )
+            slot = coverage.clinic_id, coverage.date, coverage.session
+            if slot in coverage_slots:
+                raise ValueError("attending coverage must use unique clinic date sessions")
+            coverage_slots.add(slot)
         for clinic in self.clinic_policy.sites:
             for override in clinic.capacity_overrides:
                 if not first_day <= override.date <= last_day:
@@ -768,6 +902,10 @@ class SchedulerInput(SolverProblem):
     """Workspace instance: solver problem plus presentation/workflow settings."""
 
     attendings: list[Attending] = Field(default_factory=list)
+    attending_coverage: SkipJsonSchema[list[AttendingClinicCoverage]] = Field(
+        default_factory=list,
+        exclude=True,
+    )
     rotations: list[Rotation]
     electives: ElectiveConfiguration
     clinic_policy: ClinicPolicy
@@ -790,6 +928,42 @@ class SchedulerInput(SolverProblem):
             first_day=first_day,
             last_day=last_day,
         )
+        known_clinic_ids = set(self.clinic_policy.site_ids)
+        for attending in self.attendings:
+            assignments = [
+                *attending.schedule_template_half_days,
+                *(
+                    half_day
+                    for schedule in attending.weekly_work_schedules
+                    for half_day in schedule.half_days
+                ),
+                *attending.ad_hoc_work_half_days,
+            ]
+            for assignment in assignments:
+                if (
+                    assignment.work_type is AttendingWorkType.PRECEPTING_CLINIC
+                    and assignment.clinic_id not in known_clinic_ids
+                ):
+                    raise ValueError(
+                        f"{attending.id}: Precepting Clinic work references unknown clinic "
+                        f"{assignment.clinic_id!r}"
+                    )
+        self.attending_coverage = attending_clinic_coverage(
+            self.attendings,
+            managed_clinic_ids={
+                site.id
+                for site in self.clinic_policy.sites
+                if site.staffing_mode is ClinicStaffingMode.ATTENDING_MANAGED
+            },
+            closed_dates_by_clinic={
+                site.id: {closure.date for closure in site.closure_days}
+                for site in self.clinic_policy.sites
+                if site.staffing_mode is ClinicStaffingMode.ATTENDING_MANAGED
+            },
+            first_day=first_day,
+            last_day=last_day,
+        )
+        self.__dict__.pop("_attending_coverage_by_slot", None)
         return self
 
     def scheduling_case(self) -> SchedulingCase:

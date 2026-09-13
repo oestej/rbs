@@ -238,7 +238,12 @@ def _resident_clinic_entries(
         open_sites = [
             site_id
             for site_id in policy.open_site_ids(calendar_day, allowed)
-            if policy.max_capacity_on(site_id, calendar_day, half_day.session) > 0
+            if instance.clinic_max_capacity_on(
+                site_id,
+                calendar_day,
+                half_day.session,
+            )
+            > 0
         ]
         if open_sites:
             entries.append(
@@ -429,12 +434,13 @@ def _add_half_day_capacity(
     them empty would make a week unplaceable over a schedule the program is
     willing to accept.
     """
-    policy = context.instance.clinic_policy
+    instance = context.instance
+    policy = instance.clinic_policy
     first_week_start = context.instance.calendar.first_week_start
     for (weekday, session), literals in occupied_by_slot.items():
         calendar_day = clinic_slot_date(first_week_start, week, weekday)
         capacity = sum(
-            policy.max_capacity_on(site_id, calendar_day, session)
+            instance.clinic_max_capacity_on(site_id, calendar_day, session)
             for site_id in policy.site_ids
         )
         # Below the seat count the bound is arithmetic, not a constraint.
@@ -458,7 +464,7 @@ def _counts_at_primary_site(
         week,
         weekday,
     )
-    if policy.max_capacity_on(pinned, calendar_day, session) <= 0:
+    if context.instance.clinic_max_capacity_on(pinned, calendar_day, session) <= 0:
         context.model.Add(literal == 0)
     return pinned == policy.primary_site_id
 
@@ -523,4 +529,3 @@ def _overlay_domain(rotation: Rotation, policy: ClinicPolicy) -> tuple[list, int
 def _pinned_site(policy: ClinicPolicy, site_ids: list[str]) -> str | None:
     resolved = policy.resolve_site_ids(site_ids)
     return resolved[0] if len(resolved) == 1 else None
-

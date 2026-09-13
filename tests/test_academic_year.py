@@ -11,9 +11,14 @@ from rbs.academic_year import (
     week_start_choices,
 )
 from rbs.catalog import sample_instance
+from rbs.models.attending import (
+    AttendingWeeklyWorkSchedule,
+    AttendingWorkHalfDay,
+    AttendingWorkType,
+)
 from rbs.models.case_blocks import ManualClinicBlock
 from rbs.models.clinic_site import ClinicCapacityOverride
-from rbs.models.enums import Session
+from rbs.models.enums import Session, Weekday
 
 
 def test_week_start_choices_center_on_the_july_anchor() -> None:
@@ -65,6 +70,20 @@ def test_rebase_week_start_rejects_a_non_monday() -> None:
 def test_start_new_academic_year_clears_year_specific_work() -> None:
     instance = sample_instance()
     resident = instance.residents[2]
+    pattern = AttendingWorkHalfDay(
+        weekday=Weekday.MONDAY,
+        session=Session.MORNING,
+        work_type=AttendingWorkType.ADMIN_TIME,
+    )
+    reusable_attending = next(
+        attending for attending in instance.attendings if attending.half_days_per_week > 0
+    )
+    first_attending = reusable_attending.revised(
+        schedule_template_half_days=[pattern],
+        weekly_work_schedules=[
+            AttendingWeeklyWorkSchedule(week=1, half_days=[pattern])
+        ],
+    )
     maple = instance.clinic_policy.site("maple").revised(
         capacity_overrides=[
             ClinicCapacityOverride(
@@ -81,6 +100,10 @@ def test_start_new_academic_year_clears_year_specific_work() -> None:
         ]
     )
     configured = instance.revised(
+        attendings=[
+            first_attending if attending.id == first_attending.id else attending
+            for attending in instance.attendings
+        ],
         clinic_policy=policy,
         manual_clinic_blocks=[
             ManualClinicBlock(
@@ -105,7 +128,13 @@ def test_start_new_academic_year_clears_year_specific_work() -> None:
     assert all(item.schedule_start_date is None for item in moved.attendings)
     assert all(item.schedule_end_date is None for item in moved.attendings)
     assert all(not item.vacation_ranges for item in moved.attendings)
+    assert all(not item.weekly_work_schedules for item in moved.attendings)
     assert all(not item.ad_hoc_work_half_days for item in moved.attendings)
+    assert next(
+        item
+        for item in moved.attendings
+        if item.id == first_attending.id
+    ).schedule_template_half_days == [pattern]
     assert not moved.academic_half_day_overrides
     assert not moved.locks
     assert not moved.manual_clinic_blocks

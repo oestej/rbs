@@ -555,12 +555,19 @@
       "schedule_start_date": "2026-08-29",
       "schedule_end_date": "2027-05-16",
       "vacation_ranges": [],
+      "weekly_shift_targets": [],
+      "schedule_template_half_days": [],
+      "weekly_work_schedules": [],
       "ad_hoc_work_half_days": [
         {
+          "work_type": "special_other",
+          "clinic_id": null,
           "date": "2026-09-07",
           "session": "morning"
         },
         {
+          "work_type": "special_other",
+          "clinic_id": null,
           "date": "2026-09-10",
           "session": "afternoon"
         }
@@ -578,6 +585,9 @@
           "end_date": "2027-03-15"
         }
       ],
+      "weekly_shift_targets": [],
+      "schedule_template_half_days": [],
+      "weekly_work_schedules": [],
       "ad_hoc_work_half_days": []
     },
     {
@@ -596,6 +606,9 @@
           "end_date": "2026-12-29"
         }
       ],
+      "weekly_shift_targets": [],
+      "schedule_template_half_days": [],
+      "weekly_work_schedules": [],
       "ad_hoc_work_half_days": []
     },
     {
@@ -610,6 +623,9 @@
           "end_date": "2026-10-08"
         }
       ],
+      "weekly_shift_targets": [],
+      "schedule_template_half_days": [],
+      "weekly_work_schedules": [],
       "ad_hoc_work_half_days": []
     }
   ],

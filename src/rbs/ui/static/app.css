@@ -601,6 +601,10 @@
   min-height: 52px;
 }
 
+.rbs-attending-editor-tabs .q-tab {
+  padding-inline: var(--rbs-space-2);
+}
+
 .rbs-resident-schedule-tabs .q-tab--active {
   color: var(--rbs-primary);
   font-weight: var(--rbs-weight-bold);

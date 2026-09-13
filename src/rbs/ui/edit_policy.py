@@ -20,9 +20,9 @@ def instance_edit_impact(
     """
     if _solver_semantics(previous) != _solver_semantics(replacement):
         return InstanceEditImpact.SOLVER_INPUT
-    # Attending availability is durable scheduling configuration, but it does
-    # not constrain resident placement until the attending-capacity phase is
-    # connected to the solver. Preserve a useful resident schedule meanwhile.
+    # Precepting assignments for attending-managed clinics are represented in
+    # the solver projection above. Other attending details and non-precepting
+    # work remain compatible configuration and preserve a useful schedule.
     if previous.attendings != replacement.attendings:
         return InstanceEditImpact.COMPATIBLE_CONFIGURATION
     if previous.solver != replacement.solver:

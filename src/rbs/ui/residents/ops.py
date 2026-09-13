@@ -826,7 +826,7 @@ def _resident_clinic_preceptor_conflicts(
         closure = policy.closure_on(calendar_day)
         suffix = f" ({closure.name})" if closure is not None and closure.name else ""
         return (f"{site_name} is closed on {calendar_day:%B} {calendar_day.day}{suffix}.",)
-    maximum = policy.max_capacity_on(site_id, calendar_day, session)
+    maximum = instance.clinic_max_capacity_on(site_id, calendar_day, session)
     if maximum <= 0:
         return (
             f"{site_name} has no attending coverage for {weekday.value.title()} "

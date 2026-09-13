@@ -1,9 +1,17 @@
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 from rbs.catalog import sample_instance
+from rbs.models.attending import (
+    Attending,
+    AttendingAdHocWorkHalfDay,
+    AttendingWeeklyWorkSchedule,
+    AttendingWorkHalfDay,
+    AttendingWorkType,
+)
 from rbs.models.enums import RotationKind, Session, Weekday
+from rbs.models.instance import SchedulerInput
 from rbs.models.rotation import ClinicPolicy
 from rbs.models.schedule import AssignedClinic, Assignment
 from rbs.solver.core.clinic_allocation import (
@@ -86,7 +94,7 @@ def test_site_tie_break_prefers_a_residents_existing_am_pm_location() -> None:
     secondary_key = _remainder_assignment_key(
         candidate,
         secondary,
-        instance.clinic_policy,
+        instance,
         {},
         filled,
         assigned,
@@ -97,7 +105,7 @@ def test_site_tie_break_prefers_a_residents_existing_am_pm_location() -> None:
     primary_key = _remainder_assignment_key(
         candidate,
         primary,
-        instance.clinic_policy,
+        instance,
         {},
         filled,
         assigned,
@@ -593,6 +601,51 @@ def test_allocator_applies_specific_date_capacity_override() -> None:
     ) == 0
 
 
+def test_allocator_opens_attending_managed_clinic_for_ad_hoc_preceptor() -> None:
+    instance = sample_instance()
+    calendar_day = instance.calendar.first_week_start + timedelta(days=1)
+    raw = instance.model_dump(mode="json")
+    maple = next(site for site in raw["clinic_policy"]["sites"] if site["id"] == "maple")
+    maple["staffing_mode"] = "attending_managed"
+    raw["attendings"] = [
+        Attending(
+            id="attending-ad-hoc",
+            name="Ada Lovelace",
+            half_days_per_week=0,
+            ad_hoc_work_half_days=[
+                AttendingAdHocWorkHalfDay(
+                    date=calendar_day,
+                    session=Session.MORNING,
+                    work_type=AttendingWorkType.PRECEPTING_CLINIC,
+                    clinic_id="maple",
+                )
+            ],
+        ).model_dump(mode="json")
+    ]
+    configured = SchedulerInput.model_validate(raw)
+    assignment = Assignment(
+        resident_id=configured.residents[0].id,
+        rotation_id="elective",
+        kind=RotationKind.STANDARD,
+        start_week=1,
+        end_week=1,
+        weeks=[1],
+        clinic_slots=[
+            AssignedClinic(
+                weekday=Weekday.TUESDAY,
+                session=Session.MORNING,
+                week=1,
+                allowed_sites=["maple"],
+            )
+        ],
+    )
+
+    assign_clinic_sites(configured, [assignment])
+
+    assert assignment.clinic_slots[0].site == "maple"
+    assert configured.clinic_max_capacity_on("maple", calendar_day, Session.MORNING) == 4
+
+
 def test_allocator_prefers_resident_override_over_pgy_override() -> None:
     instance = sample_instance()
     raw = instance.clinic_policy.model_dump(mode="json")
@@ -670,6 +723,45 @@ def test_half_day_capacity_bounds_a_slot_by_the_seats_every_site_opens() -> None
 
     indices = {literal.index for literal in literals}
     assert _capacity_rows(model) == [(indices, 16)]
+
+
+def test_half_day_capacity_uses_derived_attending_managed_coverage() -> None:
+    instance = sample_instance()
+    raw = instance.model_dump(mode="json")
+    for site in raw["clinic_policy"]["sites"]:
+        site["staffing_mode"] = "attending_managed"
+    raw["attendings"] = [
+        Attending(
+            id="attending-001",
+            name="Ada Lovelace",
+            half_days_per_week=1,
+            weekly_work_schedules=[
+                AttendingWeeklyWorkSchedule(
+                    week=1,
+                    half_days=[
+                        AttendingWorkHalfDay(
+                            weekday=Weekday.MONDAY,
+                            session=Session.MORNING,
+                            work_type=AttendingWorkType.PRECEPTING_CLINIC,
+                            clinic_id="maple",
+                        )
+                    ],
+                )
+            ],
+        ).model_dump(mode="json")
+    ]
+    configured = SchedulerInput.model_validate(raw)
+
+    model, literals = _half_day_bound(
+        configured,
+        1,
+        Weekday.MONDAY,
+        Session.MORNING,
+        5,
+    )
+
+    indices = {literal.index for literal in literals}
+    assert _capacity_rows(model) == [(indices, 4)]
 
 
 def test_half_day_capacity_states_nothing_a_slot_cannot_already_exceed() -> None:

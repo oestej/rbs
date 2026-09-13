@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import Field, model_validator
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 class ConstraintCatalog(StrictModel):
     """Versioned block constraints that can be imported and stored independently."""
 
-    schema_version: Literal[8] = 8
+    schema_version: Literal[9] = 9
     calendar_weeks: int = Field(default=52, ge=1)
     rotations: list[Rotation]
     requirements: list[PGYCurriculum] = Field(min_length=1)
@@ -35,10 +36,19 @@ class ConstraintCatalog(StrictModel):
     def migrate_legacy(cls, value: Any) -> Any:
         """Upgrade path for catalogs written by older schema versions.
 
-        No older version is accepted right now: only the current schema
-        loads. When the next schema ships, upgrade its predecessor here.
+        Version 9 adds the clinic staffing source. Version 8 clinics used
+        their configured capacity schedule, which remains the default.
         """
-        return value
+        if not isinstance(value, dict) or value.get("schema_version") != 8:
+            return value
+        migrated = deepcopy(value)
+        migrated["schema_version"] = 9
+        policy = migrated.get("clinic_policy")
+        if isinstance(policy, dict):
+            for site in policy.get("sites", []):
+                if isinstance(site, dict):
+                    site.setdefault("staffing_mode", "capacity_managed")
+        return migrated
 
     @model_validator(mode="after")
     def check_integrity(self) -> ConstraintCatalog:
@@ -61,7 +71,7 @@ class ConstraintCatalog(StrictModel):
     @classmethod
     def from_instance(cls, instance: SolverProblem) -> ConstraintCatalog:
         return cls(
-            schema_version=8,
+            schema_version=9,
             calendar_weeks=instance.calendar.weeks,
             rotations=instance.rotations,
             requirements=instance.requirements,

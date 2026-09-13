@@ -8,7 +8,8 @@ from functools import partial
 
 from pydantic import ValidationError
 
-from rbs.models.clinic import ClinicSiteConfig
+from rbs.models.attending import AttendingWorkType
+from rbs.models.clinic import ClinicSiteConfig, ClinicStaffingMode
 from rbs.models.enums import WEEKDAYS_MF, RotationKind, Session, Weekday
 from rbs.models.instance import ManualClinicBlock, SchedulerInput
 from rbs.models.resident import resident_display_sort_key
@@ -74,6 +75,7 @@ def render_clinic_tab(
     on_section_change=None,
     schedule: Schedule | None = None,
     on_block_schedule_save: SaveClinicBlockSchedule | None = None,
+    on_manage_attendings: Callable[[], None] | None = None,
 ) -> None:
     """Render Clinic block rules, manual placements, and clinic sites."""
     from nicegui import ui
@@ -113,6 +115,7 @@ def render_clinic_tab(
                     instance,
                     selected_rotation_id=None,
                     on_save=on_save,
+                    on_manage_attendings=on_manage_attendings,
                 )
             with ui.tab_panel(rules_tab).classes("p-0 pt-4"):
                 _clinic_block_rules_configuration(instance, on_save=on_save)
@@ -1453,6 +1456,7 @@ def _clinic_directory_configuration(
     *,
     selected_rotation_id: str | None,
     on_save: SaveRotation,
+    on_manage_attendings: Callable[[], None] | None = None,
 ) -> None:
     from nicegui import ui
 
@@ -1462,7 +1466,8 @@ def _clinic_directory_configuration(
             with ui.column().classes("gap-0"):
                 ui.label("Clinic sites").classes("rbs-type-section-title")
                 ui.label(
-                    "Manage allocation targets, weekly capacity, date exceptions, and closures."
+                    "Choose how each clinic is staffed, then manage allocation, capacity, "
+                    "and closures."
                 ).classes("rbs-type-caption rbs-text-muted")
             with ui.row().classes("items-center gap-2 flex-wrap"):
                 primary = (
@@ -1516,21 +1521,45 @@ def _clinic_directory_configuration(
                         original_id=None,
                         selected_rotation_id=selected_rotation_id,
                         on_save=on_save,
+                        on_manage_attendings=on_manage_attendings,
                     ),
                 ).props("unelevated no-caps")
 
         with ui.element("div").classes("rbs-clinic-sites-grid w-full"):
             for clinic in policy.sites:
                 allocation = policy.allocation(clinic.id)
-                maximums = [
-                    half_day.max_residents(clinic.residents_per_attending)
-                    for half_day in clinic.half_days
-                ]
-                maximums.extend(
-                    override.max_residents(clinic.residents_per_attending)
-                    for override in clinic.capacity_overrides
+                attending_managed = (
+                    clinic.staffing_mode is ClinicStaffingMode.ATTENDING_MANAGED
                 )
-                exception_count = len(clinic.capacity_overrides) + len(clinic.closure_days)
+                if attending_managed:
+                    scheduled_count = _clinic_attending_assignment_count(
+                        instance,
+                        clinic.id,
+                        source="weekly",
+                    )
+                    managed_capacities = [
+                        instance.clinic_max_capacity_on(
+                            clinic.id,
+                            coverage.date,
+                            coverage.session,
+                        )
+                        for coverage in instance.attending_coverage
+                        if coverage.clinic_id == clinic.id
+                    ]
+                    maximums = managed_capacities
+                    exception_count = len(clinic.closure_days)
+                else:
+                    maximums = [
+                        half_day.max_residents(clinic.residents_per_attending)
+                        for half_day in clinic.half_days
+                    ]
+                    maximums.extend(
+                        override.max_residents(clinic.residents_per_attending)
+                        for override in clinic.capacity_overrides
+                    )
+                    exception_count = len(clinic.capacity_overrides) + len(
+                        clinic.closure_days
+                    )
                 with (
                     ui.card()
                     .props("flat bordered")
@@ -1546,7 +1575,18 @@ def _clinic_directory_configuration(
                                 ui.label(clinic.name).classes("rbs-type-section-title")
                                 if clinic.id == policy.primary_site_id:
                                     ui.badge("Primary", color="primary")
+                                ui.badge(
+                                    "Attending-managed"
+                                    if attending_managed
+                                    else "Capacity-managed"
+                                ).props("outline").classes("rbs-muted-badge")
                         with ui.row().classes("items-center gap-1 shrink-0"):
+                            if attending_managed and on_manage_attendings is not None:
+                                ui.button(
+                                    "Manage attendings",
+                                    icon="groups",
+                                    on_click=on_manage_attendings,
+                                ).props("flat dense no-caps")
                             ui.button(
                                 "Edit",
                                 icon="edit",
@@ -1556,6 +1596,7 @@ def _clinic_directory_configuration(
                                     original_id=clinic.id,
                                     selected_rotation_id=selected_rotation_id,
                                     on_save=on_save,
+                                    on_manage_attendings=on_manage_attendings,
                                 ),
                             ).props("outline dense no-caps")
                             with ui.button(icon="more_vert").props(
@@ -1582,12 +1623,24 @@ def _clinic_directory_configuration(
                             "Target",
                             f"{allocation.target_percent}%",
                         )
-                        _clinic_metric("Weekly sessions", str(len(clinic.half_days)))
                         _clinic_metric(
-                            "Max residents",
+                            "Scheduled preceptor shifts"
+                            if attending_managed
+                            else "Weekly sessions",
+                            str(scheduled_count)
+                            if attending_managed
+                            else str(len(clinic.half_days)),
+                        )
+                        _clinic_metric(
+                            "Peak resident capacity"
+                            if attending_managed
+                            else "Max residents",
                             str(max(maximums)) if maximums else "—",
                         )
-                        _clinic_metric("Exceptions", str(exception_count))
+                        _clinic_metric(
+                            "Closures" if attending_managed else "Exceptions",
+                            str(exception_count),
+                        )
 
                     with ui.row().classes("rbs-clinic-closures w-full items-center gap-3 p-4"):
                         with ui.column().classes("min-w-0 flex-1 gap-0"):
@@ -1611,6 +1664,7 @@ def _clinic_directory_configuration(
                                 original_id=clinic.id,
                                 selected_rotation_id=selected_rotation_id,
                                 on_save=on_save,
+                                on_manage_attendings=on_manage_attendings,
                                 active_tab="clinic_exceptions",
                             ),
                         ).props("flat dense no-caps")
@@ -1622,6 +1676,33 @@ def _clinic_metric(label: str, value: str) -> None:
     with ui.column().classes("rbs-clinic-metric min-w-0 gap-0 px-4 py-3"):
         ui.label(value).classes("rbs-type-section-title")
         ui.label(label).classes("rbs-type-caption rbs-text-muted")
+
+
+def _clinic_attending_assignment_count(
+    instance: SchedulerInput,
+    clinic_id: str,
+    *,
+    source: str,
+) -> int:
+    """Count configured Precepting Clinic assignments for a clinic."""
+    if source not in {"template", "weekly", "ad_hoc"}:
+        raise ValueError(f"unknown attending assignment source {source!r}")
+    return sum(
+        assignment.work_type is AttendingWorkType.PRECEPTING_CLINIC
+        and assignment.clinic_id == clinic_id
+        for attending in instance.attendings
+        for assignment in (
+            attending.schedule_template_half_days
+            if source == "template"
+            else attending.ad_hoc_work_half_days
+            if source == "ad_hoc"
+            else [
+                half_day
+                for schedule in attending.weekly_work_schedules
+                for half_day in schedule.half_days
+            ]
+        )
+    )
 
 
 def _open_copy_clinic_closure_days_dialog(
@@ -1711,6 +1792,7 @@ def _open_clinic_editor_dialog(
     selected_rotation_id: str | None,
     on_save: SaveRotation,
     active_tab: str = "clinic_details",
+    on_manage_attendings: Callable[[], None] | None = None,
 ) -> None:
     from nicegui import ui
 
@@ -1761,7 +1843,7 @@ def _open_clinic_editor_dialog(
                 )
                 capacity_tab = ui.tab(
                     "clinic_capacity",
-                    label="Weekly Capacity",
+                    label="Staffing & capacity",
                     icon="groups",
                 )
                 exceptions_tab = ui.tab(
@@ -1809,6 +1891,34 @@ def _open_clinic_editor_dialog(
                                 )
 
                         name.bind_value(draft, "name", forward=_as_text)
+                        with ui.column().classes(
+                            "rbs-attending-form-section w-full gap-3 rounded p-4"
+                        ):
+                            ui.label("Staffing source").classes("rbs-type-section-title")
+                            ui.label(
+                                "Capacity-managed clinics use the numeric weekly staffing "
+                                "schedule below. Attending-managed clinics use explicit "
+                                "Precepting Clinic assignments from Attendings."
+                            ).classes("rbs-type-caption rbs-text-muted")
+                            staffing_mode = (
+                                ui.select(
+                                    {
+                                        ClinicStaffingMode.CAPACITY_MANAGED.value: (
+                                            "Capacity-managed"
+                                        ),
+                                        ClinicStaffingMode.ATTENDING_MANAGED.value: (
+                                            "Attending-managed"
+                                        ),
+                                    },
+                                    value=str(
+                                        draft.get("staffing_mode")
+                                        or ClinicStaffingMode.CAPACITY_MANAGED.value
+                                    ),
+                                    label="Clinic staffing",
+                                )
+                                .props("outlined options-dense")
+                                .classes("w-full md:w-80")
+                            )
 
             with ui.tab_panel(allocation_tab).classes("h-full p-0"):
                 with ui.scroll_area().classes("h-full w-full"):
@@ -1820,12 +1930,12 @@ def _open_clinic_editor_dialog(
                     with ui.column().classes("w-full gap-5 p-6"):
                         with ui.row().classes("w-full items-end justify-between gap-5 flex-wrap"):
                             with ui.column().classes("min-w-72 flex-1 gap-1"):
-                                ui.label("Weekly staffing and capacity").classes(
+                                ui.label("Clinic staffing and capacity").classes(
                                     "rbs-type-section-title"
                                 )
                                 ui.label(
-                                    "Choose staffed half-days from Monday through Sunday. "
-                                    "Each maximum is attendings × residents per attending."
+                                    "Each resident maximum is scheduled attendings × residents "
+                                    "per attending."
                                 ).classes("rbs-type-caption rbs-text-muted")
                             ratio = (
                                 ui.number(
@@ -1837,17 +1947,106 @@ def _open_clinic_editor_dialog(
                                 .props("outlined")
                                 .classes("w-64")
                             )
-                        capacity_refresh = _clinic_capacity_grid(draft)
+                        capacity_managed_panel = ui.column().classes("w-full gap-4")
+                        with capacity_managed_panel:
+                            ui.label(
+                                "Choose staffed half-days from Monday through Sunday."
+                            ).classes("rbs-type-caption rbs-text-muted")
+                            capacity_refresh = _clinic_capacity_grid(draft)
+                        attending_managed_panel = ui.column().classes("w-full gap-3")
+                        with attending_managed_panel:
+                            with ui.card().props("flat bordered").classes("w-full gap-3 p-4"):
+                                ui.label("Capacity comes from Attendings").classes(
+                                    "rbs-font-semibold"
+                                )
+                                ui.label(
+                                    "This clinic opens only when an attending has a "
+                                    "Precepting Clinic assignment here. Schedule dates, "
+                                    "week-by-week work, vacation, and dated assignments are "
+                                    "applied automatically."
+                                ).classes("rbs-type-body rbs-text-muted")
+                                if original_id is not None:
+                                    template_count = _clinic_attending_assignment_count(
+                                        instance,
+                                        original_id,
+                                        source="template",
+                                    )
+                                    scheduled_count = _clinic_attending_assignment_count(
+                                        instance,
+                                        original_id,
+                                        source="weekly",
+                                    )
+                                    dated_count = _clinic_attending_assignment_count(
+                                        instance,
+                                        original_id,
+                                        source="ad_hoc",
+                                    )
+                                    ui.label(
+                                        f"{scheduled_count} scheduled preceptor "
+                                        f"{'shift' if scheduled_count == 1 else 'shifts'} · "
+                                        f"{dated_count} ad hoc preceptor "
+                                        f"{'shift' if dated_count == 1 else 'shifts'} · "
+                                        f"{template_count} in the template"
+                                    ).classes("rbs-type-caption rbs-text-muted")
+                                    if on_manage_attendings is not None:
+                                        ui.button(
+                                            "Manage attendings",
+                                            icon="groups",
+                                            on_click=on_manage_attendings,
+                                        ).props(SECONDARY_BUTTON_PROPS)
+                                else:
+                                    ui.label(
+                                        "Save this clinic before assigning attendings to it."
+                                    ).classes("rbs-type-caption rbs-text-muted")
 
             with ui.tab_panel(exceptions_tab).classes("h-full p-0"):
                 with ui.scroll_area().classes("h-full w-full"):
                     with ui.column().classes("w-full gap-6 p-6"):
-                        override_refresh = _clinic_capacity_overrides_editor(
-                            draft,
-                            instance,
-                        )
-                        ui.separator()
+                        capacity_override_panel = ui.column().classes("w-full gap-3")
+                        with capacity_override_panel:
+                            override_refresh = _clinic_capacity_overrides_editor(
+                                draft,
+                                instance,
+                            )
+                            ui.separator()
+                        attending_override_panel = ui.column().classes("w-full gap-2")
+                        with attending_override_panel:
+                            ui.label("Dated staffing changes live in Attendings").classes(
+                                "rbs-type-section-title"
+                            )
+                            ui.label(
+                                "Edit the week-by-week attending schedule or use ad hoc work "
+                                "for one dated replacement. Any saved numeric capacity overrides "
+                                "remain available if this clinic is switched back to "
+                                "Capacity-managed."
+                            ).classes("rbs-type-caption rbs-text-muted")
+                            if on_manage_attendings is not None:
+                                ui.button(
+                                    "Manage attendings",
+                                    icon="groups",
+                                    on_click=on_manage_attendings,
+                                ).props(SECONDARY_BUTTON_PROPS)
+                            ui.separator()
                         _clinic_site_closures_editor(draft, instance)
+
+        def set_staffing_mode(event) -> None:
+            mode = ClinicStaffingMode(event.value)
+            draft["staffing_mode"] = mode.value
+            capacity_managed = mode is ClinicStaffingMode.CAPACITY_MANAGED
+            capacity_managed_panel.set_visibility(capacity_managed)
+            capacity_override_panel.set_visibility(capacity_managed)
+            attending_managed_panel.set_visibility(not capacity_managed)
+            attending_override_panel.set_visibility(not capacity_managed)
+
+        initial_capacity_managed = (
+            str(draft.get("staffing_mode"))
+            == ClinicStaffingMode.CAPACITY_MANAGED.value
+        )
+        capacity_managed_panel.set_visibility(initial_capacity_managed)
+        capacity_override_panel.set_visibility(initial_capacity_managed)
+        attending_managed_panel.set_visibility(not initial_capacity_managed)
+        attending_override_panel.set_visibility(not initial_capacity_managed)
+        staffing_mode.on_value_change(set_staffing_mode)
 
         def set_ratio(event) -> None:
             draft["residents_per_attending"] = int(event.value) if event.value is not None else 1
@@ -2284,7 +2483,7 @@ def _clinic_capacity_overrides_editor(
                 with ui.column().classes("gap-0"):
                     ui.label("Specific-day capacity overrides").classes("rbs-type-section-title")
                     ui.label(
-                        "Replace one date and half-day's recurring attending coverage and "
+                        "Replace one date and half-day's usual attending coverage and "
                         "minimum. Set attendings to zero to make that half-day unavailable."
                     ).classes("rbs-type-caption rbs-text-muted")
                 ui.button(

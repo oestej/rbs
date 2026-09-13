@@ -22,7 +22,7 @@ RBSC_FORMAT = "rbsc"
 # automatic-locking state) by design; import restores neutral defaults. A Save
 # As deliberately clears the bundled-sample flag before producing the user's
 # document.
-RBSC_SCHEMA_VERSION = 10
+RBSC_SCHEMA_VERSION = 11
 _AUTOMATIC_LOCK_SOURCE = "through_today"
 
 
@@ -102,20 +102,41 @@ def _hydrate_portable_preferences(value: object) -> object:
 def _migrate_portable_state(value: object) -> object:
     """Upgrade path for documents written by older schema versions.
 
-    Version 10 adds workspace-owned attending configuration, including dated
-    ad hoc half-days. Version 9 has no ambiguous equivalent, so it upgrades to
-    an empty attending directory. Older shapes remain unsupported.
+    Version 11 adds attending weekly category targets, typed schedule templates,
+    independent weekly schedules, dated work, and a clinic staffing source.
+    Existing version 10 clinics remain capacity-managed, targets remain unset,
+    and existing dated work remains Special/Other.
     """
-    if not isinstance(value, dict) or value.get("schema_version") != 9:
+    if not isinstance(value, dict) or value.get("schema_version") != 10:
         return value
     migrated = deepcopy(value)
     migrated["schema_version"] = RBSC_SCHEMA_VERSION
+    for catalog_record in migrated.get("catalogs", []):
+        if not isinstance(catalog_record, dict):
+            continue
+        catalog = catalog_record.get("catalog")
+        if not isinstance(catalog, dict):
+            continue
+        policy = catalog.get("clinic_policy")
+        if isinstance(policy, dict):
+            for site in policy.get("sites", []):
+                if isinstance(site, dict):
+                    site.setdefault("staffing_mode", "capacity_managed")
     for workspace in migrated.get("workspaces", []):
         if not isinstance(workspace, dict):
             continue
         case = workspace.get("case")
         if isinstance(case, dict):
-            case.setdefault("attendings", [])
+            for attending in case.get("attendings", []):
+                if not isinstance(attending, dict):
+                    continue
+                attending.setdefault("weekly_shift_targets", [])
+                attending.setdefault("schedule_template_half_days", [])
+                attending.setdefault("weekly_work_schedules", [])
+                for half_day in attending.get("ad_hoc_work_half_days", []):
+                    if isinstance(half_day, dict):
+                        half_day.setdefault("work_type", "special_other")
+                        half_day.setdefault("clinic_id", None)
     return migrated
 
 
@@ -197,7 +218,7 @@ class RBSCState(StrictModel):
     """The complete portable state of one RBS SQLite database."""
 
     format: Literal["rbsc"] = RBSC_FORMAT
-    schema_version: Literal[10] = RBSC_SCHEMA_VERSION
+    schema_version: Literal[11] = RBSC_SCHEMA_VERSION
     exported_at: str
     current_workspace_id: int | None = Field(default=None, ge=1)
     app_metadata: dict[str, str] = Field(default_factory=dict)

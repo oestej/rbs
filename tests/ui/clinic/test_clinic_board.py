@@ -1,6 +1,12 @@
 from datetime import date, timedelta
 
 from rbs.catalog import sample_instance
+from rbs.models.attending import (
+    Attending,
+    AttendingWeeklyWorkSchedule,
+    AttendingWorkHalfDay,
+    AttendingWorkType,
+)
 from rbs.models.enums import (
     RotationKind,
     Session,
@@ -227,6 +233,63 @@ def test_schedule_validation_uses_specific_date_capacity_override() -> None:
 
     assert any(
         "Maple clinic has no attending coverage: week 1 tuesday morning" in error
+        for error in errors
+    )
+
+
+def test_schedule_validation_uses_attending_managed_preceptor_capacity() -> None:
+    instance = sample_instance()
+    raw = instance.model_dump(mode="json")
+    maple = next(site for site in raw["clinic_policy"]["sites"] if site["id"] == "maple")
+    maple["staffing_mode"] = "attending_managed"
+    raw["attendings"] = [
+        Attending(
+            id="attending-001",
+            name="Ada Lovelace",
+            half_days_per_week=1,
+            weekly_work_schedules=[
+                AttendingWeeklyWorkSchedule(
+                    week=1,
+                    half_days=[
+                        AttendingWorkHalfDay(
+                            weekday=Weekday.TUESDAY,
+                            session=Session.MORNING,
+                            work_type=AttendingWorkType.PRECEPTING_CLINIC,
+                            clinic_id="maple",
+                        )
+                    ],
+                )
+            ],
+        ).model_dump(mode="json")
+    ]
+    configured = SchedulerInput.model_validate(raw)
+    schedule = _schedule(
+        *[
+            Assignment(
+                resident_id=resident.id,
+                rotation_id="elective",
+                kind=RotationKind.ELECTIVE,
+                start_week=1,
+                end_week=1,
+                weeks=[1],
+                clinic_slots=[
+                    AssignedClinic(
+                        weekday=Weekday.TUESDAY,
+                        session=Session.MORNING,
+                        site="maple",
+                        week=1,
+                    )
+                ],
+            )
+            for resident in configured.residents[:5]
+        ]
+    )
+
+    errors = validate_schedule(configured, schedule).errors
+
+    assert any(
+        "Maple capacity exceeded: week 1 tuesday morning (5 residents; max 4)"
+        in error
         for error in errors
     )
 

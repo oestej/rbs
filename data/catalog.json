@@ -1,58 +1,6 @@
 {
-  "schema_version": 8,
+  "schema_version": 9,
   "calendar_weeks": 52,
-  "electives": {
-    "color": "#326800",
-    "rotation_options": [
-      {
-        "rotation_id": "night_float",
-        "eligible_pgys": [
-          1,
-          2
-        ],
-        "eligible_block_sizes": [
-          2
-        ],
-        "repeatable": true,
-        "blackout_weeks": []
-      },
-      {
-        "rotation_id": "fmed",
-        "eligible_pgys": [
-          2
-        ],
-        "eligible_block_sizes": [
-          2
-        ],
-        "repeatable": true,
-        "blackout_weeks": []
-      },
-      {
-        "rotation_id": "geriatrics",
-        "eligible_pgys": [
-          1,
-          2
-        ],
-        "eligible_block_sizes": [
-          2
-        ],
-        "repeatable": true,
-        "blackout_weeks": []
-      },
-      {
-        "rotation_id": "palliative_care",
-        "eligible_pgys": [
-          1,
-          2
-        ],
-        "eligible_block_sizes": [
-          2
-        ],
-        "repeatable": true,
-        "blackout_weeks": []
-      }
-    ]
-  },
   "rotations": [
     {
       "id": "fmed",
@@ -65,6 +13,7 @@
           "pgy": 1,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -81,6 +30,7 @@
           "pgy": 2,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -104,6 +54,7 @@
           "pgy": 3,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -125,28 +76,32 @@
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           }
         ],
         "max_concurrent": 1,
@@ -161,7 +116,8 @@
       "away": false,
       "no_clinic_hours": false,
       "no_weekend_call": false,
-      "max_consecutive_weeks": 4
+      "max_consecutive_weeks": 4,
+      "max_total_weeks": null
     },
     {
       "id": "night_float",
@@ -174,6 +130,7 @@
           "pgy": 1,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [
             "fmed"
           ],
@@ -192,6 +149,7 @@
           "pgy": 2,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -213,7 +171,8 @@
       "away": false,
       "no_clinic_hours": true,
       "no_weekend_call": false,
-      "max_consecutive_weeks": 4
+      "max_consecutive_weeks": 4,
+      "max_total_weeks": null
     },
     {
       "id": "clinic",
@@ -226,6 +185,7 @@
           "pgy": 1,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -242,6 +202,7 @@
           "pgy": 2,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -265,6 +226,7 @@
           "pgy": 3,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -293,70 +255,80 @@
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "monday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           }
         ],
         "max_concurrent": null,
@@ -371,7 +343,8 @@
       "away": false,
       "no_clinic_hours": false,
       "no_weekend_call": false,
-      "max_consecutive_weeks": 6
+      "max_consecutive_weeks": 6,
+      "max_total_weeks": null
     },
     {
       "id": "emergency_medicine",
@@ -384,6 +357,7 @@
           "pgy": 1,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [
             "fmed"
           ],
@@ -402,6 +376,7 @@
           "pgy": 3,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [
             "fmed"
           ],
@@ -425,70 +400,80 @@
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "monday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           }
         ],
         "max_concurrent": null,
@@ -503,7 +488,8 @@
       "away": false,
       "no_clinic_hours": false,
       "no_weekend_call": false,
-      "max_consecutive_weeks": 4
+      "max_consecutive_weeks": 4,
+      "max_total_weeks": null
     },
     {
       "id": "icu",
@@ -516,6 +502,7 @@
           "pgy": 1,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [
             "fmed",
             "emergency_medicine"
@@ -540,7 +527,8 @@
       "away": false,
       "no_clinic_hours": true,
       "no_weekend_call": false,
-      "max_consecutive_weeks": 4
+      "max_consecutive_weeks": 4,
+      "max_total_weeks": null
     },
     {
       "id": "cardiology",
@@ -553,6 +541,7 @@
           "pgy": 1,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -569,6 +558,7 @@
           "pgy": 3,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -590,70 +580,80 @@
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "monday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           }
         ],
         "max_concurrent": null,
@@ -668,7 +668,8 @@
       "away": false,
       "no_clinic_hours": false,
       "no_weekend_call": false,
-      "max_consecutive_weeks": 4
+      "max_consecutive_weeks": 4,
+      "max_total_weeks": null
     },
     {
       "id": "elective",
@@ -681,6 +682,7 @@
           "pgy": 1,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -697,6 +699,7 @@
           "pgy": 2,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -718,70 +721,80 @@
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "monday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           }
         ],
         "max_concurrent": null,
@@ -796,7 +809,8 @@
       "away": false,
       "no_clinic_hours": false,
       "no_weekend_call": false,
-      "max_consecutive_weeks": 4
+      "max_consecutive_weeks": 4,
+      "max_total_weeks": null
     },
     {
       "id": "geriatrics",
@@ -809,6 +823,7 @@
           "pgy": 1,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -825,6 +840,7 @@
           "pgy": 2,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -846,7 +862,8 @@
       "away": false,
       "no_clinic_hours": true,
       "no_weekend_call": false,
-      "max_consecutive_weeks": 4
+      "max_consecutive_weeks": 4,
+      "max_total_weeks": null
     },
     {
       "id": "palliative_care",
@@ -859,6 +876,7 @@
           "pgy": 1,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -875,6 +893,7 @@
           "pgy": 2,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -896,7 +915,8 @@
       "away": false,
       "no_clinic_hours": true,
       "no_weekend_call": false,
-      "max_consecutive_weeks": 4
+      "max_consecutive_weeks": 4,
+      "max_total_weeks": null
     },
     {
       "id": "outpatient_gyn",
@@ -909,6 +929,7 @@
           "pgy": 1,
           "min_concurrent": null,
           "max_concurrent": 1,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": 21,
           "block_configs": [
@@ -925,6 +946,7 @@
           "pgy": 2,
           "min_concurrent": null,
           "max_concurrent": 1,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [
             "inpatient_ld"
           ],
@@ -948,70 +970,80 @@
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "monday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           }
         ],
         "max_concurrent": null,
@@ -1026,7 +1058,8 @@
       "away": false,
       "no_clinic_hours": false,
       "no_weekend_call": false,
-      "max_consecutive_weeks": 2
+      "max_consecutive_weeks": 2,
+      "max_total_weeks": null
     },
     {
       "id": "inpatient_ld",
@@ -1039,6 +1072,7 @@
           "pgy": 1,
           "min_concurrent": null,
           "max_concurrent": 1,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [
             "outpatient_gyn"
           ],
@@ -1057,6 +1091,7 @@
           "pgy": 2,
           "min_concurrent": null,
           "max_concurrent": 1,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -1078,70 +1113,80 @@
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "monday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           }
         ],
         "max_concurrent": null,
@@ -1156,7 +1201,8 @@
       "away": false,
       "no_clinic_hours": false,
       "no_weekend_call": false,
-      "max_consecutive_weeks": 2
+      "max_consecutive_weeks": 2,
+      "max_total_weeks": null
     },
     {
       "id": "peds_community",
@@ -1169,6 +1215,7 @@
           "pgy": 1,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [
             "fmed"
           ],
@@ -1187,6 +1234,7 @@
           "pgy": 3,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [
             "fmed"
           ],
@@ -1210,70 +1258,80 @@
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "monday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           }
         ],
         "max_concurrent": null,
@@ -1288,7 +1346,8 @@
       "away": false,
       "no_clinic_hours": true,
       "no_weekend_call": false,
-      "max_consecutive_weeks": 4
+      "max_consecutive_weeks": 4,
+      "max_total_weeks": null
     },
     {
       "id": "sports_med",
@@ -1301,6 +1360,7 @@
           "pgy": 1,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -1317,6 +1377,7 @@
           "pgy": 3,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -1338,70 +1399,80 @@
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "monday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           }
         ],
         "max_concurrent": null,
@@ -1416,7 +1487,8 @@
       "away": false,
       "no_clinic_hours": false,
       "no_weekend_call": false,
-      "max_consecutive_weeks": 4
+      "max_consecutive_weeks": 4,
+      "max_total_weeks": null
     },
     {
       "id": "surgery",
@@ -1429,6 +1501,7 @@
           "pgy": 1,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -1445,6 +1518,7 @@
           "pgy": 3,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -1466,70 +1540,80 @@
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "monday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           }
         ],
         "max_concurrent": null,
@@ -1544,7 +1628,8 @@
       "away": false,
       "no_clinic_hours": false,
       "no_weekend_call": false,
-      "max_consecutive_weeks": 4
+      "max_consecutive_weeks": 4,
+      "max_total_weeks": null
     },
     {
       "id": "behavioral_health",
@@ -1557,6 +1642,7 @@
           "pgy": 1,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -1573,6 +1659,7 @@
           "pgy": 3,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -1594,70 +1681,80 @@
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "monday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           }
         ],
         "max_concurrent": null,
@@ -1672,7 +1769,8 @@
       "away": false,
       "no_clinic_hours": false,
       "no_weekend_call": false,
-      "max_consecutive_weeks": 4
+      "max_consecutive_weeks": 4,
+      "max_total_weeks": null
     },
     {
       "id": "outpatient_peds_cedar",
@@ -1685,6 +1783,7 @@
           "pgy": 1,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -1701,6 +1800,7 @@
           "pgy": 3,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -1722,70 +1822,80 @@
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "monday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           }
         ],
         "max_concurrent": null,
@@ -1800,7 +1910,8 @@
       "away": false,
       "no_clinic_hours": false,
       "no_weekend_call": false,
-      "max_consecutive_weeks": 4
+      "max_consecutive_weeks": 4,
+      "max_total_weeks": null
     },
     {
       "id": "derm",
@@ -1813,6 +1924,7 @@
           "pgy": 2,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -1829,6 +1941,7 @@
           "pgy": 3,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -1850,70 +1963,80 @@
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "monday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           }
         ],
         "max_concurrent": null,
@@ -1928,7 +2051,8 @@
       "away": false,
       "no_clinic_hours": false,
       "no_weekend_call": false,
-      "max_consecutive_weeks": 4
+      "max_consecutive_weeks": 4,
+      "max_total_weeks": null
     },
     {
       "id": "population_health_qi",
@@ -1941,6 +2065,7 @@
           "pgy": 2,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -1957,6 +2082,7 @@
           "pgy": 3,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -1978,14 +2104,16 @@
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "monday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
@@ -2000,49 +2128,56 @@
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           }
         ],
         "max_concurrent": null,
@@ -2057,7 +2192,8 @@
       "away": false,
       "no_clinic_hours": false,
       "no_weekend_call": false,
-      "max_consecutive_weeks": 4
+      "max_consecutive_weeks": 4,
+      "max_total_weeks": null
     },
     {
       "id": "outpatient_peds_maple",
@@ -2070,6 +2206,7 @@
           "pgy": 2,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -2091,70 +2228,80 @@
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "monday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "tuesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "wednesday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "thursday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "morning",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "afternoon",
             "sites": [
               "*"
-            ]
+            ],
+            "preferred": false
           }
         ],
         "max_concurrent": null,
@@ -2169,7 +2316,8 @@
       "away": false,
       "no_clinic_hours": false,
       "no_weekend_call": false,
-      "max_consecutive_weeks": 4
+      "max_consecutive_weeks": 4,
+      "max_total_weeks": null
     },
     {
       "id": "inpatient_peds_metro",
@@ -2182,6 +2330,7 @@
           "pgy": 2,
           "min_concurrent": null,
           "max_concurrent": null,
+          "max_total_weeks": null,
           "prerequisite_rotation_ids": [],
           "earliest_start_week": null,
           "block_configs": [
@@ -2203,14 +2352,16 @@
             "session": "morning",
             "sites": [
               "maple"
-            ]
+            ],
+            "preferred": false
           },
           {
             "weekday": "friday",
             "session": "afternoon",
             "sites": [
               "cedar"
-            ]
+            ],
+            "preferred": false
           }
         ],
         "max_concurrent": null,
@@ -2225,12 +2376,15 @@
       "away": false,
       "no_clinic_hours": false,
       "no_weekend_call": false,
-      "max_consecutive_weeks": 4
+      "max_consecutive_weeks": 4,
+      "max_total_weeks": null
     }
   ],
   "requirements": [
     {
       "pgy": 1,
+      "code": null,
+      "label": null,
       "blocks": [
         {
           "rotation_id": "fmed",
@@ -2306,6 +2460,8 @@
     },
     {
       "pgy": 2,
+      "code": null,
+      "label": null,
       "blocks": [
         {
           "rotation_id": "elective",
@@ -2366,6 +2522,8 @@
     },
     {
       "pgy": 3,
+      "code": null,
+      "label": null,
       "blocks": [
         {
           "rotation_id": "fmed",
@@ -2430,13 +2588,83 @@
       ]
     }
   ],
+  "rotation_groups": [
+    {
+      "pgy": 1,
+      "rotation_ids": [
+        "outpatient_gyn",
+        "inpatient_ld"
+      ],
+      "anchor_rotation_id": null
+    },
+    {
+      "pgy": 2,
+      "rotation_ids": [
+        "outpatient_gyn",
+        "inpatient_ld"
+      ],
+      "anchor_rotation_id": null
+    }
+  ],
+  "electives": {
+    "color": "#326800",
+    "rotation_options": [
+      {
+        "rotation_id": "night_float",
+        "eligible_pgys": [
+          1,
+          2
+        ],
+        "eligible_block_sizes": [
+          2
+        ],
+        "repeatable": true,
+        "blackout_weeks": []
+      },
+      {
+        "rotation_id": "fmed",
+        "eligible_pgys": [
+          2
+        ],
+        "eligible_block_sizes": [
+          2
+        ],
+        "repeatable": true,
+        "blackout_weeks": []
+      },
+      {
+        "rotation_id": "geriatrics",
+        "eligible_pgys": [
+          1,
+          2
+        ],
+        "eligible_block_sizes": [
+          2
+        ],
+        "repeatable": true,
+        "blackout_weeks": []
+      },
+      {
+        "rotation_id": "palliative_care",
+        "eligible_pgys": [
+          1,
+          2
+        ],
+        "eligible_block_sizes": [
+          2
+        ],
+        "repeatable": true,
+        "blackout_weeks": []
+      }
+    ]
+  },
   "clinic_policy": {
-    "primary_site_id": "cedar",
     "sites": [
       {
         "id": "maple",
         "name": "Maple",
         "color": "#6D6BC2",
+        "staffing_mode": "capacity_managed",
         "residents_per_attending": 4,
         "half_days": [
           {
@@ -2470,6 +2698,7 @@
             "min_residents": 0
           }
         ],
+        "capacity_overrides": [],
         "closure_days": [
           {
             "date": "2026-12-25",
@@ -2491,6 +2720,7 @@
         "id": "cedar",
         "name": "Cedar",
         "color": "#174A7E",
+        "staffing_mode": "capacity_managed",
         "residents_per_attending": 4,
         "half_days": [
           {
@@ -2548,6 +2778,7 @@
             "min_residents": 0
           }
         ],
+        "capacity_overrides": [],
         "closure_days": [
           {
             "date": "2026-12-25",
@@ -2584,29 +2815,23 @@
         "max_percent": 100
       }
     ],
+    "primary_site_id": "cedar",
+    "closure_days": [
+      {
+        "date": "2026-12-25",
+        "sites": [
+          "maple",
+          "cedar"
+        ],
+        "name": "Christmas"
+      }
+    ],
     "academic": {
       "weekday": "wednesday",
       "session": "afternoon",
-      "sites": []
+      "sites": [],
+      "preferred": false
     },
     "notes": "Wednesday afternoon is academic half day except night float and away rotations. Maple clinic is Tue AM/PM, Thu AM/PM, and Fri AM with one attending per half-day. Overall allocation targets are 25% Maple and 75% Cedar. Each clinic derives its half-day resident maximum from its attending count and resident-to-attending ratio. Dedicated clinic weeks and overlay half-days mix PGY1/PGY2/PGY3 across clinic days."
-  },
-  "rotation_groups": [
-    {
-      "pgy": 1,
-      "anchor_rotation_id": null,
-      "rotation_ids": [
-        "outpatient_gyn",
-        "inpatient_ld"
-      ]
-    },
-    {
-      "pgy": 2,
-      "anchor_rotation_id": null,
-      "rotation_ids": [
-        "outpatient_gyn",
-        "inpatient_ld"
-      ]
-    }
-  ]
+  }
 }

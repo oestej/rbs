@@ -248,6 +248,7 @@ def start_new_academic_year(instance: SchedulerInput, value: str) -> SchedulerIn
             schedule_start_date=None,
             schedule_end_date=None,
             vacation_ranges=[],
+            weekly_work_schedules=[],
             ad_hoc_work_half_days=[],
         )
         for attending in instance.attendings

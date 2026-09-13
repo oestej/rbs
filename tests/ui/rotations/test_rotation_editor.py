@@ -5,6 +5,13 @@ import pytest
 from pydantic import ValidationError
 
 from rbs.catalog import blank_instance, sample_instance
+from rbs.models.attending import (
+    Attending,
+    AttendingWeeklyWorkSchedule,
+    AttendingWorkHalfDay,
+    AttendingWorkType,
+)
+from rbs.models.clinic import ClinicStaffingMode
 from rbs.models.enums import WEEKDAYS_MF, RotationKind, Session, Weekday
 from rbs.models.rotation import ALL_CLINIC_SITES, ClinicRule, Rotation
 from rbs.solver.planning import expand_occurrences
@@ -1754,7 +1761,9 @@ def test_clinic_editor_is_large_and_keeps_internal_id_hidden() -> None:
     clinic_editor_tabs = {
         element._props.get("label") for element in created if element.__class__.__name__ == "Tab"
     }
-    assert {"Details", "Allocation", "Weekly Capacity", "Exceptions"} <= (clinic_editor_tabs)
+    assert {"Details", "Allocation", "Staffing & capacity", "Exceptions"} <= (
+        clinic_editor_tabs
+    )
     assert any(getattr(element, "_text", None) == "Edit Clinic · Maple" for element in created)
     tab_bar = next(
         element
@@ -1816,6 +1825,73 @@ def test_clinic_editor_is_large_and_keeps_internal_id_hidden() -> None:
         if "rbs-clinic-editor-dialog" in getattr(element, "_classes", [])
     )
     assert dialog_card._style["width"] == "calc(100vw - 48px)"
+
+
+def test_clinic_editor_switches_staffing_source_without_discarding_capacity() -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    original = instance.clinic_policy.site("maple")
+    saved: list = []
+    before = set(ui.context.client.elements)
+    _open_clinic_editor_dialog(
+        instance,
+        original_id="maple",
+        selected_rotation_id=None,
+        on_save=lambda *args: saved.append(args),
+        on_manage_attendings=lambda: None,
+    )
+    created = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+    staffing = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Select"
+        and element._props.get("label") == "Clinic staffing"
+    )
+    save = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Save clinic"
+    )
+
+    assert staffing.value == ClinicStaffingMode.CAPACITY_MANAGED.value
+    staffing.value = ClinicStaffingMode.ATTENDING_MANAGED.value
+    next(iter(save._event_listeners.values())).handler(None)
+
+    assert len(saved) == 1
+    updated = saved[0][0].clinic_policy.site("maple")
+    assert updated.staffing_mode is ClinicStaffingMode.ATTENDING_MANAGED
+    assert updated.half_days == original.half_days
+    assert updated.capacity_overrides == original.capacity_overrides
+
+
+def test_remove_clinic_protects_attending_precepting_assignments() -> None:
+    instance = sample_instance()
+    attending = Attending(
+        id="attending-100",
+        name="Ada Lovelace",
+        half_days_per_week=1,
+        weekly_work_schedules=[
+            AttendingWeeklyWorkSchedule(
+                week=1,
+                half_days=[AttendingWorkHalfDay(
+                weekday=Weekday.MONDAY,
+                session=Session.MORNING,
+                work_type=AttendingWorkType.PRECEPTING_CLINIC,
+                clinic_id="maple",
+                )],
+            )
+        ],
+    )
+    configured = instance.revised(attendings=[*instance.attendings, attending])
+
+    with pytest.raises(ValueError, match="reassign Precepting Clinic work.*Ada Lovelace"):
+        remove_clinic(configured, "maple")
 
 
 def test_add_closure_day_opens_the_clinic_editor_on_exceptions() -> None:

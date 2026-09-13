@@ -24,8 +24,16 @@ locks, and the solved schedule. Tabs cover **Block Schedule**, **Clinic
 Schedule**, **Residents**, **Attendings**, **Rotations**, **Clinic**, and
 **Configuration** (annual calendar start, automatic locking, training levels,
 solver tuning). The Attendings tab records each attending's weekly half-day
-total, schedule dates, dated morning or afternoon ad hoc work, and day-level
-vacation ranges; attending-driven clinic capacity is the next phase.
+total, optional Fixed or Flexible weekly targets for each work category,
+independent schedule for every academic week, dated morning or afternoon ad hoc
+work, schedule dates, and day-level vacation ranges. Adding an attending starts
+with only their name, schedule dates, and weekly half-day total; the full tabbed
+editor holds targets, schedules, and availability tools. Weekly and template
+half-days use the same click-to-edit and drag-to-move grid as resident clinic
+schedules. A reusable schedule template can be copied into selected weeks, but
+it is not a live default and later template changes do not rewrite those weeks.
+Clinics can use their own configured capacity or derive resident capacity from
+attendings assigned to Precepting Clinic work.
 
 Closing a workspace in the browser build deletes it permanently. Clean
 workspaces close at once; unsaved changes get a confirmation dialog whose
@@ -93,7 +101,7 @@ already exist in `rbs.cloud` and surface in the UI behind `rbs ui --cloud`.
 
 The UI never calls CP-SAT directly. It shells out to `rbs-solver` with one
 JSON document on stdin and reads one back on stdout
-(`protocol: "rbs.solve"`, version 5). Set `RBS_SOLVER_COMMAND` to swap the
+(`protocol: "rbs.solve"`, version 6). Set `RBS_SOLVER_COMMAND` to swap the
 executable; the desktop bundle ships its own so no system Python is needed.
 
 ```text

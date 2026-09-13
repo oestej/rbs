@@ -4,13 +4,28 @@
 
 ### Added
 
-- **Attendings:** A new Attendings tab configures each attending's weekly
-  half-day total, optional schedule start and end dates, and day-level vacation
-  ranges. Weekly schedules default to 10 half-days, missing schedule dates are
-  shown distinctly and use the academic year's first or last day, and unsaved
-  availability is protected when leaving the editor. Attendings may have zero
-  recurring half-days and still be scheduled for explicit morning or afternoon
-  ad hoc work.
+- **Attendings:** A new Attendings tab starts each attending with a lightweight
+  form for their name, weekly half-day total, and optional schedule dates. The
+  full editor separates details, weekly category targets, schedule, template,
+  ad hoc work, and vacation into tabs. Each work category can have no target, a
+  Fixed exact weekly shift target, or a Flexible preferred target—including an
+  explicit target of zero. The weekly total defaults to 10, missing schedule
+  dates are shown distinctly and use the academic year's first or last day, and
+  unsaved availability is protected when leaving the editor. Attendings may
+  have zero scheduled half-days and still be assigned explicit morning or
+  afternoon ad hoc work. Every academic week has an independently editable
+  AM/PM schedule whose blocks can be clicked to edit or dragged to move and
+  swap; a reusable template can replace a selected week or range without
+  remaining linked to it.
+  Scheduled, template, and ad hoc half-days can be assigned as Inpatient
+  Service, Attending Clinic, Precepting Clinic, Admin Time, or Special/Other;
+  Precepting Clinic work selects a clinic site.
+- **Clinic staffing:** Each clinic can remain Capacity-managed or switch to
+  Attending-managed staffing. Attending-managed resident capacity now follows
+  effective week-by-week Precepting Clinic assignments, including schedule
+  dates, vacation, ad hoc replacements, clinic closures, and the clinic's
+  residents-per-attending ratio. Switching modes preserves the clinic's inactive
+  numeric capacity setup.
 
 ### Fixed
 
