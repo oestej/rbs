@@ -33,6 +33,7 @@ from rbs.ui.app_status import (
     _retention_banner,
     _solve_chip,
 )
+from rbs.ui.attendings.tab import render_attendings_tab
 from rbs.ui.block_schedule_pdf import (
     block_schedule_pdf_filename,
     build_block_schedule_pdf,
@@ -70,6 +71,7 @@ class WorkspaceNavigation:
     block_schedule: object
     clinic_schedule: object
     residents: object
+    attendings: object
     rotations: object
     clinic: object
     settings: object
@@ -176,6 +178,7 @@ def _workspace_navigation(on_change=None) -> WorkspaceNavigation:
         block_schedule = ui.tab("block_schedule", label="Block Schedule")
         clinic_schedule = ui.tab("clinic_schedule", label="Clinic Schedule")
         residents = ui.tab("residents", label="Residents")
+        attendings = ui.tab("attendings", label="Attendings")
         rotations = ui.tab("rotations", label="Rotations")
         clinic = ui.tab("clinic", label="Clinic")
         settings = ui.tab("settings", label="Configuration")
@@ -184,6 +187,7 @@ def _workspace_navigation(on_change=None) -> WorkspaceNavigation:
         block_schedule=block_schedule,
         clinic_schedule=clinic_schedule,
         residents=residents,
+        attendings=attendings,
         rotations=rotations,
         clinic=clinic,
         settings=settings,
@@ -310,6 +314,8 @@ def _render_tab(session: WorkspaceSession, name: str) -> None:
         )
     elif name == "residents":
         _render_residents(session, workspace)
+    elif name == "attendings":
+        _render_attendings(session, workspace)
     elif name == "settings":
 
         def persist_settings(
@@ -714,6 +720,32 @@ def _render_residents(session: WorkspaceSession, workspace: Workspace) -> None:
         on_pdf_open=lambda content, filename: _open_exported_pdf(
             session, content, filename
         ),
+    )
+
+
+def _render_attendings(session: WorkspaceSession, workspace: Workspace) -> None:
+    def select_attending(attending_id: str | None) -> None:
+        session.attending_id = attending_id
+        session.active_tab = "attendings"
+        session.refresh_panel("attendings")
+
+    def persist_attending(
+        updated: SchedulerInput,
+        attending_id: str | None,
+    ) -> None:
+        session.attending_id = attending_id
+        session.active_tab = "attendings"
+        session.persist_instance(
+            workspace,
+            updated,
+            impact=instance_edit_impact(workspace.instance, updated),
+        )
+
+    render_attendings_tab(
+        workspace.instance,
+        selected_attending_id=session.attending_id,
+        on_select=select_attending,
+        on_save=persist_attending,
     )
 
 

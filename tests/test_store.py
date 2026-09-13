@@ -171,7 +171,7 @@ def test_rbsc_round_trip_replaces_and_restores_the_complete_database(tmp_path) -
     exported = json.loads(payload)
 
     assert exported["format"] == "rbsc"
-    assert exported["schema_version"] == 9
+    assert exported["schema_version"] == 10
     assert exported["current_workspace_id"] == second.id
     assert exported["app_metadata"]["portable_test_marker"] == "preserved"
     assert {row["id"] for row in exported["workspaces"]} == {first.id, second.id}
@@ -210,7 +210,7 @@ def test_rbsc_round_trip_replaces_and_restores_the_complete_database(tmp_path) -
     assert reexported == exported
 
 
-def test_rbsc_v9_omits_application_preferences_and_derived_locks(tmp_path) -> None:
+def test_rbsc_v10_omits_application_preferences_and_derived_locks(tmp_path) -> None:
     from rbs.models.instance import SchedulerInput
 
     raw = sample_instance().model_dump(mode="json")
@@ -226,7 +226,7 @@ def test_rbsc_v9_omits_application_preferences_and_derived_locks(tmp_path) -> No
     exported = json.loads(store.export_workspace_rbsc(workspace.id))
     case = exported["workspaces"][0]["case"]
 
-    assert exported["schema_version"] == 9
+    assert exported["schema_version"] == 10
     assert "color_scheme" not in case
     assert "solver" not in case
     assert "lock_through_today" not in case
@@ -241,7 +241,7 @@ def test_rbsc_v9_omits_application_preferences_and_derived_locks(tmp_path) -> No
     assert not imported.instance.lock_through_today
 
 
-def test_rbsc_v9_coalesces_catalogs_that_differ_only_by_colors(tmp_path) -> None:
+def test_rbsc_v10_coalesces_catalogs_that_differ_only_by_colors(tmp_path) -> None:
     from rbs.models.instance import SchedulerInput
 
     source = Store(tmp_path / "source.sqlite")

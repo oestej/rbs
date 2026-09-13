@@ -62,6 +62,9 @@ def test_dump_sample(tmp_path: Path) -> None:
     assert main(["dump-sample", "-o", str(output)]) == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert len(payload["residents"]) == 24
+    assert len(payload["attendings"]) == 4
+    assert any(attending["half_days_per_week"] == 0 for attending in payload["attendings"])
+    assert any(attending["ad_hoc_work_half_days"] for attending in payload["attendings"])
     assert payload["residents"][0]["name"]
     assert "rotations" not in payload
     assert "requirements" not in payload

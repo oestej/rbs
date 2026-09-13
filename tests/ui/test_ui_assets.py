@@ -201,6 +201,10 @@ def test_schedule_styles_live_in_packaged_css_assets() -> None:
     assert ".rbs-academic-override-row" in app_css
     assert ".rbs-academic-override-empty" in app_css
     assert ".rbs-resident-summary" in app_css
+    assert ".rbs-attending-summary" in app_css
+    assert ".rbs-attending-boundary-card.uses-academic-boundary" in app_css
+    assert ".rbs-attending-work-row" in app_css
+    assert ".rbs-attending-vacation-row" in app_css
     assert ".rbs-resident-schedule-dialog" not in app_css
     assert ".rbs-resident-schedule-header" in app_css
     assert ".rbs-resident-schedule-actions" in app_css

@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Attendings:** A new Attendings tab configures each attending's weekly
+  half-day total, optional schedule start and end dates, and day-level vacation
+  ranges. Weekly schedules default to 10 half-days, missing schedule dates are
+  shown distinctly and use the academic year's first or last day, and unsaved
+  availability is protected when leaving the editor. Attendings may have zero
+  recurring half-days and still be scheduled for explicit morning or afternoon
+  ad hoc work.
+
 ### Fixed
 
 - **Schedules:** A locked clinic session from a previous draft is now kept as

@@ -16,12 +16,13 @@ from rbs.models.rotation import DEFAULT_ROTATION_COLOR, default_rotation_color
 from rbs.models.schedule import Schedule
 
 RBSC_FORMAT = "rbsc"
-# Only the current schema version loads: documents written by older builds
-# fail validation instead of being upgraded in place. Portable documents omit
-# application-owned presentation (colors, solver tuning, automatic-locking
-# state) by design; import restores neutral defaults. A Save As deliberately
-# clears the bundled-sample flag before producing the user's document.
-RBSC_SCHEMA_VERSION = 9
+# The current schema and its unambiguous immediate predecessor load; older
+# documents fail validation instead of being guessed forward. Portable
+# documents omit application-owned presentation (colors, solver tuning,
+# automatic-locking state) by design; import restores neutral defaults. A Save
+# As deliberately clears the bundled-sample flag before producing the user's
+# document.
+RBSC_SCHEMA_VERSION = 10
 _AUTOMATIC_LOCK_SOURCE = "through_today"
 
 
@@ -101,11 +102,21 @@ def _hydrate_portable_preferences(value: object) -> object:
 def _migrate_portable_state(value: object) -> object:
     """Upgrade path for documents written by older schema versions.
 
-    No older version is accepted right now: only the current schema loads.
-    When the next schema ships, upgrade its predecessor here, normalizing
-    any nested versioned payloads alongside the outer version.
+    Version 10 adds workspace-owned attending configuration, including dated
+    ad hoc half-days. Version 9 has no ambiguous equivalent, so it upgrades to
+    an empty attending directory. Older shapes remain unsupported.
     """
-    return value
+    if not isinstance(value, dict) or value.get("schema_version") != 9:
+        return value
+    migrated = deepcopy(value)
+    migrated["schema_version"] = RBSC_SCHEMA_VERSION
+    for workspace in migrated.get("workspaces", []):
+        if not isinstance(workspace, dict):
+            continue
+        case = workspace.get("case")
+        if isinstance(case, dict):
+            case.setdefault("attendings", [])
+    return migrated
 
 
 def _validated_timestamp(value: str) -> str:
@@ -186,7 +197,7 @@ class RBSCState(StrictModel):
     """The complete portable state of one RBS SQLite database."""
 
     format: Literal["rbsc"] = RBSC_FORMAT
-    schema_version: Literal[9] = RBSC_SCHEMA_VERSION
+    schema_version: Literal[10] = RBSC_SCHEMA_VERSION
     exported_at: str
     current_workspace_id: int | None = Field(default=None, ge=1)
     app_metadata: dict[str, str] = Field(default_factory=dict)

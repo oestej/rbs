@@ -532,6 +532,7 @@
   ],
   "manual_clinic_blocks": [],
   "resident_rotation_overrides": [],
+  "resident_rotation_waivers": [],
   "special_rotations": [
     {
       "id": "demo-educators-summit",
@@ -544,6 +545,72 @@
         "resident-017",
         "resident-018"
       ]
+    }
+  ],
+  "attendings": [
+    {
+      "id": "attending-004",
+      "name": "Theo Brooks",
+      "half_days_per_week": 0,
+      "schedule_start_date": "2026-08-29",
+      "schedule_end_date": "2027-05-16",
+      "vacation_ranges": [],
+      "ad_hoc_work_half_days": [
+        {
+          "date": "2026-09-07",
+          "session": "morning"
+        },
+        {
+          "date": "2026-09-10",
+          "session": "afternoon"
+        }
+      ]
+    },
+    {
+      "id": "attending-003",
+      "name": "Elena Garcia",
+      "half_days_per_week": 10,
+      "schedule_start_date": null,
+      "schedule_end_date": "2027-05-30",
+      "vacation_ranges": [
+        {
+          "start_date": "2027-03-06",
+          "end_date": "2027-03-15"
+        }
+      ],
+      "ad_hoc_work_half_days": []
+    },
+    {
+      "id": "attending-001",
+      "name": "Maya Singh",
+      "half_days_per_week": 10,
+      "schedule_start_date": null,
+      "schedule_end_date": null,
+      "vacation_ranges": [
+        {
+          "start_date": "2026-08-12",
+          "end_date": "2026-08-18"
+        },
+        {
+          "start_date": "2026-12-24",
+          "end_date": "2026-12-29"
+        }
+      ],
+      "ad_hoc_work_half_days": []
+    },
+    {
+      "id": "attending-002",
+      "name": "Noah Williams",
+      "half_days_per_week": 10,
+      "schedule_start_date": "2026-08-01",
+      "schedule_end_date": null,
+      "vacation_ranges": [
+        {
+          "start_date": "2026-10-08",
+          "end_date": "2026-10-08"
+        }
+      ],
+      "ad_hoc_work_half_days": []
     }
   ],
   "color_scheme": {

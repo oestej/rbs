@@ -99,6 +99,13 @@ def test_start_new_academic_year_clears_year_specific_work() -> None:
     assert moved.calendar.first_week_start == date(2027, 6, 28)
     assert all(not item.vacation_weeks for item in moved.residents)
     assert all(not item.days_off for item in moved.residents)
+    assert [item.id for item in moved.attendings] == [
+        item.id for item in configured.attendings
+    ]
+    assert all(item.schedule_start_date is None for item in moved.attendings)
+    assert all(item.schedule_end_date is None for item in moved.attendings)
+    assert all(not item.vacation_ranges for item in moved.attendings)
+    assert all(not item.ad_hoc_work_half_days for item in moved.attendings)
     assert not moved.academic_half_day_overrides
     assert not moved.locks
     assert not moved.manual_clinic_blocks

@@ -33,6 +33,7 @@ def test_workspace_navigation_uses_requested_order_and_labels() -> None:
         "Block Schedule",
         "Clinic Schedule",
         "Residents",
+        "Attendings",
         "Rotations",
         "Clinic",
         "Configuration",

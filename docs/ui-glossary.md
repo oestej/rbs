@@ -6,6 +6,10 @@ descriptions.
 | Concept | Preferred form | Avoid |
 | --- | --- | --- |
 | One-off time away | individual day(s) off | single day(s) off |
+| Attending working period | schedule dates; schedule start date; schedule end date | employment dates; contract dates |
+| Missing attending schedule boundary | academic year start; academic year end; Full academic year | unlimited; blank |
+| Attending time away | vacation; vacation range(s) | vacation weeks |
+| Dated attending work outside the recurring weekly total | ad hoc work; ad hoc half-day(s) | special availability; extra shift(s) |
 | Ranked elective choices | elective preferences | Elective Preference |
 | Dates when a clinic is closed | closure days; Add closure day | Holidays/Closure Days; Add closure |
 | Weekly half-day frequency | half-day(s) per week | half-day/week; half-day/wk |

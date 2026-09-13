@@ -22,6 +22,7 @@ TAB_NAMES = (
     "block_schedule",
     "clinic_schedule",
     "residents",
+    "attendings",
     "rotations",
     "clinic",
     "settings",
@@ -65,6 +66,7 @@ class WorkspaceSession:
     principal: Principal | None = field(default=None, repr=False)
     workspace_id: int | None = None
     resident_id: str | None = None
+    attending_id: str | None = None
     rotation_id: str | None = None
     show_past_block_weeks: bool = False
     show_past_clinic_weeks: bool = False
@@ -143,6 +145,7 @@ class WorkspaceSession:
         self.workspace_id = workspace_id
         self._leave_guard_baseline = None
         self.resident_id = None
+        self.attending_id = None
         self.rotation_id = None
         self.show_past_block_weeks = False
         self.show_past_clinic_weeks = False

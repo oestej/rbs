@@ -497,7 +497,7 @@ def test_open_rejects_pre_v9_documents_with_a_clear_error(tmp_path) -> None:
     target = _store(tmp_path / "target.sqlite")
     controller = DesktopDocumentController(target, Dialogs())
 
-    with pytest.raises(ValidationError, match="Input should be 9"):
+    with pytest.raises(ValidationError, match="Input should be 10"):
         controller.load(document)
 
 

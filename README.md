@@ -19,10 +19,13 @@ rbs ui                      # browser workspace at http://127.0.0.1:8080
 
 ## The workspace
 
-Everything lives in workspaces: residents, rotations, clinic policy, locks, and
-the solved schedule. Tabs cover **Block Schedule**, **Clinic Schedule**,
-**Residents**, **Rotations**, **Clinic**, and **Configuration** (annual calendar
-start, automatic locking, training levels, solver tuning).
+Everything lives in workspaces: residents, attendings, rotations, clinic policy,
+locks, and the solved schedule. Tabs cover **Block Schedule**, **Clinic
+Schedule**, **Residents**, **Attendings**, **Rotations**, **Clinic**, and
+**Configuration** (annual calendar start, automatic locking, training levels,
+solver tuning). The Attendings tab records each attending's weekly half-day
+total, schedule dates, dated morning or afternoon ad hoc work, and day-level
+vacation ranges; attending-driven clinic capacity is the next phase.
 
 Closing a workspace in the browser build deletes it permanently. Clean
 workspaces close at once; unsaved changes get a confirmation dialog whose
@@ -79,10 +82,10 @@ already exist in `rbs.cloud` and surface in the UI behind `rbs ui --cloud`.
 
 ## File formats
 
-- `.rbsc` workspaces are schema v6 and validated strictly — there are no legacy
-  upgrades, only the current shape.
-- Constraint catalogs (rotations, curricula, clinic policy) are schema v5;
-  `data/catalog.json` is the bundled default.
+- `.rbsc` workspaces use a versioned, strictly validated schema. An immediately
+  preceding shape is upgraded only when its meaning is unambiguous.
+- Constraint catalogs (rotations, curricula, clinic policy) are independently
+  versioned; `data/catalog.json` is the bundled default.
 - `schedule.json` carries the result plus `meta` describing validation status,
   raw solver status, and attending-count metrics.
 

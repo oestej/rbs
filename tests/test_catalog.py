@@ -15,6 +15,7 @@ from rbs.catalog import (
     monday_of_week_containing,
     sample_instance,
 )
+from rbs.models.attending import AttendingAdHocWorkHalfDay, AttendingVacation
 from rbs.models.catalog import ConstraintCatalog
 from rbs.models.color_scheme import DEFAULT_COLOR_SCHEME
 from rbs.models.enums import RotationKind, Session, Weekday
@@ -50,6 +51,26 @@ def test_sample_residents_have_four_vacation_weeks() -> None:
     instance = sample_instance()
     for resident in instance.residents:
         assert len(resident.vacation_weeks) == 4, resident.id
+
+
+def test_sample_attendings_show_default_and_custom_schedule_boundaries() -> None:
+    instance = sample_instance()
+
+    assert len(instance.attendings) == 4
+    assert any(
+        attending.schedule_start_date is None and attending.schedule_end_date is None
+        for attending in instance.attendings
+    )
+    assert any(attending.schedule_start_date is not None for attending in instance.attendings)
+    assert any(attending.schedule_end_date is not None for attending in instance.attendings)
+    assert any(attending.vacation_ranges for attending in instance.attendings)
+    ad_hoc_only = next(
+        attending for attending in instance.attendings if attending.half_days_per_week == 0
+    )
+    assert [half_day.session for half_day in ad_hoc_only.ad_hoc_work_half_days] == [
+        Session.MORNING,
+        Session.AFTERNOON,
+    ]
 
 
 def test_rotation_ids_are_unique() -> None:
@@ -810,6 +831,40 @@ def test_rebasing_academic_year_moves_workspace_specific_dates() -> None:
     rebased = rebase_academic_year(configured, "2028-2029")
 
     assert rebased.residents[0].days_off == [date(2028, 9, 15)]
+    assert [attending.name for attending in rebased.attendings] == [
+        attending.name for attending in configured.attendings
+    ]
+    vacation_attending = next(
+        attending for attending in configured.attendings if attending.vacation_ranges
+    )
+    rebased_attending = next(
+        attending for attending in rebased.attendings if attending.id == vacation_attending.id
+    )
+    original_vacation = vacation_attending.vacation_ranges[0]
+    shifted_vacation = rebased_attending.vacation_ranges[0]
+    assert shifted_vacation == AttendingVacation(
+        start_date=original_vacation.start_date.replace(
+            year=original_vacation.start_date.year + 2
+        ),
+        end_date=original_vacation.end_date.replace(
+            year=original_vacation.end_date.year + 2
+        ),
+    )
+    ad_hoc_attending = next(
+        attending for attending in configured.attendings if attending.ad_hoc_work_half_days
+    )
+    shifted_ad_hoc_attending = next(
+        attending
+        for attending in rebased.attendings
+        if attending.id == ad_hoc_attending.id
+    )
+    assert shifted_ad_hoc_attending.ad_hoc_work_half_days == [
+        AttendingAdHocWorkHalfDay(
+            date=half_day.date.replace(year=half_day.date.year + 2),
+            session=half_day.session,
+        )
+        for half_day in ad_hoc_attending.ad_hoc_work_half_days
+    ]
     assert rebased.clinic_policy.site("maple").capacity_overrides[0].date == date(2028, 9, 16)
     assert {closure.date for closure in rebased.clinic_policy.closure_days} == {date(2028, 12, 25)}
     assert all(lock.source == "manual" for lock in rebased.locks)
@@ -868,6 +923,7 @@ def test_blank_instance_has_only_editable_workspace_scaffolding() -> None:
 
     assert instance.academic_year == "2032-2033"
     assert instance.residents == []
+    assert instance.attendings == []
     assert [rotation.id for rotation in instance.rotations] == ["clinic", "fmed"]
     clinic = instance.rotation("clinic")
     assert clinic.kind is RotationKind.CLINIC

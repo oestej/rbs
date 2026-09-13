@@ -18,6 +18,7 @@ def test_committed_sample_input_loads() -> None:
     assert instance.academic_year == "2026-2027"
     assert instance.solver.time_limit_seconds == 60
     assert instance.cohort_counts() == {1: 8, 2: 8, 3: 8}
+    assert any(attending.ad_hoc_work_half_days for attending in instance.attendings)
     assert instance.curriculum_for(1).required_weeks() == 52
     assert instance.curriculum_for(2).required_weeks() == 52
     assert instance.curriculum_for(3).required_weeks() == 52

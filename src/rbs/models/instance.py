@@ -6,6 +6,11 @@ from typing import Any, Self
 from pydantic import Field, field_validator, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
+from rbs.models.attending import (
+    Attending,
+    normalize_attendings,
+    validate_attending_academic_year,
+)
 from rbs.models.calendar import Calendar
 from rbs.models.case_blocks import (
     AcademicHalfDayOverride,
@@ -132,9 +137,26 @@ class SolverCase(StrictModel):
 class SchedulingCase(SolverCase):
     """Persisted workspace case, including presentation and UI workflow state."""
 
+    attendings: list[Attending] = Field(default_factory=list)
     color_scheme: ColorScheme = Field(default_factory=ColorScheme)
     solver: SolverConfig = Field(default_factory=SolverConfig)
     lock_through_today: bool = False
+
+    @field_validator("attendings")
+    @classmethod
+    def unique_attendings(cls, attendings: list[Attending]) -> list[Attending]:
+        return normalize_attendings(attendings)
+
+    @model_validator(mode="after")
+    def attending_dates_fit_calendar(self) -> Self:
+        first_day = self.calendar.first_week_start
+        last_day = first_day + timedelta(days=self.calendar.weeks * 7 - 1)
+        validate_attending_academic_year(
+            self.attendings,
+            first_day=first_day,
+            last_day=last_day,
+        )
+        return self
 
     @classmethod
     def from_instance(cls, instance: "SchedulerInput") -> "SchedulingCase":
@@ -142,6 +164,7 @@ class SchedulingCase(SolverCase):
             academic_year=instance.academic_year,
             calendar=instance.calendar,
             residents=instance.residents,
+            attendings=instance.attendings,
             color_scheme=instance.color_scheme,
             academic_half_day_overrides=instance.academic_half_day_overrides,
             locks=instance.locks,
@@ -744,6 +767,7 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
 class SchedulerInput(SolverProblem):
     """Workspace instance: solver problem plus presentation/workflow settings."""
 
+    attendings: list[Attending] = Field(default_factory=list)
     rotations: list[Rotation]
     electives: ElectiveConfiguration
     clinic_policy: ClinicPolicy
@@ -751,6 +775,22 @@ class SchedulerInput(SolverProblem):
     color_scheme: ColorScheme = Field(default_factory=ColorScheme)
     solver: SolverConfig = Field(default_factory=SolverConfig)
     lock_through_today: bool = False
+
+    @field_validator("attendings")
+    @classmethod
+    def unique_attendings(cls, attendings: list[Attending]) -> list[Attending]:
+        return normalize_attendings(attendings)
+
+    @model_validator(mode="after")
+    def attending_dates_fit_calendar(self) -> Self:
+        first_day = self.calendar.first_week_start
+        last_day = first_day + timedelta(days=self.calendar.weeks * 7 - 1)
+        validate_attending_academic_year(
+            self.attendings,
+            first_day=first_day,
+            last_day=last_day,
+        )
+        return self
 
     def scheduling_case(self) -> SchedulingCase:
         """Project the workspace instance onto its separately persisted case."""

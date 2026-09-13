@@ -14,6 +14,11 @@ from rbs.academic_year import (
     first_week_start_for_academic_year,
     rebase_academic_year,
 )
+from rbs.models.attending import (
+    Attending,
+    AttendingAdHocWorkHalfDay,
+    AttendingVacation,
+)
 from rbs.models.catalog import ConstraintCatalog
 from rbs.models.clinic import (
     ALL_CLINIC_SITES,
@@ -175,6 +180,66 @@ def sample_days_off(resident_id: str, first_week_start: date) -> list[date]:
         "resident-017": [14 * 7 + 4],
     }
     return [first_week_start + timedelta(days=offset) for offset in offsets.get(resident_id, [])]
+
+
+def sample_attendings(first_week_start: date) -> list[Attending]:
+    """Create illustrative attending schedule spans and day-level vacations."""
+    last_day = first_week_start + timedelta(days=52 * 7 - 1)
+    return [
+        Attending(
+            id="attending-001",
+            name="Maya Singh",
+            vacation_ranges=[
+                AttendingVacation(
+                    start_date=first_week_start + timedelta(days=44),
+                    end_date=first_week_start + timedelta(days=50),
+                ),
+                AttendingVacation(
+                    start_date=first_week_start + timedelta(days=178),
+                    end_date=first_week_start + timedelta(days=183),
+                ),
+            ],
+        ),
+        Attending(
+            id="attending-002",
+            name="Noah Williams",
+            schedule_start_date=first_week_start + timedelta(days=33),
+            vacation_ranges=[
+                AttendingVacation(
+                    start_date=first_week_start + timedelta(days=101),
+                    end_date=first_week_start + timedelta(days=101),
+                )
+            ],
+        ),
+        Attending(
+            id="attending-003",
+            name="Elena Garcia",
+            schedule_end_date=last_day - timedelta(days=28),
+            vacation_ranges=[
+                AttendingVacation(
+                    start_date=first_week_start + timedelta(days=250),
+                    end_date=first_week_start + timedelta(days=259),
+                )
+            ],
+        ),
+        Attending(
+            id="attending-004",
+            name="Theo Brooks",
+            half_days_per_week=0,
+            schedule_start_date=first_week_start + timedelta(days=61),
+            schedule_end_date=last_day - timedelta(days=42),
+            ad_hoc_work_half_days=[
+                AttendingAdHocWorkHalfDay(
+                    date=first_week_start + timedelta(days=70),
+                    session=Session.MORNING,
+                ),
+                AttendingAdHocWorkHalfDay(
+                    date=first_week_start + timedelta(days=73),
+                    session=Session.AFTERNOON,
+                ),
+            ],
+        ),
+    ]
 
 
 def sample_special_rotations(first_week_start: date) -> list[SpecialRotation]:
@@ -371,6 +436,7 @@ def sample_instance(
             block_start_alignment=1,
         ),
         residents=residents,
+        attendings=sample_attendings(first_week_start),
         rotations=constraints.rotations,
         requirements=constraints.requirements,
         rotation_groups=constraints.rotation_groups,

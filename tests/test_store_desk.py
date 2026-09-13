@@ -225,6 +225,42 @@ def test_importing_a_file_with_no_workspaces_is_refused(tmp_path) -> None:
         _store(tmp_path).import_workspace_rbsc(payload)
 
 
+def test_v9_file_migrates_to_an_empty_attending_directory(tmp_path) -> None:
+    source = _store(tmp_path / "a")
+    payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
+    payload["schema_version"] = 9
+    payload["workspaces"][0]["case"].pop("attendings")
+
+    target = _store(tmp_path / "b")
+    imported = target.import_workspace_rbsc(json.dumps(payload))[0]
+
+    assert imported.instance.attendings == []
+    reexported = json.loads(target.export_workspace_rbsc(imported.id))
+    assert reexported["schema_version"] == 10
+    assert reexported["workspaces"][0]["case"]["attendings"] == []
+
+
+def test_v10_attending_without_weekly_half_days_uses_ten(tmp_path) -> None:
+    source = _store(tmp_path / "a")
+    payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
+    payload["workspaces"][0]["case"]["attendings"][0].pop("half_days_per_week")
+
+    imported = _store(tmp_path / "b").import_workspace_rbsc(json.dumps(payload))[0]
+
+    assert imported.instance.attendings[0].half_days_per_week == 10
+
+
+def test_v10_attending_without_ad_hoc_work_uses_an_empty_list(tmp_path) -> None:
+    source = _store(tmp_path / "a")
+    payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
+    for attending in payload["workspaces"][0]["case"]["attendings"]:
+        attending.pop("ad_hoc_work_half_days")
+
+    imported = _store(tmp_path / "b").import_workspace_rbsc(json.dumps(payload))[0]
+
+    assert all(not attending.ad_hoc_work_half_days for attending in imported.instance.attendings)
+
+
 def test_pre_v9_files_are_rejected(tmp_path) -> None:
     from pydantic import ValidationError
 
@@ -232,7 +268,7 @@ def test_pre_v9_files_are_rejected(tmp_path) -> None:
     payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
     payload["schema_version"] = 1
 
-    with pytest.raises(ValidationError, match="Input should be 9"):
+    with pytest.raises(ValidationError, match="Input should be 10"):
         _store(tmp_path / "b").import_workspace_rbsc(json.dumps(payload))
 
 
@@ -243,7 +279,7 @@ def test_v8_files_are_rejected(tmp_path) -> None:
     payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
     payload["schema_version"] = 8
 
-    with pytest.raises(ValidationError, match="Input should be 9"):
+    with pytest.raises(ValidationError, match="Input should be 10"):
         _store(tmp_path / "b").import_workspace_rbsc(json.dumps(payload))
 
 
@@ -256,7 +292,7 @@ def test_v7_files_with_v6_catalogs_are_rejected(tmp_path) -> None:
     for record in payload["catalogs"]:
         record["catalog"]["schema_version"] = 6
 
-    with pytest.raises(ValidationError, match="Input should be 9"):
+    with pytest.raises(ValidationError, match="Input should be 10"):
         _store(tmp_path / "b").import_workspace_rbsc(json.dumps(payload))
 
 

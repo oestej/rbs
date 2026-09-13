@@ -1,3 +1,4 @@
+from rbs.models.attending import Attending, AttendingAdHocWorkHalfDay, AttendingVacation
 from rbs.models.catalog import ConstraintCatalog
 from rbs.models.elective import ElectiveConfiguration, ElectiveRotationOption
 from rbs.models.instance import SchedulerInput, SchedulingCase, SolverProblem
@@ -6,6 +7,9 @@ from rbs.models.schedule import Schedule, SolverDiagnostic
 from rbs.models.special import SpecialRotation, SpecialRotationKind
 
 __all__ = [
+    "Attending",
+    "AttendingAdHocWorkHalfDay",
+    "AttendingVacation",
     "ConstraintCatalog",
     "ElectiveConfiguration",
     "ElectiveRotationOption",
