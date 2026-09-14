@@ -23,6 +23,8 @@ PRIVATE_SOLVER_PACKAGE = "rbs.solver.core"
 UI_COMPOSITION_MODULES = {"__main__.py"}
 PYOBJC_MODULES = {"AppKit", "Foundation", "objc", "PyObjCTools"}
 UI_TRANSFORMATION_MODULES = {
+    "rbs.attending_schedule",
+    "rbs.ui.attendings.ops",
     "rbs.ui.case_ops",
     "rbs.ui.clinic.ops",
     "rbs.ui.clinic.projection",

@@ -1624,7 +1624,7 @@ def _clinic_directory_configuration(
                             f"{allocation.target_percent}%",
                         )
                         _clinic_metric(
-                            "Scheduled preceptor shifts"
+                            "Configured preceptor shifts"
                             if attending_managed
                             else "Weekly sessions",
                             str(scheduled_count)
@@ -1685,7 +1685,7 @@ def _clinic_attending_assignment_count(
     source: str,
 ) -> int:
     """Count configured Precepting Clinic assignments for a clinic."""
-    if source not in {"template", "weekly", "ad_hoc"}:
+    if source not in {"template", "weekly"}:
         raise ValueError(f"unknown attending assignment source {source!r}")
     return sum(
         assignment.work_type is AttendingWorkType.PRECEPTING_CLINIC
@@ -1694,11 +1694,9 @@ def _clinic_attending_assignment_count(
         for assignment in (
             attending.schedule_template_half_days
             if source == "template"
-            else attending.ad_hoc_work_half_days
-            if source == "ad_hoc"
             else [
                 half_day
-                for schedule in attending.weekly_work_schedules
+                for schedule in instance.attending_schedule_weeks(attending.id)
                 for half_day in schedule.half_days
             ]
         )
@@ -1962,7 +1960,7 @@ def _open_clinic_editor_dialog(
                                 ui.label(
                                     "This clinic opens only when an attending has a "
                                     "Precepting Clinic assignment here. Schedule dates, "
-                                    "week-by-week work, vacation, and dated assignments are "
+                                    "week-by-week work, weekly overrides, and vacation are "
                                     "applied automatically."
                                 ).classes("rbs-type-body rbs-text-muted")
                                 if original_id is not None:
@@ -1976,16 +1974,9 @@ def _open_clinic_editor_dialog(
                                         original_id,
                                         source="weekly",
                                     )
-                                    dated_count = _clinic_attending_assignment_count(
-                                        instance,
-                                        original_id,
-                                        source="ad_hoc",
-                                    )
                                     ui.label(
-                                        f"{scheduled_count} scheduled preceptor "
+                                        f"{scheduled_count} configured preceptor "
                                         f"{'shift' if scheduled_count == 1 else 'shifts'} · "
-                                        f"{dated_count} ad hoc preceptor "
-                                        f"{'shift' if dated_count == 1 else 'shifts'} · "
                                         f"{template_count} in the template"
                                     ).classes("rbs-type-caption rbs-text-muted")
                                     if on_manage_attendings is not None:
@@ -2015,10 +2006,10 @@ def _open_clinic_editor_dialog(
                                 "rbs-type-section-title"
                             )
                             ui.label(
-                                "Edit the week-by-week attending schedule or use ad hoc work "
-                                "for one dated replacement. Any saved numeric capacity overrides "
-                                "remain available if this clinic is switched back to "
-                                "Capacity-managed."
+                                "Edit the week-by-week attending schedule, including any "
+                                "week-specific half-day totals. Saved numeric capacity "
+                                "overrides remain available if this clinic is switched "
+                                "back to Capacity-managed."
                             ).classes("rbs-type-caption rbs-text-muted")
                             if on_manage_attendings is not None:
                                 ui.button(

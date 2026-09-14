@@ -515,6 +515,12 @@
   border-bottom: 1px solid var(--rbs-border-subtle);
 }
 
+.rbs-person-directory-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .rbs-resident-avatar,
 .rbs-attending-avatar {
   width: 48px;

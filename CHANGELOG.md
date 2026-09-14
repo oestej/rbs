@@ -7,25 +7,42 @@
 - **Attendings:** A new Attendings tab starts each attending with a lightweight
   form for their name, weekly half-day total, and optional schedule dates. The
   full editor separates details, weekly category targets, schedule, template,
-  ad hoc work, and vacation into tabs. Each work category can have no target, a
-  Fixed exact weekly shift target, or a Flexible preferred target—including an
-  explicit target of zero. The weekly total defaults to 10, missing schedule
-  dates are shown distinctly and use the academic year's first or last day, and
-  unsaved availability is protected when leaving the editor. Attendings may
-  have zero scheduled half-days and still be assigned explicit morning or
-  afternoon ad hoc work. Every academic week has an independently editable
-  AM/PM schedule whose blocks can be clicked to edit or dragged to move and
-  swap; a reusable template can replace a selected week or range without
-  remaining linked to it.
-  Scheduled, template, and ad hoc half-days can be assigned as Inpatient
-  Service, Attending Clinic, Precepting Clinic, Admin Time, or Special/Other;
-  Precepting Clinic work selects a clinic site.
+  and vacation into tabs. Each recurring work category can have no target, a
+  Fixed required minimum/maximum range, or a Flexible preferred minimum/maximum
+  range. Special/Other work is placed manually and can include a free-text
+  description. The weekly total defaults to 10, missing schedule dates are shown
+  distinctly and use the academic year's first or last day, and unsaved
+  changes are protected when leaving the editor. Every academic week has an
+  independently editable AM/PM schedule whose blocks can be clicked to edit or
+  dragged to move and swap. An attending with a zero-half-day default can be
+  assigned work in a particular week and then use Override to make the current
+  assignment count that week's total. A reusable template can replace a selected
+  week or range without remaining linked to it. Schedule and template shifts can
+  be assigned as Inpatient Service, Attending Clinic, Precepting Clinic, Admin
+  Time, or Special/Other; Precepting Clinic work selects a clinic site.
+  Attendings can also set a soft preferred weekly schedule and a minimum number
+  of distinct Attending Clinic days for non-vacation weeks. The program's
+  effective academic half-day is reserved automatically as Admin Time for
+  active attendings, with an option to disable that rule in Academic settings.
+  Schedule checks identify missing weekly totals, Fixed ranges, and Attending
+  Clinic day minimums as errors while showing Flexible ranges and preferred
+  placements as warnings; vacation and partial boundary weeks may fall below
+  their usual minimums.
 - **Clinic staffing:** Each clinic can remain Capacity-managed or switch to
   Attending-managed staffing. Attending-managed resident capacity now follows
-  effective week-by-week Precepting Clinic assignments, including schedule
-  dates, vacation, ad hoc replacements, clinic closures, and the clinic's
-  residents-per-attending ratio. Switching modes preserves the clinic's inactive
-  numeric capacity setup.
+  effective week-by-week Precepting Clinic assignments, including weekly
+  half-day overrides, schedule dates, vacation, clinic closures, and the
+  clinic's residents-per-attending ratio. Switching modes preserves the
+  clinic's inactive numeric capacity setup.
+
+### Changed
+
+- **Data compatibility:** Version 11 `.rbsc` files migrate dated attending work
+  into separate, week-specific attending schedules and convert single category
+  targets into exact minimum/maximum ranges. Version 9 catalogs migrate with
+  automatic attending Admin Time enabled for the academic half-day. Files saved
+  by this version use `.rbsc` schema 12 and catalog schema 10 and cannot be
+  opened by older builds.
 
 ### Fixed
 

@@ -556,22 +556,9 @@
       "schedule_end_date": "2027-05-16",
       "vacation_ranges": [],
       "weekly_shift_targets": [],
-      "schedule_template_half_days": [],
-      "weekly_work_schedules": [],
-      "ad_hoc_work_half_days": [
-        {
-          "work_type": "special_other",
-          "clinic_id": null,
-          "date": "2026-09-07",
-          "session": "morning"
-        },
-        {
-          "work_type": "special_other",
-          "clinic_id": null,
-          "date": "2026-09-10",
-          "session": "afternoon"
-        }
-      ]
+      "minimum_attending_clinic_days_per_week": 0,
+      "preferred_weekly_schedule_half_days": [],
+      "schedule_template_half_days": []
     },
     {
       "id": "attending-003",
@@ -586,9 +573,9 @@
         }
       ],
       "weekly_shift_targets": [],
-      "schedule_template_half_days": [],
-      "weekly_work_schedules": [],
-      "ad_hoc_work_half_days": []
+      "minimum_attending_clinic_days_per_week": 0,
+      "preferred_weekly_schedule_half_days": [],
+      "schedule_template_half_days": []
     },
     {
       "id": "attending-001",
@@ -607,9 +594,38 @@
         }
       ],
       "weekly_shift_targets": [],
-      "schedule_template_half_days": [],
-      "weekly_work_schedules": [],
-      "ad_hoc_work_half_days": []
+      "minimum_attending_clinic_days_per_week": 2,
+      "preferred_weekly_schedule_half_days": [
+        {
+          "work_type": "attending_clinic",
+          "clinic_id": null,
+          "description": null,
+          "weekday": "monday",
+          "session": "morning"
+        },
+        {
+          "work_type": "attending_clinic",
+          "clinic_id": null,
+          "description": null,
+          "weekday": "monday",
+          "session": "afternoon"
+        },
+        {
+          "work_type": "attending_clinic",
+          "clinic_id": null,
+          "description": null,
+          "weekday": "thursday",
+          "session": "morning"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "maple",
+          "description": null,
+          "weekday": "friday",
+          "session": "afternoon"
+        }
+      ],
+      "schedule_template_half_days": []
     },
     {
       "id": "attending-002",
@@ -624,9 +640,36 @@
         }
       ],
       "weekly_shift_targets": [],
-      "schedule_template_half_days": [],
-      "weekly_work_schedules": [],
-      "ad_hoc_work_half_days": []
+      "minimum_attending_clinic_days_per_week": 0,
+      "preferred_weekly_schedule_half_days": [],
+      "schedule_template_half_days": []
+    }
+  ],
+  "attending_schedules": [
+    {
+      "attending_id": "attending-004",
+      "weeks": [
+        {
+          "week": 11,
+          "half_days_override": 3,
+          "half_days": [
+            {
+              "work_type": "special_other",
+              "clinic_id": null,
+              "description": "Credentialing committee",
+              "weekday": "monday",
+              "session": "morning"
+            },
+            {
+              "work_type": "special_other",
+              "clinic_id": null,
+              "description": "Community board meeting",
+              "weekday": "thursday",
+              "session": "afternoon"
+            }
+          ]
+        }
+      ]
     }
   ],
   "color_scheme": {

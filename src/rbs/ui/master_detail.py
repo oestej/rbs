@@ -124,6 +124,30 @@ def empty_directory(*, icon: str, title: str, description: str) -> None:
         ui.label(description).classes("rbs-type-caption rbs-text-muted")
 
 
+def person_directory_item(
+    name: str,
+    summary: str,
+    *,
+    selected: bool,
+    on_click: Callable[[], None],
+    render_avatar: Callable[[], None],
+) -> None:
+    """Render the shared resident/attending directory row."""
+    from nicegui import ui
+
+    item_classes = f"rbs-person-directory-item {selected_class(selected)}".strip()
+    with ui.item(on_click=on_click).props("clickable v-ripple").classes(item_classes):
+        with ui.item_section().props("avatar"):
+            render_avatar()
+        with ui.item_section().classes("min-w-0"):
+            ui.item_label(name).classes("rbs-type-section-title")
+            ui.item_label(summary).props("caption").classes(
+                "rbs-person-directory-summary"
+            )
+        with ui.item_section().props("side"):
+            ui.icon("chevron_right").props("size=20px").classes("rbs-text-subtle")
+
+
 def detail_panel():
     from nicegui import ui
 

@@ -175,23 +175,15 @@ def _resident_list_item(
     selected_resident_id: str | None,
     on_select: SelectResident,
 ) -> None:
-    from nicegui import ui
-
-    item_classes = master_detail.selected_class(resident.id == selected_resident_id)
-    with (
-        ui.item(on_click=partial(on_select, resident.id))
-        .props("clickable v-ripple")
-        .classes(item_classes)
-    ):
-        with ui.item_section().props("avatar"):
-            _resident_avatar(resident.name)
-        with ui.item_section():
-            ui.item_label(resident.name).classes("rbs-type-section-title")
-            vacation_label = _vacation_week_count_label(len(resident.vacation_weeks))
-            day_label = _individual_day_count_label(len(resident.days_off))
-            ui.item_label(f"{vacation_label} · {day_label}").props("caption")
-        with ui.item_section().props("side"):
-            ui.icon("chevron_right").props("size=20px").classes("rbs-text-subtle")
+    vacation_label = _vacation_week_count_label(len(resident.vacation_weeks))
+    day_label = _individual_day_count_label(len(resident.days_off))
+    master_detail.person_directory_item(
+        resident.name,
+        f"{vacation_label} · {day_label}",
+        selected=resident.id == selected_resident_id,
+        on_click=partial(on_select, resident.id),
+        render_avatar=partial(_resident_avatar, resident.name),
+    )
 
 
 def _resident_detail_panel(

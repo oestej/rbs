@@ -1,5 +1,5 @@
 {
-  "schema_version": 9,
+  "schema_version": 10,
   "calendar_weeks": 52,
   "rotations": [
     {
@@ -2832,6 +2832,7 @@
       "sites": [],
       "preferred": false
     },
+    "academic_half_day_is_attending_admin_time": true,
     "notes": "Wednesday afternoon is academic half day except night float and away rotations. Maple clinic is Tue AM/PM, Thu AM/PM, and Fri AM with one attending per half-day. Overall allocation targets are 25% Maple and 75% Cedar. Each clinic derives its half-day resident maximum from its attending count and resident-to-attending ratio. Dedicated clinic weeks and overlay half-days mix PGY1/PGY2/PGY3 across clinic days."
   }
 }

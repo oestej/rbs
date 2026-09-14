@@ -24,14 +24,24 @@ locks, and the solved schedule. Tabs cover **Block Schedule**, **Clinic
 Schedule**, **Residents**, **Attendings**, **Rotations**, **Clinic**, and
 **Configuration** (annual calendar start, automatic locking, training levels,
 solver tuning). The Attendings tab records each attending's weekly half-day
-total, optional Fixed or Flexible weekly targets for each work category,
-independent schedule for every academic week, dated morning or afternoon ad hoc
-work, schedule dates, and day-level vacation ranges. Adding an attending starts
-with only their name, schedule dates, and weekly half-day total; the full tabbed
-editor holds targets, schedules, and availability tools. Weekly and template
-half-days use the same click-to-edit and drag-to-move grid as resident clinic
-schedules. A reusable schedule template can be copied into selected weeks, but
-it is not a live default and later template changes do not rewrite those weeks.
+total, optional Fixed or Flexible minimum/maximum ranges for each recurring work
+category, a minimum number of distinct Attending Clinic days in non-vacation
+weeks, an independent schedule for every academic week, schedule dates, and
+day-level vacation ranges. A preferred weekly schedule records soft placement
+preferences without creating work. Special/Other work is scheduled manually
+and can carry a free-text description. Adding an attending starts with only
+their name, schedule dates, and weekly half-day total; the full tabbed editor
+holds targets, preferences, schedules, and vacation tools. Weekly, preferred,
+and template half-days use the same click-to-edit and drag-to-move grid as
+resident clinic schedules. A week's half-day total can be overridden with its
+current assignment count, including for attendings whose usual total is zero.
+The program's effective academic half-day is automatically reserved as Admin
+Time for active attendings unless that option is disabled in Academic settings.
+A reusable schedule template can be copied into selected weeks, but it is not a
+live default and later template changes do not rewrite those weeks. Schedule
+checks distinguish required weekly totals, Fixed ranges, and Attending Clinic
+day minimums from Flexible ranges and preferred placements, while accounting
+for vacation and partial schedule-boundary weeks.
 Clinics can use their own configured capacity or derive resident capacity from
 attendings assigned to Precepting Clinic work.
 

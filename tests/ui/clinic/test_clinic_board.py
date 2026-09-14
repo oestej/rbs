@@ -3,6 +3,7 @@ from datetime import date, timedelta
 from rbs.catalog import sample_instance
 from rbs.models.attending import (
     Attending,
+    AttendingSchedule,
     AttendingWeeklyWorkSchedule,
     AttendingWorkHalfDay,
     AttendingWorkType,
@@ -247,7 +248,12 @@ def test_schedule_validation_uses_attending_managed_preceptor_capacity() -> None
             id="attending-001",
             name="Ada Lovelace",
             half_days_per_week=1,
-            weekly_work_schedules=[
+        ).model_dump(mode="json")
+    ]
+    raw["attending_schedules"] = [
+        AttendingSchedule(
+            attending_id="attending-001",
+            weeks=[
                 AttendingWeeklyWorkSchedule(
                     week=1,
                     half_days=[

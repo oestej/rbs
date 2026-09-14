@@ -10,10 +10,15 @@ descriptions.
 | Missing attending schedule boundary | academic year start; academic year end; Full academic year | unlimited; blank |
 | Attending time away | vacation; vacation range(s) | vacation weeks |
 | Actual attending work by academic week | week-by-week schedule; academic week; configured week(s) | recurring schedule; default schedule |
+| Soft attending placement pattern | preferred weekly schedule; preferred half-day(s) | default schedule; availability |
 | Reusable attending pattern applier | schedule template; Apply template | base schedule; live template |
-| Dated attending work replacing one scheduled slot | ad hoc work; ad hoc half-day(s) | special availability; extra shift(s) |
+| Attending half-day total used for one academic week | week override; Override; Use default | ad hoc; lock |
 | Attending half-day categories | Inpatient Service; Attending Clinic; Precepting Clinic; Admin Time; Special/Other | generic clinic time |
-| Attending category shift goal | weekly category target; shifts per week; Fixed; Flexible; No target | quota; limit |
+| Minimum distinct weekdays of an attending's own clinic | Attending Clinic day(s); Minimum Attending Clinic days per week | Clinic Day; clinic shift minimum |
+| Academic half-day attending rule | Reserve the academic half-day as Admin Time for attendings | attending availability |
+| Attending category shift goal | weekly category target; Minimum shifts per week; Maximum shifts per week; Fixed; Flexible; No target | quota; limit; Special/Other target |
+| Explanation of Special/Other attending work | Description | weekly target; generic note |
+| Attending schedule diagnostics | Schedule checks; error; warning | solver error; infeasible |
 | Source of resident clinic capacity | Capacity-managed; Attending-managed | automatic capacity; manual capacity |
 | Ranked elective choices | elective preferences | Elective Preference |
 | Dates when a clinic is closed | closure days; Add closure day | Holidays/Closure Days; Add closure |

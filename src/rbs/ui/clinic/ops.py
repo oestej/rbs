@@ -112,13 +112,13 @@ def remove_clinic(instance: SchedulerInput, clinic_id: str) -> SchedulerInput:
             assignment.work_type is AttendingWorkType.PRECEPTING_CLINIC
             and assignment.clinic_id == clinic_id
             for assignment in (
+                *attending.preferred_weekly_schedule_half_days,
                 *attending.schedule_template_half_days,
                 *(
                     half_day
-                    for schedule in attending.weekly_work_schedules
+                    for schedule in instance.attending_schedule_weeks(attending.id)
                     for half_day in schedule.half_days
                 ),
-                *attending.ad_hoc_work_half_days,
             )
         )
     ]
@@ -316,6 +316,8 @@ def replace_academic_half_day(
     instance: SchedulerInput,
     weekday: Weekday | None,
     session: Session | None,
+    *,
+    academic_half_day_is_attending_admin_time: bool | None = None,
 ) -> SchedulerInput:
     """Set the system-wide academic half-day, or clear it with ``None``.
 
@@ -330,6 +332,10 @@ def replace_academic_half_day(
         "session": session.value if session is not None else None,
         "sites": [],
     }
+    if academic_half_day_is_attending_admin_time is not None:
+        raw["clinic_policy"]["academic_half_day_is_attending_admin_time"] = bool(
+            academic_half_day_is_attending_admin_time
+        )
     return SchedulerInput.from_payload(raw)
 
 

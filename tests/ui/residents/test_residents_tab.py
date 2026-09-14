@@ -317,6 +317,17 @@ def test_resident_directory_owns_the_new_resident_action() -> None:
     master_split = next(
         element for element in created if "rbs-master-split" in getattr(element, "_classes", [])
     )
+    person_items = [
+        element
+        for element in created
+        if element.__class__.__name__ == "Item"
+        and "rbs-person-directory-item" in getattr(element, "_classes", [])
+    ]
+    person_summaries = [
+        element
+        for element in created
+        if "rbs-person-directory-summary" in getattr(element, "_classes", [])
+    ]
 
     assert "Residents" in labels
     assert any("rbs-master-page" in getattr(element, "_classes", []) for element in created)
@@ -326,6 +337,8 @@ def test_resident_directory_owns_the_new_resident_action() -> None:
     assert "items-stretch" in master_split._classes
     assert "items-start" not in master_split._classes
     assert "rbs-master-no-selection" in master_split._classes
+    assert len(person_items) == len(instance.residents)
+    assert len(person_summaries) == len(instance.residents)
 
 
 def test_new_resident_form_autofocuses_full_name_and_hides_time_off_and_clinic(

@@ -161,12 +161,6 @@ def rebase_academic_year(instance: SchedulerInput, value: str) -> SchedulerInput
                     )
                     for vacation in attending.vacation_ranges
                 ],
-                "ad_hoc_work_half_days": [
-                    half_day.model_copy(
-                        update={"date": _shift_year(half_day.date, year_delta)}
-                    )
-                    for half_day in attending.ad_hoc_work_half_days
-                ],
             }
         )
         for attending in instance.attendings
@@ -248,8 +242,6 @@ def start_new_academic_year(instance: SchedulerInput, value: str) -> SchedulerIn
             schedule_start_date=None,
             schedule_end_date=None,
             vacation_ranges=[],
-            weekly_work_schedules=[],
-            ad_hoc_work_half_days=[],
         )
         for attending in instance.attendings
     ]
@@ -269,6 +261,7 @@ def start_new_academic_year(instance: SchedulerInput, value: str) -> SchedulerIn
         calendar=calendar,
         residents=residents,
         attendings=attendings,
+        attending_schedules=[],
         clinic_policy=clinic_policy,
         academic_half_day_overrides=[],
         locks=[],

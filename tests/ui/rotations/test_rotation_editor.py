@@ -7,12 +7,14 @@ from pydantic import ValidationError
 from rbs.catalog import blank_instance, sample_instance
 from rbs.models.attending import (
     Attending,
+    AttendingSchedule,
     AttendingWeeklyWorkSchedule,
     AttendingWorkHalfDay,
     AttendingWorkType,
 )
 from rbs.models.clinic import ClinicStaffingMode
 from rbs.models.enums import WEEKDAYS_MF, RotationKind, Session, Weekday
+from rbs.models.instance import SchedulerInput
 from rbs.models.rotation import ALL_CLINIC_SITES, ClinicRule, Rotation
 from rbs.solver.planning import expand_occurrences
 from rbs.ui.case_ops import (
@@ -915,6 +917,14 @@ def test_academic_tab_updates_the_system_wide_half_day() -> None:
     updated = replace_academic_half_day(instance, Weekday.THURSDAY, Session.MORNING)
     assert updated.clinic_policy.academic.weekday is Weekday.THURSDAY
     assert updated.clinic_policy.academic.session is Session.MORNING
+    assert updated.clinic_policy.academic_half_day_is_attending_admin_time is True
+    disabled = replace_academic_half_day(
+        instance,
+        Weekday.THURSDAY,
+        Session.MORNING,
+        academic_half_day_is_attending_admin_time=False,
+    )
+    assert disabled.clinic_policy.academic_half_day_is_attending_admin_time is False
 
     before = set(ui.context.client.elements)
     render_rotations_tab(
@@ -953,12 +963,62 @@ def test_academic_tab_updates_the_system_wide_half_day() -> None:
         for element in created
     )
     assert any(getattr(element, "_text", None) == "No overrides." for element in created)
+    switches = {
+        getattr(element, "_text", None): element
+        for element in created
+        if element.__class__.__name__ == "Switch"
+    }
+    assert switches[
+        "Reserve the academic half-day as Admin Time for attendings"
+    ].value is True
     labels = {getattr(element, "_text", None) for element in created}
     assert "Default academic half-day" in labels
     assert "Academic half-day — specific-date overrides" in labels
     assert "Academic Half Day" not in labels
     assert "Set the weekly default and any one-week changes." not in labels
     assert "Changes require a new solve." not in labels
+
+
+def test_academic_admin_time_reservation_can_be_disabled_with_the_default() -> None:
+    from nicegui import ui
+
+    instance = blank_instance()
+    saved: list[SchedulerInput] = []
+    before = set(ui.context.client.elements)
+    render_rotations_tab(
+        instance,
+        selected_rotation_id=None,
+        on_select=lambda _rotation_id: None,
+        on_save=lambda updated, _rotation_id: saved.append(updated),
+        active_section="academic_configuration",
+    )
+    created = [
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+    attending_admin = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Switch"
+        and getattr(element, "_text", None)
+        == "Reserve the academic half-day as Admin Time for attendings"
+    )
+    attending_admin.value = False
+    save = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Save default"
+    )
+    next(
+        listener
+        for listener in save._event_listeners.values()
+        if listener.type == "click"
+    ).handler(None)
+
+    assert len(saved) == 1
+    assert saved[0].clinic_policy.academic_half_day_is_attending_admin_time is False
 
 
 def test_fmed_tab_starts_directly_with_its_rotation_cards() -> None:
@@ -1860,6 +1920,11 @@ def test_clinic_editor_switches_staffing_source_without_discarding_capacity() ->
     )
 
     assert staffing.value == ClinicStaffingMode.CAPACITY_MANAGED.value
+    assert any(
+        getattr(element, "_text", None)
+        == "0 configured preceptor shifts · 0 in the template"
+        for element in created
+    )
     staffing.value = ClinicStaffingMode.ATTENDING_MANAGED.value
     next(iter(save._event_listeners.values())).handler(None)
 
@@ -1876,19 +1941,35 @@ def test_remove_clinic_protects_attending_precepting_assignments() -> None:
         id="attending-100",
         name="Ada Lovelace",
         half_days_per_week=1,
-        weekly_work_schedules=[
-            AttendingWeeklyWorkSchedule(
-                week=1,
-                half_days=[AttendingWorkHalfDay(
+        preferred_weekly_schedule_half_days=[
+            AttendingWorkHalfDay(
                 weekday=Weekday.MONDAY,
                 session=Session.MORNING,
                 work_type=AttendingWorkType.PRECEPTING_CLINIC,
                 clinic_id="maple",
-                )],
             )
         ],
     )
-    configured = instance.revised(attendings=[*instance.attendings, attending])
+    schedule = AttendingSchedule(
+        attending_id=attending.id,
+        weeks=[
+            AttendingWeeklyWorkSchedule(
+                week=1,
+                half_days=[
+                    AttendingWorkHalfDay(
+                        weekday=Weekday.MONDAY,
+                        session=Session.MORNING,
+                        work_type=AttendingWorkType.PRECEPTING_CLINIC,
+                        clinic_id="maple",
+                    )
+                ],
+            )
+        ],
+    )
+    configured = instance.revised(
+        attendings=[*instance.attendings, attending],
+        attending_schedules=[*instance.attending_schedules, schedule],
+    )
 
     with pytest.raises(ValueError, match="reassign Precepting Clinic work.*Ada Lovelace"):
         remove_clinic(configured, "maple")

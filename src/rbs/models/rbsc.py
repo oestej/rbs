@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_serializer, model_validator
@@ -22,8 +22,17 @@ RBSC_FORMAT = "rbsc"
 # automatic-locking state) by design; import restores neutral defaults. A Save
 # As deliberately clears the bundled-sample flag before producing the user's
 # document.
-RBSC_SCHEMA_VERSION = 11
+RBSC_SCHEMA_VERSION = 12
 _AUTOMATIC_LOCK_SOURCE = "through_today"
+_WEEKDAYS = (
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+)
 
 
 def portable_case_payload(case: SchedulingCase | dict[str, Any]) -> dict[str, Any]:
@@ -102,41 +111,135 @@ def _hydrate_portable_preferences(value: object) -> object:
 def _migrate_portable_state(value: object) -> object:
     """Upgrade path for documents written by older schema versions.
 
-    Version 11 adds attending weekly category targets, typed schedule templates,
-    independent weekly schedules, dated work, and a clinic staffing source.
-    Existing version 10 clinics remain capacity-managed, targets remain unset,
-    and existing dated work remains Special/Other.
+    Version 12 folds dated attending shifts into their academic-week schedules,
+    changes recurring category targets from one count to a minimum/maximum
+    range, adds attending clinic-day and preferred-schedule configuration, and
+    allows descriptions on Special/Other work. Accepted attending schedules
+    move out of roster configuration into their own case-level collection.
+    Each migrated week uses its resulting assignment count as its half-day
+    override. Older shapes remain unsupported.
     """
-    if not isinstance(value, dict) or value.get("schema_version") != 10:
+    if not isinstance(value, dict) or value.get("schema_version") != 11:
         return value
     migrated = deepcopy(value)
     migrated["schema_version"] = RBSC_SCHEMA_VERSION
-    for catalog_record in migrated.get("catalogs", []):
-        if not isinstance(catalog_record, dict):
-            continue
-        catalog = catalog_record.get("catalog")
-        if not isinstance(catalog, dict):
-            continue
-        policy = catalog.get("clinic_policy")
-        if isinstance(policy, dict):
-            for site in policy.get("sites", []):
-                if isinstance(site, dict):
-                    site.setdefault("staffing_mode", "capacity_managed")
     for workspace in migrated.get("workspaces", []):
         if not isinstance(workspace, dict):
             continue
         case = workspace.get("case")
-        if isinstance(case, dict):
-            for attending in case.get("attendings", []):
-                if not isinstance(attending, dict):
+        if not isinstance(case, dict):
+            continue
+        calendar = case.get("calendar")
+        first_week_start = (
+            calendar.get("first_week_start") if isinstance(calendar, dict) else None
+        )
+        migrated_schedules = case.setdefault("attending_schedules", [])
+        if not isinstance(migrated_schedules, list):
+            continue
+        for attending in case.get("attendings", []):
+            if not isinstance(attending, dict):
+                continue
+            attending.setdefault("minimum_attending_clinic_days_per_week", 0)
+            attending.setdefault("preferred_weekly_schedule_half_days", [])
+            targets = attending.get("weekly_shift_targets", [])
+            if isinstance(targets, list):
+                attending["weekly_shift_targets"] = [
+                    target
+                    for target in targets
+                    if not (
+                        isinstance(target, dict)
+                        and target.get("work_type") == "special_other"
+                    )
+                ]
+                for target in attending["weekly_shift_targets"]:
+                    if not isinstance(target, dict) or "shifts_per_week" not in target:
+                        continue
+                    shifts = target.pop("shifts_per_week")
+                    target["minimum_shifts_per_week"] = shifts
+                    target["maximum_shifts_per_week"] = shifts
+            schedules = attending.pop("weekly_work_schedules", [])
+            if not isinstance(schedules, list):
+                continue
+            schedules_by_week: dict[int, dict[str, Any]] = {}
+            for schedule in schedules:
+                if not isinstance(schedule, dict):
                     continue
-                attending.setdefault("weekly_shift_targets", [])
-                attending.setdefault("schedule_template_half_days", [])
-                attending.setdefault("weekly_work_schedules", [])
-                for half_day in attending.get("ad_hoc_work_half_days", []):
-                    if isinstance(half_day, dict):
-                        half_day.setdefault("work_type", "special_other")
-                        half_day.setdefault("clinic_id", None)
+                schedule.setdefault("half_days_override", None)
+                week = schedule.get("week")
+                if isinstance(week, int):
+                    schedules_by_week[week] = schedule
+
+            dated_shifts = attending.pop("ad_hoc_work_half_days", [])
+            if not isinstance(dated_shifts, list):
+                raise ValueError("version 11 attending shifts must be a list")
+            touched_weeks: set[int] = set()
+            if dated_shifts:
+                try:
+                    first_day = date.fromisoformat(str(first_week_start))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        "version 11 attending shifts require a valid academic calendar"
+                    ) from exc
+                for dated_shift in dated_shifts:
+                    if not isinstance(dated_shift, dict):
+                        raise ValueError(
+                            "version 11 attending shifts must contain objects"
+                        )
+                    try:
+                        calendar_day = date.fromisoformat(
+                            str(dated_shift.get("date"))
+                        )
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(
+                            "version 11 attending shifts require valid dates"
+                        ) from exc
+                    week = (calendar_day - first_day).days // 7 + 1
+                    session = dated_shift.get("session")
+                    schedule = schedules_by_week.get(week)
+                    if schedule is None:
+                        schedule = {
+                            "week": week,
+                            "half_days_override": None,
+                            "half_days": [],
+                        }
+                        schedules.append(schedule)
+                        schedules_by_week[week] = schedule
+                    half_days = schedule.setdefault("half_days", [])
+                    if not isinstance(half_days, list):
+                        continue
+                    assignment = {
+                        "work_type": dated_shift.get(
+                            "work_type", "special_other"
+                        ),
+                        "clinic_id": dated_shift.get("clinic_id"),
+                        "description": None,
+                        "weekday": _WEEKDAYS[calendar_day.weekday()],
+                        "session": session,
+                    }
+                    half_days[:] = [
+                        half_day
+                        for half_day in half_days
+                        if not (
+                            isinstance(half_day, dict)
+                            and half_day.get("weekday") == assignment["weekday"]
+                            and half_day.get("session") == session
+                        )
+                    ]
+                    half_days.append(assignment)
+                    touched_weeks.add(week)
+
+            for week in touched_weeks:
+                schedule = schedules_by_week[week]
+                half_days = schedule.get("half_days")
+                if isinstance(half_days, list):
+                    schedule["half_days_override"] = len(half_days)
+            if schedules:
+                migrated_schedules.append(
+                    {
+                        "attending_id": attending.get("id"),
+                        "weeks": schedules,
+                    }
+                )
     return migrated
 
 
@@ -218,7 +321,7 @@ class RBSCState(StrictModel):
     """The complete portable state of one RBS SQLite database."""
 
     format: Literal["rbsc"] = RBSC_FORMAT
-    schema_version: Literal[11] = RBSC_SCHEMA_VERSION
+    schema_version: Literal[12] = RBSC_SCHEMA_VERSION
     exported_at: str
     current_workspace_id: int | None = Field(default=None, ge=1)
     app_metadata: dict[str, str] = Field(default_factory=dict)

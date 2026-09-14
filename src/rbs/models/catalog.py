@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 class ConstraintCatalog(StrictModel):
     """Versioned block constraints that can be imported and stored independently."""
 
-    schema_version: Literal[9] = 9
+    schema_version: Literal[10] = 10
     calendar_weeks: int = Field(default=52, ge=1)
     rotations: list[Rotation]
     requirements: list[PGYCurriculum] = Field(min_length=1)
@@ -36,18 +36,16 @@ class ConstraintCatalog(StrictModel):
     def migrate_legacy(cls, value: Any) -> Any:
         """Upgrade path for catalogs written by older schema versions.
 
-        Version 9 adds the clinic staffing source. Version 8 clinics used
-        their configured capacity schedule, which remains the default.
+        Version 10 makes the attending Admin Time behavior for the academic
+        half-day explicit. Version 9 programs receive the enabled default.
         """
-        if not isinstance(value, dict) or value.get("schema_version") != 8:
+        if not isinstance(value, dict) or value.get("schema_version") != 9:
             return value
         migrated = deepcopy(value)
-        migrated["schema_version"] = 9
+        migrated["schema_version"] = 10
         policy = migrated.get("clinic_policy")
         if isinstance(policy, dict):
-            for site in policy.get("sites", []):
-                if isinstance(site, dict):
-                    site.setdefault("staffing_mode", "capacity_managed")
+            policy.setdefault("academic_half_day_is_attending_admin_time", True)
         return migrated
 
     @model_validator(mode="after")
@@ -71,7 +69,7 @@ class ConstraintCatalog(StrictModel):
     @classmethod
     def from_instance(cls, instance: SolverProblem) -> ConstraintCatalog:
         return cls(
-            schema_version=9,
+            schema_version=10,
             calendar_weeks=instance.calendar.weeks,
             rotations=instance.rotations,
             requirements=instance.requirements,

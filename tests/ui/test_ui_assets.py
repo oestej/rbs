@@ -200,6 +200,7 @@ def test_schedule_styles_live_in_packaged_css_assets() -> None:
     assert ".is-selected-day" in app_css
     assert ".rbs-academic-override-row" in app_css
     assert ".rbs-academic-override-empty" in app_css
+    assert ".rbs-person-directory-summary" in app_css
     assert ".rbs-resident-summary" in app_css
     assert ".rbs-attending-summary" in app_css
     assert ".rbs-attending-boundary-card.uses-academic-boundary" in app_css

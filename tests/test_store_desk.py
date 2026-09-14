@@ -21,6 +21,18 @@ def _workspace(store: Store, name: str = "AY 2026-2027"):
     return store.create(name, sample_instance())
 
 
+def _move_attending_schedules_to_v11(case: dict) -> None:
+    """Restore the nested attending schedule shape used by RBSC v11."""
+    weeks_by_attending = {
+        schedule["attending_id"]: schedule["weeks"]
+        for schedule in case.pop("attending_schedules", [])
+    }
+    for attending in case["attendings"]:
+        attending["weekly_work_schedules"] = weeks_by_attending.get(
+            attending["id"], []
+        )
+
+
 # ---- download tracking -------------------------------------------------
 
 
@@ -225,41 +237,108 @@ def test_importing_a_file_with_no_workspaces_is_refused(tmp_path) -> None:
         _store(tmp_path).import_workspace_rbsc(payload)
 
 
-def test_v10_file_migrates_attending_schedules_and_clinic_staffing(tmp_path) -> None:
+def test_v11_file_migrates_attending_work_and_target_ranges(tmp_path) -> None:
     source = _store(tmp_path / "a")
     payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
-    payload["schema_version"] = 10
-    attending = payload["workspaces"][0]["case"]["attendings"][0]
-    attending.pop("weekly_shift_targets")
-    attending.pop("schedule_template_half_days")
-    attending.pop("weekly_work_schedules")
-    for half_day in attending["ad_hoc_work_half_days"]:
-        half_day.pop("work_type")
-        half_day.pop("clinic_id")
-    for catalog in payload["catalogs"]:
-        catalog["catalog"]["schema_version"] = 8
-        for site in catalog["catalog"]["clinic_policy"]["sites"]:
-            site.pop("staffing_mode")
+    payload["schema_version"] = 11
+    for catalog_record in payload["catalogs"]:
+        catalog_record["catalog"]["schema_version"] = 9
+        catalog_record["catalog"]["clinic_policy"].pop(
+            "academic_half_day_is_attending_admin_time"
+        )
+    case = payload["workspaces"][0]["case"]
+    _move_attending_schedules_to_v11(case)
+    attendings = case["attendings"]
+    for attending in attendings:
+        attending.pop("minimum_attending_clinic_days_per_week")
+        attending.pop("preferred_weekly_schedule_half_days")
+        for schedule in attending["weekly_work_schedules"]:
+            schedule.pop("half_days_override")
+        attending["ad_hoc_work_half_days"] = []
+    target_attending = next(item for item in attendings if item["half_days_per_week"] == 10)
+    target_attending["weekly_shift_targets"] = [
+        {
+            "work_type": "precepting_clinic",
+            "shifts_per_week": 3,
+            "mode": "fixed",
+        },
+        {
+            "work_type": "special_other",
+            "shifts_per_week": 1,
+            "mode": "flexible",
+        },
+    ]
+    attending = next(item for item in attendings if item["half_days_per_week"] == 0)
+    attending["weekly_work_schedules"] = []
+    attending["ad_hoc_work_half_days"] = [
+        {
+            "date": "2026-09-07",
+            "session": "morning",
+            "work_type": "admin_time",
+            "clinic_id": None,
+        },
+        {
+            "date": "2026-09-10",
+            "session": "afternoon",
+            "work_type": "special_other",
+            "clinic_id": None,
+        },
+    ]
 
     target = _store(tmp_path / "b")
     imported = target.import_workspace_rbsc(json.dumps(payload))[0]
 
-    assert not imported.instance.attendings[0].weekly_shift_targets
-    assert not imported.instance.attendings[0].schedule_template_half_days
-    assert not imported.instance.attendings[0].weekly_work_schedules
-    assert all(
-        half_day.work_type == "special_other"
-        for half_day in imported.instance.attendings[0].ad_hoc_work_half_days
+    migrated = next(
+        item for item in imported.instance.attendings if item.id == attending["id"]
     )
+    migrated_schedule = imported.instance.attending_schedule_for(migrated.id)
+    assert migrated_schedule is not None
+    assert len(migrated_schedule.weeks) == 1
+    schedule = migrated_schedule.weeks[0]
+    assert schedule.week == 11
+    assert schedule.half_days_override == 2
+    assert [
+        (
+            half_day.weekday.value,
+            half_day.session.value,
+            half_day.work_type.value,
+            half_day.description,
+        )
+        for half_day in schedule.half_days
+    ] == [
+        ("monday", "morning", "admin_time", None),
+        ("thursday", "afternoon", "special_other", None),
+    ]
+    migrated_targets = next(
+        item
+        for item in imported.instance.attendings
+        if item.id == target_attending["id"]
+    ).weekly_shift_targets
+    assert len(migrated_targets) == 1
+    assert migrated_targets[0].work_type.value == "precepting_clinic"
+    assert migrated_targets[0].minimum_shifts_per_week == 3
+    assert migrated_targets[0].maximum_shifts_per_week == 3
     assert all(
-        site.staffing_mode == "capacity_managed"
-        for site in imported.instance.clinic_policy.sites
+        item.minimum_attending_clinic_days_per_week == 0
+        and not item.preferred_weekly_schedule_half_days
+        for item in imported.instance.attendings
     )
+    assert imported.instance.clinic_policy.academic_half_day_is_attending_admin_time is True
     reexported = json.loads(target.export_workspace_rbsc(imported.id))
-    assert reexported["schema_version"] == 11
+    assert reexported["schema_version"] == 12
+    assert reexported["catalogs"][0]["catalog"]["schema_version"] == 10
+    assert all(
+        "ad_hoc_work_half_days" not in item
+        for item in reexported["workspaces"][0]["case"]["attendings"]
+    )
+    assert all(
+        "weekly_work_schedules" not in item
+        for item in reexported["workspaces"][0]["case"]["attendings"]
+    )
+    assert reexported["workspaces"][0]["case"]["attending_schedules"]
 
 
-def test_v10_attending_without_weekly_half_days_uses_ten(tmp_path) -> None:
+def test_attending_without_weekly_half_days_uses_ten(tmp_path) -> None:
     source = _store(tmp_path / "a")
     payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
     payload["workspaces"][0]["case"]["attendings"][0].pop("half_days_per_week")
@@ -269,25 +348,41 @@ def test_v10_attending_without_weekly_half_days_uses_ten(tmp_path) -> None:
     assert imported.instance.attendings[0].half_days_per_week == 10
 
 
-def test_v10_attending_without_ad_hoc_work_uses_an_empty_list(tmp_path) -> None:
+def test_v11_attending_without_dated_work_uses_weekly_defaults(tmp_path) -> None:
     source = _store(tmp_path / "a")
     payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
-    for attending in payload["workspaces"][0]["case"]["attendings"]:
-        attending.pop("ad_hoc_work_half_days")
+    payload["schema_version"] = 11
+    for catalog_record in payload["catalogs"]:
+        catalog_record["catalog"]["schema_version"] = 9
+        catalog_record["catalog"]["clinic_policy"].pop(
+            "academic_half_day_is_attending_admin_time"
+        )
+    case = payload["workspaces"][0]["case"]
+    _move_attending_schedules_to_v11(case)
+    for attending in case["attendings"]:
+        attending.pop("minimum_attending_clinic_days_per_week")
+        attending.pop("preferred_weekly_schedule_half_days")
+        attending["half_days_per_week"] = 10
+        for schedule in attending["weekly_work_schedules"]:
+            schedule.pop("half_days_override")
 
     imported = _store(tmp_path / "b").import_workspace_rbsc(json.dumps(payload))[0]
 
-    assert all(not attending.ad_hoc_work_half_days for attending in imported.instance.attendings)
+    assert all(
+        week.half_days_override is None
+        for schedule in imported.instance.attending_schedules
+        for week in schedule.weeks
+    )
 
 
-def test_pre_v10_files_are_rejected(tmp_path) -> None:
+def test_pre_v11_files_are_rejected(tmp_path) -> None:
     from pydantic import ValidationError
 
     source = _store(tmp_path / "a")
     payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
     payload["schema_version"] = 1
 
-    with pytest.raises(ValidationError, match="Input should be 11"):
+    with pytest.raises(ValidationError, match="Input should be 12"):
         _store(tmp_path / "b").import_workspace_rbsc(json.dumps(payload))
 
 
@@ -298,7 +393,7 @@ def test_v8_files_are_rejected(tmp_path) -> None:
     payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
     payload["schema_version"] = 8
 
-    with pytest.raises(ValidationError, match="Input should be 11"):
+    with pytest.raises(ValidationError, match="Input should be 12"):
         _store(tmp_path / "b").import_workspace_rbsc(json.dumps(payload))
 
 
@@ -311,7 +406,7 @@ def test_v7_files_with_v6_catalogs_are_rejected(tmp_path) -> None:
     for record in payload["catalogs"]:
         record["catalog"]["schema_version"] = 6
 
-    with pytest.raises(ValidationError, match="Input should be 11"):
+    with pytest.raises(ValidationError, match="Input should be 12"):
         _store(tmp_path / "b").import_workspace_rbsc(json.dumps(payload))
 
 

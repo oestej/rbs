@@ -16,8 +16,11 @@ from rbs.academic_year import (
 )
 from rbs.models.attending import (
     Attending,
-    AttendingAdHocWorkHalfDay,
+    AttendingSchedule,
     AttendingVacation,
+    AttendingWeeklyWorkSchedule,
+    AttendingWorkHalfDay,
+    AttendingWorkType,
 )
 from rbs.models.catalog import ConstraintCatalog
 from rbs.models.clinic import (
@@ -189,6 +192,30 @@ def sample_attendings(first_week_start: date) -> list[Attending]:
         Attending(
             id="attending-001",
             name="Maya Singh",
+            minimum_attending_clinic_days_per_week=2,
+            preferred_weekly_schedule_half_days=[
+                AttendingWorkHalfDay(
+                    weekday=Weekday.MONDAY,
+                    session=Session.MORNING,
+                    work_type=AttendingWorkType.ATTENDING_CLINIC,
+                ),
+                AttendingWorkHalfDay(
+                    weekday=Weekday.MONDAY,
+                    session=Session.AFTERNOON,
+                    work_type=AttendingWorkType.ATTENDING_CLINIC,
+                ),
+                AttendingWorkHalfDay(
+                    weekday=Weekday.THURSDAY,
+                    session=Session.MORNING,
+                    work_type=AttendingWorkType.ATTENDING_CLINIC,
+                ),
+                AttendingWorkHalfDay(
+                    weekday=Weekday.FRIDAY,
+                    session=Session.AFTERNOON,
+                    work_type=AttendingWorkType.PRECEPTING_CLINIC,
+                    clinic_id="maple",
+                ),
+            ],
             vacation_ranges=[
                 AttendingVacation(
                     start_date=first_week_start + timedelta(days=44),
@@ -228,14 +255,33 @@ def sample_attendings(first_week_start: date) -> list[Attending]:
             half_days_per_week=0,
             schedule_start_date=first_week_start + timedelta(days=61),
             schedule_end_date=last_day - timedelta(days=42),
-            ad_hoc_work_half_days=[
-                AttendingAdHocWorkHalfDay(
-                    date=first_week_start + timedelta(days=70),
-                    session=Session.MORNING,
-                ),
-                AttendingAdHocWorkHalfDay(
-                    date=first_week_start + timedelta(days=73),
-                    session=Session.AFTERNOON,
+        ),
+    ]
+
+
+def sample_attending_schedules() -> list[AttendingSchedule]:
+    """Create illustrative accepted work without mixing it into roster inputs."""
+    return [
+        AttendingSchedule(
+            attending_id="attending-004",
+            weeks=[
+                AttendingWeeklyWorkSchedule(
+                    week=11,
+                    # Two week-specific assignments plus the automatically
+                    # reserved academic Admin Time half-day.
+                    half_days_override=3,
+                    half_days=[
+                        AttendingWorkHalfDay(
+                            weekday=Weekday.MONDAY,
+                            session=Session.MORNING,
+                            description="Credentialing committee",
+                        ),
+                        AttendingWorkHalfDay(
+                            weekday=Weekday.THURSDAY,
+                            session=Session.AFTERNOON,
+                            description="Community board meeting",
+                        ),
+                    ],
                 ),
             ],
         ),
@@ -437,6 +483,7 @@ def sample_instance(
         ),
         residents=residents,
         attendings=sample_attendings(first_week_start),
+        attending_schedules=sample_attending_schedules(),
         rotations=constraints.rotations,
         requirements=constraints.requirements,
         rotation_groups=constraints.rotation_groups,

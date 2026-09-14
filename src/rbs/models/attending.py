@@ -1,8 +1,10 @@
-"""Attending availability configured for one academic-year workspace."""
+"""Attending scheduling configured for one academic-year workspace."""
 
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import StrEnum
 
@@ -14,6 +16,8 @@ from rbs.models.enums import Session, Weekday
 
 DEFAULT_ATTENDING_HALF_DAYS_PER_WEEK = 10
 MAX_ATTENDING_HALF_DAYS_PER_WEEK = 14
+MAX_ATTENDING_CLINIC_DAYS_PER_WEEK = 7
+ATTENDING_WORK_DESCRIPTION_MAX_LENGTH = 120
 
 _SESSION_ORDER = {
     Session.MORNING: 0,
@@ -33,34 +37,79 @@ class AttendingWorkType(StrEnum):
     SPECIAL_OTHER = "special_other"
 
 
+ATTENDING_WEEKLY_TARGET_WORK_TYPES = (
+    AttendingWorkType.INPATIENT_SERVICE,
+    AttendingWorkType.ATTENDING_CLINIC,
+    AttendingWorkType.PRECEPTING_CLINIC,
+    AttendingWorkType.ADMIN_TIME,
+)
+ATTENDING_PREFERRED_WORK_TYPES = ATTENDING_WEEKLY_TARGET_WORK_TYPES
+
 _WORK_TYPE_ORDER = {
     work_type: index for index, work_type in enumerate(AttendingWorkType)
 }
 
 
 class AttendingWeeklyTargetMode(StrEnum):
-    """Whether a category target is required or may vary."""
+    """Whether a category range is required or preferred."""
 
     FIXED = "fixed"
     FLEXIBLE = "flexible"
 
 
 class AttendingWeeklyShiftTarget(StrictModel):
-    """One attending's desired weekly count for a work category."""
+    """One attending's required or preferred weekly range for a work category."""
 
     work_type: AttendingWorkType
-    shifts_per_week: int = Field(
+    minimum_shifts_per_week: int = Field(
+        ge=0,
+        le=MAX_ATTENDING_HALF_DAYS_PER_WEEK,
+    )
+    maximum_shifts_per_week: int = Field(
         ge=0,
         le=MAX_ATTENDING_HALF_DAYS_PER_WEEK,
     )
     mode: AttendingWeeklyTargetMode = AttendingWeeklyTargetMode.FLEXIBLE
 
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_single_count(cls, value: object) -> object:
+        """Treat the former single count as an exact minimum/maximum range."""
+        if not isinstance(value, dict) or "shifts_per_week" not in value:
+            return value
+        if (
+            "minimum_shifts_per_week" in value
+            or "maximum_shifts_per_week" in value
+        ):
+            return value
+        migrated = dict(value)
+        shifts = migrated.pop("shifts_per_week")
+        migrated["minimum_shifts_per_week"] = shifts
+        migrated["maximum_shifts_per_week"] = shifts
+        return migrated
+
+    @model_validator(mode="after")
+    def valid_target_range(self) -> AttendingWeeklyShiftTarget:
+        if self.work_type is AttendingWorkType.SPECIAL_OTHER:
+            raise ValueError(
+                "Special/Other work is scheduled manually and cannot have a weekly target"
+            )
+        if self.maximum_shifts_per_week < self.minimum_shifts_per_week:
+            raise ValueError(
+                "minimum shifts per week cannot exceed maximum shifts per week"
+            )
+        return self
+
 
 class AttendingWorkAssignment(StrictModel):
-    """Shared typed assignment fields for weekday-based and dated work."""
+    """Shared typed assignment fields for attending work."""
 
     work_type: AttendingWorkType = AttendingWorkType.SPECIAL_OTHER
     clinic_id: str | None = None
+    description: str | None = Field(
+        default=None,
+        max_length=ATTENDING_WORK_DESCRIPTION_MAX_LENGTH,
+    )
 
     @field_validator("clinic_id")
     @classmethod
@@ -72,6 +121,14 @@ class AttendingWorkAssignment(StrictModel):
             raise ValueError("attending work must select one configured clinic")
         return normalized
 
+    @field_validator("description", mode="before")
+    @classmethod
+    def normalize_description(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        return normalized or None
+
     @model_validator(mode="after")
     def clinic_matches_work_type(self) -> AttendingWorkAssignment:
         if self.work_type is AttendingWorkType.PRECEPTING_CLINIC:
@@ -79,6 +136,11 @@ class AttendingWorkAssignment(StrictModel):
                 raise ValueError("Precepting Clinic work must select a clinic")
         elif self.clinic_id is not None:
             raise ValueError("only Precepting Clinic work can select a clinic")
+        if (
+            self.work_type is not AttendingWorkType.SPECIAL_OTHER
+            and self.description is not None
+        ):
+            raise ValueError("only Special/Other work can have a description")
         return self
 
 
@@ -110,6 +172,12 @@ class AttendingWeeklyWorkSchedule(StrictModel):
     """The complete work schedule for one one-based academic week."""
 
     week: int = Field(ge=1)
+    half_days_override: int | None = Field(
+        default=None,
+        ge=0,
+        le=MAX_ATTENDING_HALF_DAYS_PER_WEEK,
+        description="Optional half-day total used only for this academic week.",
+    )
     half_days: list[AttendingWorkHalfDay] = Field(default_factory=list)
 
     @field_validator("half_days")
@@ -120,12 +188,45 @@ class AttendingWeeklyWorkSchedule(StrictModel):
     ) -> list[AttendingWorkHalfDay]:
         return _normalized_weekday_half_days(half_days, label="weekly work")
 
+    def effective_half_days(self, default: int) -> int:
+        """Return this week's configured total, falling back to the attending default."""
+        return self.half_days_override if self.half_days_override is not None else default
 
-class AttendingAdHocWorkHalfDay(AttendingWorkAssignment):
-    """One dated half-day replacing the attending's scheduled-week assignment."""
 
-    date: date
-    session: Session
+class AttendingSchedule(StrictModel):
+    """Accepted week-by-week work for one attending.
+
+    The schedule is deliberately separate from :class:`Attending`, which holds
+    scheduling inputs such as dates, targets, preferences, and templates. That
+    separation lets a future planner replace a schedule only after producing a
+    valid result, without overwriting the configuration it planned from.
+    """
+
+    attending_id: str
+    weeks: list[AttendingWeeklyWorkSchedule] = Field(default_factory=list)
+
+    @field_validator("attending_id")
+    @classmethod
+    def attending_reference_is_not_blank(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("attending schedule must reference an attending")
+        return normalized
+
+    @field_validator("weeks")
+    @classmethod
+    def weeks_are_distinct_and_ordered(
+        cls,
+        schedules: list[AttendingWeeklyWorkSchedule],
+    ) -> list[AttendingWeeklyWorkSchedule]:
+        weeks = [schedule.week for schedule in schedules]
+        if len(weeks) != len(set(weeks)):
+            raise ValueError("attending schedule must use unique academic weeks")
+        return sorted(schedules, key=lambda schedule: schedule.week)
+
+    def schedule_for_week(self, week: int) -> AttendingWeeklyWorkSchedule | None:
+        """Return the independently accepted schedule for one academic week."""
+        return next((schedule for schedule in self.weeks if schedule.week == week), None)
 
 
 class AttendingVacation(StrictModel):
@@ -166,8 +267,8 @@ class Attending(StrictModel):
     academic year. Vacation ranges are intentionally uncapped; they only need
     to be well formed and non-overlapping. Category targets are optional and do
     not create work. The reusable template is only a pattern applier: actual
-    work lives in independent academic-week schedules. Dated work half-days
-    explicitly replace the matching scheduled-week slot.
+    work lives in independent academic-week schedules. An individual week can
+    override the attending's usual half-day total.
     """
 
     id: str
@@ -193,7 +294,22 @@ class Attending(StrictModel):
     weekly_shift_targets: list[AttendingWeeklyShiftTarget] = Field(
         default_factory=list,
         description=(
-            "Optional fixed or flexible weekly shift counts for individual work categories."
+            "Optional fixed or flexible weekly shift ranges for recurring work categories."
+        ),
+    )
+    minimum_attending_clinic_days_per_week: int = Field(
+        default=0,
+        ge=0,
+        le=MAX_ATTENDING_CLINIC_DAYS_PER_WEEK,
+        description=(
+            "Minimum distinct weekdays with Attending Clinic work in full active "
+            "weeks without weekday vacation."
+        ),
+    )
+    preferred_weekly_schedule_half_days: list[AttendingWorkHalfDay] = Field(
+        default_factory=list,
+        description=(
+            "Soft preferred weekly work pattern; it never creates scheduled work."
         ),
     )
     schedule_template_half_days: list[AttendingWorkHalfDay] = Field(
@@ -201,14 +317,6 @@ class Attending(StrictModel):
         description=(
             "Reusable typed pattern copied into selected weeks; it is not itself work."
         ),
-    )
-    weekly_work_schedules: list[AttendingWeeklyWorkSchedule] = Field(
-        default_factory=list,
-        description="Independent complete schedules for one-based academic weeks.",
-    )
-    ad_hoc_work_half_days: list[AttendingAdHocWorkHalfDay] = Field(
-        default_factory=list,
-        description="Explicit dated AM or PM assignments replacing the scheduled-week slot.",
     )
 
     @field_validator("id", "name")
@@ -258,33 +366,20 @@ class Attending(StrictModel):
     ) -> list[AttendingWorkHalfDay]:
         return _normalized_weekday_half_days(half_days, label="schedule template")
 
-    @field_validator("weekly_work_schedules")
+    @field_validator("preferred_weekly_schedule_half_days")
     @classmethod
-    def weekly_work_is_distinct_and_ordered(
+    def preferred_schedule_is_distinct_and_ordered(
         cls,
-        schedules: list[AttendingWeeklyWorkSchedule],
-    ) -> list[AttendingWeeklyWorkSchedule]:
-        weeks = [schedule.week for schedule in schedules]
-        if len(weeks) != len(set(weeks)):
-            raise ValueError("attending weekly work schedules must use unique weeks")
-        return sorted(schedules, key=lambda schedule: schedule.week)
-
-    @field_validator("ad_hoc_work_half_days")
-    @classmethod
-    def ad_hoc_work_is_distinct_and_ordered(
-        cls,
-        half_days: list[AttendingAdHocWorkHalfDay],
-    ) -> list[AttendingAdHocWorkHalfDay]:
-        slots = [(half_day.date, half_day.session) for half_day in half_days]
-        if len(slots) != len(set(slots)):
-            raise ValueError("attending ad hoc work half-days must be unique")
-        return sorted(
-            half_days,
-            key=lambda half_day: (
-                half_day.date,
-                _SESSION_ORDER[half_day.session],
-            ),
-        )
+        half_days: list[AttendingWorkHalfDay],
+    ) -> list[AttendingWorkHalfDay]:
+        if any(
+            half_day.work_type not in ATTENDING_PREFERRED_WORK_TYPES
+            for half_day in half_days
+        ):
+            raise ValueError(
+                "preferred weekly schedule cannot include Special/Other work"
+            )
+        return _normalized_weekday_half_days(half_days, label="preferred schedule")
 
     @model_validator(mode="after")
     def schedule_dates_are_ordered(self) -> Attending:
@@ -298,57 +393,32 @@ class Attending(StrictModel):
             raise ValueError(
                 "schedule template half-days cannot exceed the configured half-days per week"
             )
+        if len(self.preferred_weekly_schedule_half_days) > self.half_days_per_week:
+            raise ValueError(
+                "preferred schedule half-days cannot exceed the configured "
+                "half-days per week"
+            )
+        if self.minimum_attending_clinic_days_per_week > self.half_days_per_week:
+            raise ValueError(
+                "minimum Attending Clinic days cannot exceed the configured "
+                "half-days per week"
+            )
         for target in self.weekly_shift_targets:
-            if target.shifts_per_week > self.half_days_per_week:
+            if target.maximum_shifts_per_week > self.half_days_per_week:
                 raise ValueError(
-                    f"{target.work_type.value} weekly shift target cannot exceed the "
-                    "configured half-days per week"
+                    f"{target.work_type.value} maximum weekly shift target cannot exceed "
+                    "the configured half-days per week"
                 )
-        fixed_target_total = sum(
-            target.shifts_per_week
+        fixed_target_minimum = sum(
+            target.minimum_shifts_per_week
             for target in self.weekly_shift_targets
             if target.mode is AttendingWeeklyTargetMode.FIXED
         )
-        if fixed_target_total > self.half_days_per_week:
+        if fixed_target_minimum > self.half_days_per_week:
             raise ValueError(
-                "fixed weekly shift targets cannot exceed the configured half-days per week"
+                "fixed weekly shift target minimums cannot exceed the configured "
+                "half-days per week"
             )
-        for schedule in self.weekly_work_schedules:
-            if len(schedule.half_days) > self.half_days_per_week:
-                raise ValueError(
-                    f"week {schedule.week} work half-days cannot exceed the configured "
-                    "half-days per week"
-                )
-        for half_day in self.ad_hoc_work_half_days:
-            slot = f"{half_day.date.isoformat()} {half_day.session.value}"
-            if (
-                self.schedule_start_date is not None
-                and half_day.date < self.schedule_start_date
-            ):
-                raise ValueError(
-                    f"ad hoc work half-day {slot} cannot be before the schedule start date"
-                )
-            if (
-                self.schedule_end_date is not None
-                and half_day.date > self.schedule_end_date
-            ):
-                raise ValueError(
-                    f"ad hoc work half-day {slot} cannot be after the schedule end date"
-                )
-            conflicting_vacation = next(
-                (
-                    vacation
-                    for vacation in self.vacation_ranges
-                    if vacation.includes(half_day.date)
-                ),
-                None,
-            )
-            if conflicting_vacation is not None:
-                raise ValueError(
-                    f"ad hoc work half-day {slot} conflicts with vacation "
-                    f"{conflicting_vacation.start_date.isoformat()}.."
-                    f"{conflicting_vacation.end_date.isoformat()}"
-                )
         return self
 
     def weekly_shift_target_for(
@@ -387,63 +457,153 @@ class Attending(StrictModel):
     def is_on_vacation(self, calendar_day: date) -> bool:
         return any(vacation.includes(calendar_day) for vacation in self.vacation_ranges)
 
-    def has_ad_hoc_work(self, calendar_day: date, session: Session) -> bool:
-        """Whether an exact dated half-day is an explicit work commitment."""
-        return any(
-            half_day.date == calendar_day and half_day.session is session
-            for half_day in self.ad_hoc_work_half_days
-        )
 
-    def work_schedule_for_week(self, week: int) -> AttendingWeeklyWorkSchedule | None:
-        """Return the independently saved schedule for one academic week."""
-        return next(
-            (schedule for schedule in self.weekly_work_schedules if schedule.week == week),
-            None,
-        )
+@dataclass(frozen=True, slots=True)
+class EffectiveAttendingWeek:
+    """One attending week's assignments after every dated rule is applied."""
 
-    def work_half_day_on(
+    attending_id: str
+    week: int
+    week_start: date
+    target_half_days: int
+    assignments: tuple[AttendingWorkHalfDay, ...]
+    available_weekdays: frozenset[Weekday]
+    automatic_admin_half_day: AttendingWorkHalfDay | None
+    is_active_week: bool
+    is_full_schedule_week: bool
+    has_vacation: bool
+    attending_clinic_day_minimum: int
+
+    @property
+    def assigned_half_days(self) -> int:
+        return len(self.assignments)
+
+    def assignment_on(
         self,
-        calendar_day: date,
+        weekday: Weekday,
         session: Session,
-        *,
-        academic_year_start: date,
-        academic_year_end: date,
-    ) -> AttendingWorkHalfDay | AttendingAdHocWorkHalfDay | None:
-        """Resolve the effective assignment for an exact dated half-day.
-
-        A dated assignment replaces the scheduled-week slot. The reusable
-        template is never consulted here. Schedule boundaries and vacation
-        suppress both assignment shapes.
-        """
-        if not self.is_scheduled_on(
-            calendar_day,
-            academic_year_start=academic_year_start,
-            academic_year_end=academic_year_end,
-        ) or self.is_on_vacation(calendar_day):
-            return None
-        dated = next(
-            (
-                half_day
-                for half_day in self.ad_hoc_work_half_days
-                if half_day.date == calendar_day and half_day.session is session
-            ),
-            None,
-        )
-        if dated is not None:
-            return dated
-        week = (calendar_day - academic_year_start).days // 7 + 1
-        schedule = self.work_schedule_for_week(week)
-        if schedule is None:
-            return None
-        weekday = tuple(Weekday)[calendar_day.weekday()]
+    ) -> AttendingWorkHalfDay | None:
         return next(
             (
-                half_day
-                for half_day in schedule.half_days
-                if half_day.weekday is weekday and half_day.session is session
+                assignment
+                for assignment in self.assignments
+                if assignment.weekday is weekday and assignment.session is session
             ),
             None,
         )
+
+    def category_count(self, work_type: AttendingWorkType) -> int:
+        return sum(
+            assignment.work_type is work_type for assignment in self.assignments
+        )
+
+    @property
+    def attending_clinic_days(self) -> frozenset[Weekday]:
+        return frozenset(
+            assignment.weekday
+            for assignment in self.assignments
+            if assignment.work_type is AttendingWorkType.ATTENDING_CLINIC
+        )
+
+
+def effective_attending_week(
+    attending: Attending,
+    schedule: AttendingSchedule | None,
+    *,
+    week: int,
+    first_day: date,
+    last_day: date,
+    academic_half_day: tuple[Weekday, Session] | None,
+    automatic_academic_admin: bool,
+) -> EffectiveAttendingWeek:
+    """Project stored work through dates, vacation, and the academic rule."""
+    weeks = (last_day - first_day).days // 7 + 1
+    if not 1 <= week <= weeks:
+        raise ValueError(f"academic week must be between 1 and {weeks}")
+    week_start = first_day + timedelta(weeks=week - 1)
+    saved_week = schedule.schedule_for_week(week) if schedule is not None else None
+    target = (
+        saved_week.effective_half_days(attending.half_days_per_week)
+        if saved_week is not None
+        else attending.half_days_per_week
+    )
+    stored_by_slot = (
+        {
+            (assignment.weekday, assignment.session): assignment
+            for assignment in saved_week.half_days
+        }
+        if saved_week is not None
+        else {}
+    )
+    assignments: list[AttendingWorkHalfDay] = []
+    automatic_admin: AttendingWorkHalfDay | None = None
+    scheduled_days: list[bool] = []
+    vacation_days: list[bool] = []
+    for offset, weekday in enumerate(Weekday):
+        calendar_day = week_start + timedelta(days=offset)
+        scheduled = attending.is_scheduled_on(
+            calendar_day,
+            academic_year_start=first_day,
+            academic_year_end=last_day,
+        )
+        vacation = attending.is_on_vacation(calendar_day)
+        scheduled_days.append(scheduled)
+        vacation_days.append(vacation)
+        if not scheduled or vacation:
+            continue
+        for session in Session:
+            if (
+                automatic_academic_admin
+                and academic_half_day == (weekday, session)
+            ):
+                automatic_admin = AttendingWorkHalfDay(
+                    weekday=weekday,
+                    session=session,
+                    work_type=AttendingWorkType.ADMIN_TIME,
+                )
+                assignments.append(automatic_admin)
+                continue
+            assignment = stored_by_slot.get((weekday, session))
+            if assignment is not None:
+                assignments.append(assignment)
+
+    weekday_vacation = any(vacation_days[:5])
+    active_weekdays = any(scheduled_days[:5])
+    full_weekdays = all(scheduled_days[:5])
+    return EffectiveAttendingWeek(
+        attending_id=attending.id,
+        week=week,
+        week_start=week_start,
+        target_half_days=target,
+        assignments=tuple(
+            sorted(
+                assignments,
+                key=lambda assignment: (
+                    _WEEKDAY_ORDER[assignment.weekday],
+                    _SESSION_ORDER[assignment.session],
+                ),
+            )
+        ),
+        available_weekdays=frozenset(
+            weekday
+            for weekday, scheduled, vacation in zip(
+                Weekday,
+                scheduled_days,
+                vacation_days,
+                strict=True,
+            )
+            if scheduled and not vacation
+        ),
+        automatic_admin_half_day=automatic_admin,
+        is_active_week=any(scheduled_days),
+        is_full_schedule_week=full_weekdays,
+        has_vacation=any(vacation_days),
+        attending_clinic_day_minimum=(
+            0
+            if not active_weekdays or not full_weekdays or weekday_vacation
+            else attending.minimum_attending_clinic_days_per_week
+        ),
+    )
 
 
 class AttendingClinicCoverage(StrictModel):
@@ -464,41 +624,30 @@ class AttendingClinicCoverage(StrictModel):
 
 
 def attending_clinic_coverage(
-    attendings: list[Attending],
+    effective_weeks: Iterable[EffectiveAttendingWeek],
     *,
     managed_clinic_ids: set[str],
     closed_dates_by_clinic: dict[str, set[date]] | None = None,
-    first_day: date,
-    last_day: date,
 ) -> list[AttendingClinicCoverage]:
     """Expand effective Precepting Clinic work into solver-facing counts."""
     counts: Counter[tuple[str, date, Session]] = Counter()
     closed_dates = closed_dates_by_clinic or {}
     no_closed_dates: set[date] = set()
-    calendar_day = first_day
-    while calendar_day <= last_day:
-        for attending in attendings:
-            for session in Session:
-                assignment = attending.work_half_day_on(
-                    calendar_day,
-                    session,
-                    academic_year_start=first_day,
-                    academic_year_end=last_day,
-                )
-                if (
-                    assignment is None
-                    or assignment.work_type is not AttendingWorkType.PRECEPTING_CLINIC
-                ):
-                    continue
-                clinic_id = assignment.clinic_id
-                assert clinic_id is not None
-                if clinic_id not in managed_clinic_ids or calendar_day in closed_dates.get(
-                    clinic_id,
-                    no_closed_dates,
-                ):
-                    continue
-                counts[clinic_id, calendar_day, session] += 1
-        calendar_day += timedelta(days=1)
+    for effective in effective_weeks:
+        for assignment in effective.assignments:
+            if assignment.work_type is not AttendingWorkType.PRECEPTING_CLINIC:
+                continue
+            clinic_id = assignment.clinic_id
+            assert clinic_id is not None
+            calendar_day = effective.week_start + timedelta(
+                days=_WEEKDAY_ORDER[assignment.weekday]
+            )
+            if clinic_id not in managed_clinic_ids or calendar_day in closed_dates.get(
+                clinic_id,
+                no_closed_dates,
+            ):
+                continue
+            counts[clinic_id, calendar_day, assignment.session] += 1
     return [
         AttendingClinicCoverage(
             clinic_id=clinic_id,
@@ -525,21 +674,39 @@ def normalize_attendings(attendings: list[Attending]) -> list[Attending]:
     return sorted(attendings, key=attending_display_sort_key)
 
 
+def normalize_attending_schedules(
+    schedules: list[AttendingSchedule],
+) -> list[AttendingSchedule]:
+    """Validate unique attending references and return deterministic ordering."""
+    attending_ids = [schedule.attending_id for schedule in schedules]
+    if len(attending_ids) != len(set(attending_ids)):
+        raise ValueError("attending schedules must reference each attending at most once")
+    return sorted(schedules, key=lambda schedule: schedule.attending_id)
+
+
 def validate_attending_academic_year(
     attendings: list[Attending],
     *,
+    attending_schedules: list[AttendingSchedule] | None = None,
     first_day: date,
     last_day: date,
 ) -> None:
     """Require every explicit attending date to belong to this workspace year."""
-    for attending in attendings:
-        weeks = (last_day - first_day).days // 7 + 1
-        for schedule in attending.weekly_work_schedules:
-            if schedule.week > weeks:
+    by_id = {attending.id: attending for attending in attendings}
+    weeks = (last_day - first_day).days // 7 + 1
+    for schedule in attending_schedules or []:
+        attending = by_id.get(schedule.attending_id)
+        if attending is None:
+            raise ValueError(
+                f"attending schedule references unknown attending {schedule.attending_id!r}"
+            )
+        for weekly in schedule.weeks:
+            if weekly.week > weeks:
                 raise ValueError(
-                    f"{attending.id}: weekly work schedule week {schedule.week} is outside "
+                    f"{attending.id}: weekly work schedule week {weekly.week} is outside "
                     f"academic year weeks 1..{weeks}"
                 )
+    for attending in attendings:
         for label, calendar_day in (
             ("schedule start date", attending.schedule_start_date),
             ("schedule end date", attending.schedule_end_date),
@@ -555,13 +722,6 @@ def validate_attending_academic_year(
                     f"{attending.id}: vacation {vacation.start_date.isoformat()}.."
                     f"{vacation.end_date.isoformat()} is outside academic year "
                     f"{first_day.isoformat()}..{last_day.isoformat()}"
-                )
-        for half_day in attending.ad_hoc_work_half_days:
-            if not first_day <= half_day.date <= last_day:
-                raise ValueError(
-                    f"{attending.id}: ad hoc work half-day "
-                    f"{half_day.date.isoformat()} {half_day.session.value} is outside "
-                    f"academic year {first_day.isoformat()}..{last_day.isoformat()}"
                 )
 
 

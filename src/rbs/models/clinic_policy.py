@@ -34,6 +34,13 @@ class ClinicPolicy(StrictModel):
     # ClinicSiteConfig.closure_days list as the source of truth.
     closure_days: list[ClinicClosureDay] = Field(default_factory=list)
     academic: ClinicSlot = Field(description="Recurring program-wide academic half-day.")
+    academic_half_day_is_attending_admin_time: bool = Field(
+        default=True,
+        description=(
+            "Whether each week's effective academic half-day is automatically "
+            "reserved as Admin Time for active attendings."
+        ),
+    )
     notes: str = ""
 
     @field_validator("primary_site_id")

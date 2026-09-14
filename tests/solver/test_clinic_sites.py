@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from rbs.catalog import sample_instance
 from rbs.models.attending import (
     Attending,
-    AttendingAdHocWorkHalfDay,
+    AttendingSchedule,
     AttendingWeeklyWorkSchedule,
     AttendingWorkHalfDay,
     AttendingWorkType,
@@ -601,7 +601,7 @@ def test_allocator_applies_specific_date_capacity_override() -> None:
     ) == 0
 
 
-def test_allocator_opens_attending_managed_clinic_for_ad_hoc_preceptor() -> None:
+def test_allocator_opens_attending_managed_clinic_for_week_override() -> None:
     instance = sample_instance()
     calendar_day = instance.calendar.first_week_start + timedelta(days=1)
     raw = instance.model_dump(mode="json")
@@ -609,15 +609,26 @@ def test_allocator_opens_attending_managed_clinic_for_ad_hoc_preceptor() -> None
     maple["staffing_mode"] = "attending_managed"
     raw["attendings"] = [
         Attending(
-            id="attending-ad-hoc",
+            id="attending-week-override",
             name="Ada Lovelace",
             half_days_per_week=0,
-            ad_hoc_work_half_days=[
-                AttendingAdHocWorkHalfDay(
-                    date=calendar_day,
-                    session=Session.MORNING,
-                    work_type=AttendingWorkType.PRECEPTING_CLINIC,
-                    clinic_id="maple",
+        ).model_dump(mode="json")
+    ]
+    raw["attending_schedules"] = [
+        AttendingSchedule(
+            attending_id="attending-week-override",
+            weeks=[
+                AttendingWeeklyWorkSchedule(
+                    week=1,
+                    half_days_override=1,
+                    half_days=[
+                        AttendingWorkHalfDay(
+                            weekday=Weekday.TUESDAY,
+                            session=Session.MORNING,
+                            work_type=AttendingWorkType.PRECEPTING_CLINIC,
+                            clinic_id="maple",
+                        )
+                    ],
                 )
             ],
         ).model_dump(mode="json")
@@ -735,7 +746,12 @@ def test_half_day_capacity_uses_derived_attending_managed_coverage() -> None:
             id="attending-001",
             name="Ada Lovelace",
             half_days_per_week=1,
-            weekly_work_schedules=[
+        ).model_dump(mode="json")
+    ]
+    raw["attending_schedules"] = [
+        AttendingSchedule(
+            attending_id="attending-001",
+            weeks=[
                 AttendingWeeklyWorkSchedule(
                     week=1,
                     half_days=[

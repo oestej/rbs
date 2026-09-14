@@ -15,7 +15,7 @@ from rbs.catalog import (
     monday_of_week_containing,
     sample_instance,
 )
-from rbs.models.attending import AttendingAdHocWorkHalfDay, AttendingVacation
+from rbs.models.attending import AttendingVacation
 from rbs.models.catalog import ConstraintCatalog
 from rbs.models.color_scheme import DEFAULT_COLOR_SCHEME
 from rbs.models.enums import RotationKind, Session, Weekday
@@ -31,6 +31,7 @@ from rbs.models.rotation import (
     ClinicSiteClosure,
     ClinicSiteConfig,
     ClinicSlot,
+    ClinicStaffingMode,
     Rotation,
 )
 
@@ -64,12 +65,28 @@ def test_sample_attendings_show_default_and_custom_schedule_boundaries() -> None
     assert any(attending.schedule_start_date is not None for attending in instance.attendings)
     assert any(attending.schedule_end_date is not None for attending in instance.attendings)
     assert any(attending.vacation_ranges for attending in instance.attendings)
-    ad_hoc_only = next(
+    preferred = next(
+        attending
+        for attending in instance.attendings
+        if attending.preferred_weekly_schedule_half_days
+    )
+    assert preferred.minimum_attending_clinic_days_per_week == 2
+    assert len(preferred.preferred_weekly_schedule_half_days) == 4
+    overridden = next(
         attending for attending in instance.attendings if attending.half_days_per_week == 0
     )
-    assert [half_day.session for half_day in ad_hoc_only.ad_hoc_work_half_days] == [
-        Session.MORNING,
-        Session.AFTERNOON,
+    accepted_schedule = instance.attending_schedule_for(overridden.id)
+    assert accepted_schedule is not None
+    schedule = accepted_schedule.weeks[0]
+    assert schedule.week == 11
+    assert schedule.half_days_override == 3
+    assert [(half_day.weekday, half_day.session) for half_day in schedule.half_days] == [
+        (Weekday.MONDAY, Session.MORNING),
+        (Weekday.THURSDAY, Session.AFTERNOON),
+    ]
+    assert [half_day.description for half_day in schedule.half_days] == [
+        "Credentialing committee",
+        "Community board meeting",
     ]
 
 
@@ -146,25 +163,24 @@ def test_catalog_schema_rejects_curriculum_choice_groups() -> None:
         ConstraintCatalog.model_validate(raw)
 
 
-@pytest.mark.parametrize("legacy_version", [5, 6, 7])
-def test_pre_v8_catalogs_are_rejected(legacy_version: int) -> None:
+@pytest.mark.parametrize("legacy_version", [5, 6, 7, 8])
+def test_pre_v9_catalogs_are_rejected(legacy_version: int) -> None:
     raw = bootstrap_catalog().model_dump(mode="json")
     raw["schema_version"] = legacy_version
 
-    with pytest.raises(ValidationError, match="Input should be 9"):
+    with pytest.raises(ValidationError, match="Input should be 10"):
         ConstraintCatalog.model_validate(raw)
 
 
-def test_v8_catalog_migrates_clinics_to_capacity_managed() -> None:
+def test_v9_catalog_enables_attending_admin_time_for_academic_half_day() -> None:
     raw = bootstrap_catalog().model_dump(mode="json")
-    raw["schema_version"] = 8
-    for site in raw["clinic_policy"]["sites"]:
-        site.pop("staffing_mode")
+    raw["schema_version"] = 9
+    raw["clinic_policy"].pop("academic_half_day_is_attending_admin_time")
 
     restored = ConstraintCatalog.model_validate(raw)
 
-    assert restored.schema_version == 9
-    assert all(site.staffing_mode == "capacity_managed" for site in restored.clinic_policy.sites)
+    assert restored.schema_version == 10
+    assert restored.clinic_policy.academic_half_day_is_attending_admin_time is True
 
 
 def test_instance_catalog_projection_preserves_explicit_elective_policy() -> None:
@@ -182,7 +198,7 @@ def test_instance_catalog_projection_preserves_explicit_elective_policy() -> Non
     catalog = instance.constraint_catalog()
     option = catalog.electives.option_for("night_float")
 
-    assert catalog.schema_version == 9
+    assert catalog.schema_version == 10
     assert option is not None
     assert option.eligible_pgys == [2]
     assert not option.repeatable
@@ -461,6 +477,7 @@ def test_consecutive_caps_and_precept_policy() -> None:
     assert policy.max_capacity(secondary_id, Weekday.FRIDAY, Session.AFTERNOON) == 0
     assert policy.max_capacity(secondary_id, Weekday.MONDAY, Session.MORNING) == 0
     assert policy.academic.session is Session.AFTERNOON
+    assert policy.academic_half_day_is_attending_admin_time is True
     assert len(secondary.half_days) == 5
     assert policy.site_ids == ("maple", "cedar")
     assert [(site.id, site.name, site.color) for site in policy.sites] == [
@@ -646,6 +663,37 @@ def test_clinic_capacity_overrides_require_unique_slots_and_valid_minimums() -> 
     ]
     with pytest.raises(ValidationError, match="outside academic year"):
         SchedulerInput.model_validate(instance_raw)
+
+
+def test_attending_managed_clinic_preserves_inactive_numeric_capacity() -> None:
+    site = ClinicSiteConfig(
+        id="managed",
+        name="Managed Clinic",
+        color="#28735C",
+        staffing_mode=ClinicStaffingMode.ATTENDING_MANAGED,
+        residents_per_attending=1,
+        half_days=[
+            ClinicHalfDayCapacity(
+                weekday=Weekday.MONDAY,
+                session=Session.MORNING,
+                attendings=1,
+                min_residents=3,
+            )
+        ],
+        capacity_overrides=[
+            ClinicCapacityOverride(
+                date=date(2026, 7, 6),
+                session=Session.AFTERNOON,
+                attendings=0,
+                min_residents=2,
+            )
+        ],
+    )
+
+    assert site.half_days[0].min_residents == 3
+    assert site.capacity_overrides[0].min_residents == 2
+    with pytest.raises(ValidationError, match="minimum residents cannot exceed"):
+        site.revised(staffing_mode=ClinicStaffingMode.CAPACITY_MANAGED)
 
 
 def test_clinic_closure_days_must_fall_within_the_academic_year() -> None:
@@ -862,21 +910,25 @@ def test_rebasing_academic_year_moves_workspace_specific_dates() -> None:
             year=original_vacation.end_date.year + 2
         ),
     )
-    ad_hoc_attending = next(
-        attending for attending in configured.attendings if attending.ad_hoc_work_half_days
+    assert rebased.attending_schedules == configured.attending_schedules
+    preferred_attending = next(
+        attending
+        for attending in configured.attendings
+        if attending.preferred_weekly_schedule_half_days
     )
-    shifted_ad_hoc_attending = next(
+    rebased_preferred_attending = next(
         attending
         for attending in rebased.attendings
-        if attending.id == ad_hoc_attending.id
+        if attending.id == preferred_attending.id
     )
-    assert shifted_ad_hoc_attending.ad_hoc_work_half_days == [
-        AttendingAdHocWorkHalfDay(
-            date=half_day.date.replace(year=half_day.date.year + 2),
-            session=half_day.session,
-        )
-        for half_day in ad_hoc_attending.ad_hoc_work_half_days
-    ]
+    assert (
+        rebased_preferred_attending.preferred_weekly_schedule_half_days
+        == preferred_attending.preferred_weekly_schedule_half_days
+    )
+    assert (
+        rebased_preferred_attending.minimum_attending_clinic_days_per_week
+        == preferred_attending.minimum_attending_clinic_days_per_week
+    )
     assert rebased.clinic_policy.site("maple").capacity_overrides[0].date == date(2028, 9, 16)
     assert {closure.date for closure in rebased.clinic_policy.closure_days} == {date(2028, 12, 25)}
     assert all(lock.source == "manual" for lock in rebased.locks)

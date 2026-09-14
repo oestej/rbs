@@ -199,20 +199,21 @@ class ClinicSiteConfig(StrictModel):
 
     @model_validator(mode="after")
     def minimums_fit_derived_capacity(self) -> ClinicSiteConfig:
-        for half_day in self.half_days:
-            maximum = half_day.max_residents(self.residents_per_attending)
-            if half_day.min_residents > maximum:
-                raise ValueError(
-                    f"{self.name} {half_day.weekday.value} {half_day.session.value}: "
-                    "minimum residents cannot exceed derived maximum capacity"
-                )
-        for override in self.capacity_overrides:
-            maximum = override.max_residents(self.residents_per_attending)
-            if override.min_residents > maximum:
-                raise ValueError(
-                    f"{self.name} {override.date} {override.session.value} override: "
-                    "minimum residents cannot exceed derived maximum capacity"
-                )
+        if self.staffing_mode is ClinicStaffingMode.CAPACITY_MANAGED:
+            for half_day in self.half_days:
+                maximum = half_day.max_residents(self.residents_per_attending)
+                if half_day.min_residents > maximum:
+                    raise ValueError(
+                        f"{self.name} {half_day.weekday.value} {half_day.session.value}: "
+                        "minimum residents cannot exceed derived maximum capacity"
+                    )
+            for override in self.capacity_overrides:
+                maximum = override.max_residents(self.residents_per_attending)
+                if override.min_residents > maximum:
+                    raise ValueError(
+                        f"{self.name} {override.date} {override.session.value} override: "
+                        "minimum residents cannot exceed derived maximum capacity"
+                    )
         scopes = [rule.scope_key for rule in self.allocation_rules]
         if len(scopes) != len(set(scopes)):
             raise ValueError(f"{self.name} allocation overrides must use unique scopes")

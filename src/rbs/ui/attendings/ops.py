@@ -5,9 +5,9 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from rbs.models.attending import (
-    MAX_ATTENDING_HALF_DAYS_PER_WEEK,
+    ATTENDING_WEEKLY_TARGET_WORK_TYPES,
     Attending,
-    AttendingAdHocWorkHalfDay,
+    AttendingSchedule,
     AttendingVacation,
     AttendingWeeklyShiftTarget,
     AttendingWeeklyTargetMode,
@@ -18,7 +18,6 @@ from rbs.models.attending import (
 from rbs.models.enums import Session, Weekday
 from rbs.models.instance import SchedulerInput
 
-AD_HOC_ALL_DAY = "all_day"
 WEEKLY_SHIFT_TARGET_NONE = "none"
 
 
@@ -41,14 +40,65 @@ def replace_attending(
     )
 
 
+def replace_attending_with_schedule(
+    instance: SchedulerInput,
+    original_id: str,
+    replacement: Attending,
+    weeks: list[AttendingWeeklyWorkSchedule],
+) -> SchedulerInput:
+    """Atomically replace attending configuration and its accepted schedule."""
+    if not any(attending.id == original_id for attending in instance.attendings):
+        raise ValueError(f"unknown attending {original_id!r}")
+    schedules = [
+        schedule
+        for schedule in instance.attending_schedules
+        if schedule.attending_id != original_id
+    ]
+    if weeks:
+        schedules.append(AttendingSchedule(attending_id=replacement.id, weeks=weeks))
+    return instance.revised(
+        attendings=[
+            replacement if attending.id == original_id else attending
+            for attending in instance.attendings
+        ],
+        attending_schedules=schedules,
+    )
+
+
 def remove_attending(instance: SchedulerInput, attending_id: str) -> SchedulerInput:
     if not any(attending.id == attending_id for attending in instance.attendings):
         raise ValueError(f"unknown attending {attending_id!r}")
     return instance.revised(
         attendings=[
             attending for attending in instance.attendings if attending.id != attending_id
-        ]
+        ],
+        attending_schedules=[
+            schedule
+            for schedule in instance.attending_schedules
+            if schedule.attending_id != attending_id
+        ],
     )
+
+
+def replace_attending_schedule(
+    instance: SchedulerInput,
+    attending_id: str,
+    weeks: list[AttendingWeeklyWorkSchedule],
+) -> SchedulerInput:
+    """Replace one attending's accepted schedule, omitting empty containers."""
+    if not any(attending.id == attending_id for attending in instance.attendings):
+        raise ValueError(f"unknown attending {attending_id!r}")
+    remaining = [
+        schedule
+        for schedule in instance.attending_schedules
+        if schedule.attending_id != attending_id
+    ]
+    schedules = (
+        [*remaining, AttendingSchedule(attending_id=attending_id, weeks=weeks)]
+        if weeks
+        else remaining
+    )
+    return instance.revised(attending_schedules=schedules)
 
 
 def next_attending_id(instance: SchedulerInput) -> str:
@@ -101,13 +151,18 @@ def replace_weekly_shift_target(
     *,
     work_type_value: object,
     mode_value: object,
-    shifts_value: object,
+    minimum_value: object,
+    maximum_value: object,
 ) -> list[AttendingWeeklyShiftTarget]:
     """Set or remove one category target and return deterministic ordering."""
     try:
         work_type = AttendingWorkType(str(work_type_value))
     except ValueError as exc:
         raise ValueError("select a work category") from exc
+    if work_type not in ATTENDING_WEEKLY_TARGET_WORK_TYPES:
+        raise ValueError(
+            "Special/Other work is scheduled manually and does not use a weekly target"
+        )
     remaining = [target for target in targets if target.work_type is not work_type]
     if mode_value == WEEKLY_SHIFT_TARGET_NONE:
         return sorted(
@@ -120,7 +175,8 @@ def replace_weekly_shift_target(
         raise ValueError("select Fixed, Flexible, or No target") from exc
     replacement = AttendingWeeklyShiftTarget(
         work_type=work_type,
-        shifts_per_week=shifts_value,
+        minimum_shifts_per_week=minimum_value,
+        maximum_shifts_per_week=maximum_value,
         mode=mode,
     )
     return sorted(
@@ -135,27 +191,100 @@ def replace_weekly_work_schedule(
     *,
     week: object,
     half_days: list[AttendingWorkHalfDay],
+    half_days_override: int | None = None,
 ) -> list[AttendingWeeklyWorkSchedule]:
-    """Replace one complete academic-week schedule and keep stable ordering."""
+    """Replace one academic-week draft and keep stable ordering.
+
+    A schedule may contain more assignments than its effective total so the
+    editor and schedule report can show the mismatch before the user chooses
+    Override. Persisted target mismatches remain valid incremental setup.
+    """
     selected_week = parse_academic_week(instance, week, label="Academic week")
     replacement = AttendingWeeklyWorkSchedule(
         week=selected_week,
+        half_days_override=half_days_override,
         half_days=half_days,
     )
-    validated = Attending(
-        id="attending-weekly-work-draft",
-        name="Weekly work draft",
-        half_days_per_week=MAX_ATTENDING_HALF_DAYS_PER_WEEK,
-        weekly_work_schedules=[
-            *(
-                schedule
-                for schedule in schedules
-                if schedule.week != selected_week
-            ),
+    return sorted(
+        [
+            *(schedule for schedule in schedules if schedule.week != selected_week),
             replacement,
         ],
+        key=lambda schedule: schedule.week,
     )
-    return validated.weekly_work_schedules
+
+
+def override_weekly_half_day_total(
+    instance: SchedulerInput,
+    schedules: list[AttendingWeeklyWorkSchedule],
+    *,
+    week: object,
+    assigned_half_days: int | None = None,
+) -> list[AttendingWeeklyWorkSchedule]:
+    """Set one week's total to its current number of assigned half-days."""
+    selected_week = parse_academic_week(instance, week, label="Academic week")
+    current = next(
+        (schedule for schedule in schedules if schedule.week == selected_week),
+        None,
+    )
+    if current is None and assigned_half_days is None:
+        raise ValueError(f"week {selected_week} has no schedule to override")
+    half_days = current.half_days if current is not None else []
+    assignment_count = (
+        len(half_days) if assigned_half_days is None else assigned_half_days
+    )
+    return replace_weekly_work_schedule(
+        instance,
+        schedules,
+        week=selected_week,
+        half_days=half_days,
+        half_days_override=assignment_count,
+    )
+
+
+def use_default_weekly_half_day_total(
+    instance: SchedulerInput,
+    schedules: list[AttendingWeeklyWorkSchedule],
+    *,
+    week: object,
+    default_half_days: int,
+    assigned_half_days: int | None = None,
+) -> list[AttendingWeeklyWorkSchedule]:
+    """Remove one week's override when its assignments fit the attending default."""
+    selected_week = parse_academic_week(instance, week, label="Academic week")
+    current = next(
+        (schedule for schedule in schedules if schedule.week == selected_week),
+        None,
+    )
+    if current is None:
+        raise ValueError(f"week {selected_week} has no schedule")
+    assignment_count = (
+        len(current.half_days)
+        if assigned_half_days is None
+        else assigned_half_days
+    )
+    if assignment_count > default_half_days:
+        raise ValueError(
+            f"week {selected_week} has {assignment_count} assigned half-days; "
+            f"remove assignments or raise the default to at least {assignment_count}"
+        )
+    return replace_weekly_work_schedule(
+        instance,
+        schedules,
+        week=selected_week,
+        half_days=current.half_days,
+    )
+
+
+def clear_weekly_work_schedule(
+    instance: SchedulerInput,
+    schedules: list[AttendingWeeklyWorkSchedule],
+    *,
+    week: object,
+) -> list[AttendingWeeklyWorkSchedule]:
+    """Remove one academic week's assignments and half-day override."""
+    selected_week = parse_academic_week(instance, week, label="Academic week")
+    return [schedule for schedule in schedules if schedule.week != selected_week]
 
 
 def apply_schedule_template(
@@ -173,17 +302,15 @@ def apply_schedule_template(
         raise ValueError("last week cannot be before first week")
     by_week = {schedule.week: schedule for schedule in schedules}
     for week in range(first, last + 1):
+        existing = by_week.get(week)
         by_week[week] = AttendingWeeklyWorkSchedule(
             week=week,
+            half_days_override=(
+                existing.half_days_override if existing is not None else None
+            ),
             half_days=[half_day.model_copy(deep=True) for half_day in template],
         )
-    validated = Attending(
-        id="attending-template-application-draft",
-        name="Template application draft",
-        half_days_per_week=MAX_ATTENDING_HALF_DAYS_PER_WEEK,
-        weekly_work_schedules=list(by_week.values()),
-    )
-    return validated.weekly_work_schedules
+    return sorted(by_week.values(), key=lambda schedule: schedule.week)
 
 
 def move_work_half_day(
@@ -250,52 +377,3 @@ def add_vacation_range(
         vacation_ranges=[*vacations, vacation],
     )
     return validated.vacation_ranges
-
-
-def add_ad_hoc_work_half_days(
-    instance: SchedulerInput,
-    half_days: list[AttendingAdHocWorkHalfDay],
-    *,
-    date_value: object,
-    session_value: object,
-    work_type_value: object = AttendingWorkType.SPECIAL_OTHER,
-    clinic_id_value: object = None,
-) -> list[AttendingAdHocWorkHalfDay]:
-    """Validate and add one dated session, or both sessions for an all-day choice."""
-    calendar_day = parse_attending_date(
-        instance,
-        date_value,
-        label="Work date",
-    )
-    if session_value == AD_HOC_ALL_DAY:
-        sessions = tuple(Session)
-    else:
-        try:
-            sessions = (Session(session_value),)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("select Morning, Afternoon, or All day") from exc
-    try:
-        work_type = AttendingWorkType(work_type_value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("select a work type") from exc
-    clinic_id = (
-        str(clinic_id_value).strip()
-        if clinic_id_value is not None and str(clinic_id_value).strip()
-        else None
-    )
-    additions = [
-        AttendingAdHocWorkHalfDay(
-            date=calendar_day,
-            session=session,
-            work_type=work_type,
-            clinic_id=clinic_id,
-        )
-        for session in sessions
-    ]
-    # Reuse the external model's duplicate and deterministic-order guarantees.
-    validated = Attending(
-        id="attending-ad-hoc-work-draft",
-        name="Ad hoc work draft",
-        ad_hoc_work_half_days=[*half_days, *additions],
-    )
-    return validated.ad_hoc_work_half_days
