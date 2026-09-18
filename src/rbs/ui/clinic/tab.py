@@ -15,7 +15,7 @@ from rbs.models.resident import resident_display_sort_key
 from rbs.models.rotation import Rotation, rotation_display_sort_key
 from rbs.models.schedule import Schedule
 from rbs.ui import page_shells
-from rbs.ui.buttons import SECONDARY_BUTTON_PROPS
+from rbs.ui.buttons import ICON_BUTTON_PROPS, SECONDARY_BUTTON_PROPS
 from rbs.ui.case_ops import (
     add_resident_rotation_waiver,
     place_manual_clinic_block,
@@ -1559,9 +1559,9 @@ def _clinic_directory_configuration(
                                 ),
                             ).props("outline dense no-caps")
                             with ui.button(icon="more_vert").props(
-                                "flat round dense "
-                                f"aria-label='More actions for {clinic.name} clinic'"
-                            ):
+                                ICON_BUTTON_PROPS
+                            ) as more:
+                                more.props["aria-label"] = f"More actions for {clinic.name} clinic"
                                 ui.tooltip("More actions")
                                 with ui.menu():
                                     remove = ui.menu_item(

@@ -119,7 +119,7 @@ class DesktopCapabilityMiddleware:
             ).get(CAPABILITY_QUERY, ())
         except (UnicodeDecodeError, ValueError):
             return False
-        return len(values) == 1 and hmac.compare_digest(values[0], self.token)
+        return len(values) == 1 and self._matches_token(values[0])
 
     def _has_cookie(self, scope: dict) -> bool:
         for raw_name, raw_value in scope.get("headers", ()):
@@ -130,9 +130,14 @@ class DesktopCapabilityMiddleware:
             except CookieError:
                 continue
             morsel = cookies.get(self.cookie_name)
-            if morsel is not None and hmac.compare_digest(morsel.value, self.token):
+            if morsel is not None and self._matches_token(morsel.value):
                 return True
         return False
+
+    def _matches_token(self, value: str) -> bool:
+        # URL and cookie decoding can produce Unicode, but compare_digest's
+        # string overload accepts ASCII only. Malformed input is not authority.
+        return value.isascii() and hmac.compare_digest(value, self.token)
 
     def _has_trusted_origin(self, scope: dict) -> bool:
         """Pin sockets and mutations to this instance's exact origin.

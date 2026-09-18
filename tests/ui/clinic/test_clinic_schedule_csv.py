@@ -2,6 +2,8 @@ import csv
 from datetime import date, timedelta
 from io import StringIO
 
+import pytest
+
 from rbs.catalog import sample_instance
 from rbs.models.enums import (
     RotationKind,
@@ -12,6 +14,7 @@ from rbs.models.enums import (
 )
 from rbs.models.instance import SchedulerInput
 from rbs.models.schedule import AssignedClinic, Assignment, Schedule, ScheduleMeta
+from rbs.models.special import SpecialRotation, SpecialRotationKind
 from rbs.ui.clinic.schedule_csv import (
     build_clinic_schedule_csv,
     clinic_schedule_csv_filename,
@@ -163,3 +166,32 @@ def test_clinic_schedule_csv_marks_full_closure_days() -> None:
 
     assert christmas_week["Fri AM"] == "Christmas · Closed"
     assert christmas_week["Fri PM"] == "Christmas · Closed"
+
+
+@pytest.mark.parametrize("name", ["=1+1", "+1+1", "-1+1", "@SUM(1,1)", "＝1+1"])
+def test_clinic_schedule_csv_neutralizes_event_and_closure_formulas(name: str) -> None:
+    instance = sample_instance()
+    raw = instance.model_dump(mode="json")
+    event = SpecialRotation(
+        id="csv-test-event",
+        name=name,
+        kind=SpecialRotationKind.EVENT,
+        start_date=instance.calendar.first_week_start,
+        end_date=instance.calendar.first_week_start,
+        session=Session.MORNING,
+        resident_ids=[instance.residents[0].id],
+    )
+    raw["special_rotations"] = [event.model_dump(mode="json")]
+    # The compatibility projection must not override the per-site edits below.
+    raw["clinic_policy"].pop("closure_days", None)
+    for site in raw["clinic_policy"]["sites"]:
+        for closure in site["closure_days"]:
+            closure["name"] = name
+    instance = SchedulerInput.model_validate(raw)
+
+    rows = list(csv.DictReader(StringIO(build_clinic_schedule_csv(instance, schedule=None))))
+
+    assert rows[0]["Mon AM"].startswith("'" + name + ": ")
+    christmas_week = next(row for row in rows if row["Academic Week"] == "26")
+    assert christmas_week["Fri AM"] == "'" + name + " · Closed"
+    assert instance.special_rotations[0].name == name

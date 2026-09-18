@@ -113,12 +113,8 @@ def _rotation_view(
             _rotation_identity(rotation, instance=instance)
             with ui.row().classes("items-center gap-1"):
                 ui.button("Edit", icon="edit", on_click=on_edit).props(PRIMARY_BUTTON_PROPS)
-                with ui.button(icon="more_vert").props(
-                    button_props(
-                        ICON_BUTTON_PROPS,
-                        f"aria-label='More actions for {rotation.name}'",
-                    )
-                ):
+                with ui.button(icon="more_vert").props(ICON_BUTTON_PROPS) as more:
+                    more.props["aria-label"] = f"More actions for {rotation.name}"
                     ui.tooltip(f"More actions for {rotation.name}")
                     with ui.menu():
                         ui.menu_item(

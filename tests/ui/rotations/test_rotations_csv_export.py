@@ -2,6 +2,8 @@ import csv
 from datetime import date
 from io import StringIO
 
+import pytest
+
 from rbs.catalog import sample_instance
 from rbs.models.instance import SchedulerInput
 from rbs.ui.rotations.csv_export import (
@@ -71,6 +73,54 @@ def test_rotations_csv_filename_identifies_the_academic_year() -> None:
         rotations_csv_filename("2026-2027", exported_on=date(2026, 8, 23))
         == "rotations-2026-2027-exported-2026-08-23.csv"
     )
+
+
+@pytest.mark.parametrize("value", ["=1+1", "+1+1", "-1+1", "@SUM(1,1)", "＝1+1"])
+def test_rotations_csv_neutralizes_formula_names_and_training_level_labels(value: str) -> None:
+    raw = sample_instance().model_dump(mode="json")
+    rotation = next(entry for entry in raw["rotations"] if entry["id"] == "night_float")
+    rotation["name"] = value
+    raw["requirements"][0]["label"] = value
+    instance = SchedulerInput.model_validate(raw)
+
+    row = next(row for row in _exported_rows(instance) if row["Code"] == "NF")
+
+    assert row["Name"] == "'" + value
+    assert row["Weeks"].startswith("'" + value)
+    assert instance.rotation("night_float").name == value
+    assert instance.requirements[0].display_label == value
+
+
+@pytest.mark.parametrize("value", ['Name,\"=1+1\"', "Name\r=1+1", "Name\n=1+1"])
+def test_rotations_csv_keeps_separators_and_line_breaks_inside_one_cell(value: str) -> None:
+    instance = sample_instance()
+    instance = instance.revised(
+        rotations=[
+            rotation.revised(name=value) if rotation.id == "night_float" else rotation
+            for rotation in instance.rotations
+        ]
+    )
+
+    rows = list(csv.DictReader(StringIO(build_rotations_csv(instance), newline="")))
+
+    assert len(rows) == len(instance.rotations)
+    assert all(None not in row and None not in row.values() for row in rows)
+    assert next(row for row in rows if row["Code"] == "NF")["Name"] == value
+
+
+def test_rotations_csv_neutralizes_formula_rotation_codes() -> None:
+    instance = sample_instance()
+    instance = instance.revised(
+        rotations=[
+            rotation.revised(code="=1+1") if rotation.id == "night_float" else rotation
+            for rotation in instance.rotations
+        ]
+    )
+
+    row = next(row for row in _exported_rows(instance) if row["Name"] == "Night Float")
+
+    assert row["Code"] == "'=1+1"
+    assert instance.rotation("night_float").code == "=1+1"
 
 
 def test_rotations_tab_exposes_export_csv_button() -> None:

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Security
+
+- **Desktop:** Imported names remain literal text in action buttons, spreadsheet
+  exports protect against embedded formulas, and malformed local access tokens
+  are rejected without causing request errors. Saved documents are unchanged.
+
 ### Added
 
 - **Rotations:** The Rotations screen now has an Export CSV button that

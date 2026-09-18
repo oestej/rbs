@@ -20,7 +20,6 @@ from rbs.ui.buttons import (
     PRIMARY_BUTTON_PROPS,
     SECONDARY_BUTTON_PROPS,
     TERTIARY_BUTTON_PROPS,
-    button_props,
 )
 from rbs.workspaces import InstanceEditImpact
 
@@ -244,12 +243,8 @@ def training_level_settings(
                                     pgy,
                                     persist_instance,
                                 ),
-                            ).props(
-                                button_props(
-                                    DESTRUCTIVE_ICON_BUTTON_PROPS,
-                                    f"aria-label='{delete_label}'",
-                                )
-                            )
+                            ).props(DESTRUCTIVE_ICON_BUTTON_PROPS)
+                            delete.props["aria-label"] = delete_label
                         delete.set_enabled(len(instance.requirements) > 1 and resident_count == 0)
                         if resident_count:
                             delete.tooltip("Move or remove assigned residents first")

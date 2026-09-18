@@ -6,12 +6,11 @@ every configurable parameter in a single view.
 
 from __future__ import annotations
 
-import csv
 import re
 from datetime import date
-from io import StringIO
 
 from rbs.models.instance import SchedulerInput
+from rbs.ui.csv_export import build_spreadsheet_csv
 from rbs.ui.rotations.table import ROTATION_COLUMNS, rotation_rows
 
 MAX_TOTAL_WEEKS_FIELD = "max_total_weeks"
@@ -55,12 +54,10 @@ def build_rotations_csv(instance: SchedulerInput) -> str:
     columns = rotation_csv_columns()
     # rotation_csv_rows already follows rotation display order.
     rows = rotation_csv_rows(instance)
-    output = StringIO(newline="")
-    writer = csv.writer(output, lineterminator="\n")
-    writer.writerow([label for _field, label in columns])
-    for row in rows:
-        writer.writerow([row.get(field, "") for field, _label in columns])
-    return output.getvalue()
+    return build_spreadsheet_csv(
+        [label for _field, label in columns],
+        ([row.get(field, "") for field, _label in columns] for row in rows),
+    )
 
 
 def rotations_csv_filename(

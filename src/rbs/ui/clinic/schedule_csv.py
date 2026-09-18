@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import csv
 import re
 from datetime import date
-from io import StringIO
 
 from rbs.models.clinic import clinic_slot_date
 from rbs.models.instance import SchedulerInput
@@ -22,6 +20,7 @@ from rbs.ui.clinic.projection import (
     site_headcount,
     special_events_for_slot,
 )
+from rbs.ui.csv_export import build_spreadsheet_csv
 from rbs.ui.schedule_projection import visible_week_numbers, week_monday
 
 
@@ -138,12 +137,10 @@ def build_clinic_schedule_csv(
         today=today,
         site=site,
     )
-    output = StringIO(newline="")
-    writer = csv.writer(output, lineterminator="\n")
-    writer.writerow([label for _field, label in columns])
-    for row in rows:
-        writer.writerow([row.get(field, "") for field, _label in columns])
-    return output.getvalue()
+    return build_spreadsheet_csv(
+        [label for _field, label in columns],
+        ([row.get(field, "") for field, _label in columns] for row in rows),
+    )
 
 
 def clinic_schedule_csv_filename(
