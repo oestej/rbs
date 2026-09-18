@@ -1994,3 +1994,76 @@ def test_first_tab_visit_renders_a_stale_panel(tmp_path) -> None:
     assert session.active_tab == "clinic"
     assert rendered == ["clinic"]
     assert "clinic" not in session.stale_panels
+
+
+def test_ranking_electives_redraws_one_resident_not_the_whole_directory(tmp_path) -> None:
+    from nicegui import ui
+    from nicegui.events import ValueChangeEventArguments
+
+    from rbs.catalog import sample_instance
+    from rbs.store import Store
+    from rbs.ui import app_shell
+    from rbs.ui.residents.electives import elective_preference_options
+    from rbs.ui.session import WorkspaceSession
+
+    store = Store(tmp_path / "residents.sqlite")
+    store.init()
+    instance = sample_instance()
+    resident_id = "resident-001"
+    instance = instance.revised(
+        residents=[
+            item.model_copy(update={"elective_preferences": []})
+            if item.id == resident_id
+            else item
+            for item in instance.residents
+        ]
+    )
+    workspace = store.create("Residents", instance)
+    session = WorkspaceSession(store=store, workspace_id=workspace.id)
+    session.resident_id = resident_id
+    session.active_tab = "residents"
+    session.resident_schedule_section = "resident_elective_preference"
+    session._render_tab = app_shell._render_tab
+    session.panels["residents"] = ui.column()
+    session.refresh_panel("residents")
+
+    def live(predicate):
+        return [
+            element
+            for element in ui.context.client.elements.values()
+            if not element.is_deleted and predicate(element)
+        ]
+
+    def directory_items():
+        return live(
+            lambda element: "rbs-master-directory-item" in getattr(element, "_classes", [])
+            or element.__class__.__name__ == "Item"
+        )
+
+    def choose(value: str) -> None:
+        select = live(lambda element: element.__class__.__name__ == "Select")[-1]
+        select.value = value
+        for listener in select._event_listeners.values():
+            if listener.type == "update:model-value":
+                listener.handler(
+                    ValueChangeEventArguments(sender=select, client=select.client, value=value)
+                )
+
+    options = list(elective_preference_options(instance, instance.residents_by_id[resident_id]))
+    directory_before = {id(element) for element in directory_items()}
+    detail_before = {id(element) for element in live(lambda e: e.__class__.__name__ == "Select")}
+    assert directory_before
+
+    choose(options[0])
+
+    # The directory keeps its elements; only the open resident is redrawn.
+    assert {id(element) for element in directory_items()} == directory_before
+    assert {id(element) for element in live(lambda e: e.__class__.__name__ == "Select")} != (
+        detail_before
+    )
+
+    # The redrawn detail saves against the current revision, not the stale one.
+    choose(options[1])
+
+    ranked = store.get(workspace.id).instance.residents_by_id[resident_id].elective_preferences
+    assert [f"{item.rotation_id}|{item.duration_weeks}" for item in ranked] == options[:2]

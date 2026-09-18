@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from functools import partial
 
 from rbs.logging import (
     get_logger,
@@ -621,7 +622,26 @@ async def _present_csv_export(
     return True
 
 
-def _render_residents(session: WorkspaceSession, workspace: Workspace) -> None:
+RESIDENT_DETAIL_REGION = "resident_detail"
+
+
+def _refresh_resident_detail(session: WorkspaceSession, panel) -> None:
+    """Redraw the open resident without rebuilding the directory beside them.
+
+    Re-entering the tab renderer rebuilds the save callbacks against the current
+    workspace, so the next edit still carries an up-to-date revision.
+    """
+    workspace = _workspace_for_render(session)
+    if workspace is not None:
+        _render_residents(session, workspace, detail_panel=panel)
+
+
+def _render_residents(
+    session: WorkspaceSession,
+    workspace: Workspace,
+    *,
+    detail_panel=None,
+) -> None:
     def select_resident(resident_id: str | None) -> None:
         if resident_id != session.resident_id:
             session.resident_block_schedule_editing = False
@@ -650,7 +670,12 @@ def _render_residents(session: WorkspaceSession, workspace: Workspace) -> None:
         session.resident_schedule_editing = False
         session.resident_id = resident_id
         session.active_tab = "residents"
-        session.persist_instance(workspace, updated, impact=impact)
+        session.persist_instance(
+            workspace,
+            updated,
+            impact=impact,
+            region=RESIDENT_DETAIL_REGION,
+        )
 
     def persist_resident_block_schedule(
         updated: SchedulerInput,
@@ -695,9 +720,10 @@ def _render_residents(session: WorkspaceSession, workspace: Workspace) -> None:
         }:
             session.resident_schedule_section = name
 
-    render_residents_tab(
+    panel = render_residents_tab(
         workspace.instance,
         workspace.latest_schedule,
+        detail_panel=detail_panel,
         selected_resident_id=session.resident_id,
         on_select=select_resident,
         on_save=persist_resident,
@@ -715,6 +741,13 @@ def _render_residents(session: WorkspaceSession, workspace: Workspace) -> None:
             session, content, filename
         ),
     )
+    if detail_panel is None:
+        session.register_region(
+            RESIDENT_DETAIL_REGION,
+            "residents",
+            panel,
+            partial(_refresh_resident_detail, session, panel),
+        )
 
 
 def _remember_active_tab(state, value) -> None:

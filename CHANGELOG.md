@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- **Residents:** Ranking elective preferences is about an order of magnitude
+  faster, and no longer slows down as the list grows. A resident's block and
+  clinic schedule reports are now drawn when their tab is opened, and saving
+  an edit redraws only the resident being edited instead of the whole tab —
+  which also speeds up block, clinic, and lock edits, the more so the larger
+  the program.
 - **Scheduling:** Solve readiness now identifies when required rotation blocks
   need more resident-weeks than an overall or training-level maximum can hold,
   including resident-specific additions and waivers, instead of starting a
