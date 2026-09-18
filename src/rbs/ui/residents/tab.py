@@ -63,12 +63,45 @@ def render_residents_tab(
     active_schedule_section: str = "resident_block_schedule",
     on_schedule_section_change=None,
     on_pdf_open: OpenPdfExport | None = None,
-) -> None:
+    detail_panel=None,
+):
+    """Render the resident directory and the open resident beside it.
+
+    Returns the detail container. Passing it back as ``detail_panel`` redraws
+    that side alone: editing one resident's preferences, locks, or schedule
+    cannot change the directory, which only lists names, training levels, and
+    time-away counts.
+    """
     creating = selected_resident_id == NEW_RESIDENT_ID
     selected = next(
         (resident for resident in instance.residents if resident.id == selected_resident_id),
         None,
     )
+    detail = {
+        "schedule": schedule,
+        "resident": selected,
+        "creating": creating,
+        "missing_id": (
+            selected_resident_id
+            if selected_resident_id and not creating and selected is None
+            else None
+        ),
+        "on_select": on_select,
+        "on_save": on_save,
+        "on_schedule_save": on_schedule_save,
+        "on_block_schedule_save": on_block_schedule_save,
+        "on_schedule_change": on_schedule_change,
+        "schedule_is_current": schedule_is_current,
+        "block_schedule_editing": block_schedule_editing,
+        "on_block_schedule_editing_change": on_block_schedule_editing_change,
+        "schedule_editing": schedule_editing,
+        "on_schedule_editing_change": on_schedule_editing_change,
+        "active_schedule_section": active_schedule_section,
+        "on_schedule_section_change": on_schedule_section_change,
+        "on_pdf_open": on_pdf_open,
+    }
+    if detail_panel is not None:
+        return _resident_detail_panel(instance, panel=detail_panel, **detail)
 
     with page_shells.master_detail(
         "Residents",
@@ -80,30 +113,7 @@ def render_residents_tab(
                 selected_resident_id=selected_resident_id,
                 on_select=on_select,
             )
-            _resident_detail_panel(
-                instance,
-                schedule=schedule,
-                resident=selected,
-                creating=creating,
-                missing_id=(
-                    selected_resident_id
-                    if selected_resident_id and not creating and selected is None
-                    else None
-                ),
-                on_select=on_select,
-                on_save=on_save,
-                on_schedule_save=on_schedule_save,
-                on_block_schedule_save=on_block_schedule_save,
-                on_schedule_change=on_schedule_change,
-                schedule_is_current=schedule_is_current,
-                block_schedule_editing=block_schedule_editing,
-                on_block_schedule_editing_change=on_block_schedule_editing_change,
-                schedule_editing=schedule_editing,
-                on_schedule_editing_change=on_schedule_editing_change,
-                active_schedule_section=active_schedule_section,
-                on_schedule_section_change=on_schedule_section_change,
-                on_pdf_open=on_pdf_open,
-            )
+            return _resident_detail_panel(instance, **detail)
 
 
 def _resident_directory(
@@ -214,9 +224,11 @@ def _resident_detail_panel(
     active_schedule_section: str = "resident_block_schedule",
     on_schedule_section_change=None,
     on_pdf_open: OpenPdfExport | None = None,
-) -> None:
+    panel=None,
+):
     editing = creating
-    panel = master_detail.detail_panel()
+    if panel is None:
+        panel = master_detail.detail_panel()
 
     def render_panel() -> None:
         nonlocal editing
@@ -271,6 +283,7 @@ def _resident_detail_panel(
                 _empty_resident_detail(missing_id)
 
     render_panel()
+    return panel
 
 
 def _resident_view(

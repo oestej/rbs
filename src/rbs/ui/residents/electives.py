@@ -250,6 +250,11 @@ def render_elective_preferences(
             render_stack()
 
         def render_stack() -> None:
+            # Saving refreshes the whole tab, which rebuilds this panel and deletes
+            # these rows. Redrawing them afterwards would orphan a full copy of the
+            # stack under a dead parent on every edit, so leave the rebuilt panel be.
+            if stack.is_deleted:
+                return
             stack.clear()
             with stack:
                 ui.label("Ranked requests").classes("rbs-type-control-label")

@@ -43,6 +43,147 @@ from rbs.ui.residents.schedule import (
 from rbs.ui.residents.tab import NEW_RESIDENT_ID, _resident_view, render_residents_tab
 
 
+def _open_schedule_section(before: set[int], name: str) -> None:
+    """Open one schedule section the way clicking its tab does.
+
+    The block and clinic reports are built when their tab is first shown, so a
+    test that inspects either one has to open it first.
+    """
+    from nicegui import ui
+
+    tabs = next(
+        element
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before and element.__class__.__name__ == "Tabs"
+    )
+    tabs.value = name
+
+
+def _elements_orphaned_by(before: set[int]) -> list:
+    """Live elements sitting under a deleted parent.
+
+    Rendering into a container that a tab refresh already tore down leaves rows
+    registered on the client forever: nothing owns them, so nothing deletes them.
+    """
+    from nicegui import ui
+
+    orphans = []
+    for element_id, element in ui.context.client.elements.items():
+        if element_id in before or element.is_deleted:
+            continue
+        slot = element.parent_slot
+        while slot is not None:
+            if slot.parent.is_deleted:
+                orphans.append(element)
+                break
+            slot = slot.parent.parent_slot
+    return orphans
+
+
+def test_schedule_sections_are_built_when_their_tab_is_opened() -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    before = set(ui.context.client.elements)
+
+    _resident_schedule_workspace(
+        instance,
+        None,
+        instance.residents[0],
+        active_section="resident_elective_preference",
+    )
+
+    def labels() -> set:
+        return {
+            getattr(element, "_text", None)
+            for element_id, element in ui.context.client.elements.items()
+            if element_id not in before
+        }
+
+    # Every accepted edit rebuilds this card. Ranking Electives must not redraw
+    # the two schedule reports, which are the expensive part of it.
+    assert "Ranked requests" in labels()
+    assert "No block schedule available" not in labels()
+    assert "No clinic schedule available" not in labels()
+
+    _open_schedule_section(before, "resident_block_schedule")
+    assert "No block schedule available" in labels()
+    assert "No clinic schedule available" not in labels()
+
+    _open_schedule_section(before, "resident_clinic_schedule")
+    assert "No clinic schedule available" in labels()
+
+
+def test_ranking_electives_repeatedly_does_not_accumulate_orphaned_rows() -> None:
+    from nicegui import ui
+    from nicegui.events import ValueChangeEventArguments
+
+    from rbs.ui.residents.electives import (
+        elective_preference_options,
+        render_elective_preferences,
+    )
+
+    instance = sample_instance()
+    resident_id = "resident-001"
+    state = {
+        "instance": instance.revised(
+            residents=[
+                item.model_copy(update={"elective_preferences": []})
+                if item.id == resident_id
+                else item
+                for item in instance.residents
+            ]
+        )
+    }
+    before = set(ui.context.client.elements)
+    panel = ui.column()
+
+    def save(updated, _resident_id, _impact) -> None:
+        # The session refreshes the visible tab after every accepted edit.
+        state["instance"] = updated
+        rebuild()
+
+    def rebuild() -> None:
+        panel.clear()
+        with panel:
+            current = state["instance"]
+            render_elective_preferences(
+                current,
+                None,
+                current.residents_by_id[resident_id],
+                on_schedule_save=save,
+                schedule_is_current=True,
+            )
+
+    rebuild()
+
+    def choose(value: str) -> None:
+        select = next(
+            element
+            for element_id, element in ui.context.client.elements.items()
+            if element_id not in before
+            and not element.is_deleted
+            and element.__class__.__name__ == "Select"
+        )
+        select.value = value
+        for listener in select._event_listeners.values():
+            if listener.type == "update:model-value":
+                listener.handler(
+                    ValueChangeEventArguments(sender=select, client=select.client, value=value)
+                )
+
+    resident = state["instance"].residents_by_id[resident_id]
+    options = list(elective_preference_options(state["instance"], resident))
+    for value in options[:3]:
+        choose(value)
+
+    ranked = state["instance"].residents_by_id[resident_id].elective_preferences
+    assert [item.rotation_id for item in ranked] == [
+        value.rsplit("|", 1)[0] for value in options[:3]
+    ]
+    assert _elements_orphaned_by(before) == []
+
+
 def test_elective_preferences_preserve_order_duplicates_and_prune_incompatible() -> None:
     instance = sample_instance()
     resident = instance.residents_by_id["resident-009"]
@@ -483,6 +624,7 @@ def test_resident_view_prioritizes_schedule_and_keeps_edit_secondary() -> None:
         on_edit=lambda: None,
         on_select=lambda _resident_id: None,
     )
+    _open_schedule_section(before, "resident_clinic_schedule")
 
     created = [
         element
@@ -1680,6 +1822,7 @@ def test_inline_resident_schedule_is_a_chronological_report_for_one_resident() -
         avery,
         today=date(2026, 8, 23),
     )
+    _open_schedule_section(before, "resident_clinic_schedule")
 
     created = [
         element
