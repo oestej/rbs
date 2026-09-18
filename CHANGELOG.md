@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Rotations:** The Rotations screen now has an Export CSV button that
+  downloads every rotation and its configured parameters as a single
+  spreadsheet-friendly CSV file.
+
 ### Fixed
 
 - **Scheduling:** Solve readiness now identifies when required rotation blocks
