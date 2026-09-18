@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Scheduling:** Solve readiness now identifies when required rotation blocks
+  need more resident-weeks than an overall or training-level maximum can hold,
+  including resident-specific additions and waivers, instead of starting a
+  solve that can only return infeasible.
+
 ## [0.1.11] - 2026-09-12
 
 ### Fixed

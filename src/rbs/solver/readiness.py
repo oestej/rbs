@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from rbs.models.enums import RotationKind
 from rbs.models.instance import SolverProblem
+from rbs.solver.planning import expand_occurrences
 
 __all__ = [
     "ReadinessIssue",
@@ -160,10 +161,14 @@ def _rotation_rule_conflicts(
 ) -> list[ReadinessIssue]:
     issues: list[ReadinessIssue] = []
     potential_weeks = _potential_resident_weeks(instance)
+    required_weeks = _required_resident_weeks(instance)
     calendar_weeks = instance.calendar.weeks
 
     for rotation in instance.rotations:
         capacity_details: list[str] = []
+        has_minimum_conflict = False
+        has_maximum_conflict = False
+        maximum_suggestions: list[str] = []
         staffed_rules = [rule for rule in rotation.pgy_rules if rule.pgy in staffed]
         option = instance.electives.option_for(rotation.id)
         minimum_weeks = (
@@ -174,10 +179,33 @@ def _rotation_rule_conflicts(
         minimum_total = sum(rule.min_concurrent or 0 for rule in staffed_rules)
         overall_maximum = rotation.capacity.max_concurrent
         if overall_maximum is not None and minimum_total > overall_maximum:
+            has_minimum_conflict = True
             capacity_details.append(
                 f"training-level minimums total {minimum_total} residents every week, "
                 f"above the overall maximum of {overall_maximum}"
             )
+
+        required_total_weeks = sum(
+            weeks
+            for (rotation_id, _pgy), weeks in required_weeks.items()
+            if rotation_id == rotation.id
+        )
+        if overall_maximum is not None:
+            overall_capacity = overall_maximum * calendar_weeks
+            if required_total_weeks > overall_capacity:
+                has_maximum_conflict = True
+                shortfall = required_total_weeks - overall_capacity
+                needed = -(-required_total_weeks // calendar_weeks)
+                capacity_details.append(
+                    f"required blocks need {required_total_weeks} resident-weeks, but the "
+                    f"overall maximum of {_resident_count(overall_maximum)} at a time "
+                    f"allows {overall_capacity} "
+                    f"across the {calendar_weeks}-week year, a shortfall of {shortfall}"
+                )
+                maximum_suggestions.append(
+                    f"Raise the overall maximum for {rotation.name} to at least "
+                    f"{_resident_count(needed)}."
+                )
 
         overall_minimum = rotation.capacity.min_concurrent or 0
         overall_available = sum(
@@ -185,10 +213,11 @@ def _rotation_rule_conflicts(
             for (rotation_id, _pgy), weeks in potential_weeks.items()
             if rotation_id == rotation.id
         )
-        overall_required = overall_minimum * minimum_weeks
-        if overall_minimum and overall_available < overall_required:
+        minimum_required = overall_minimum * minimum_weeks
+        if overall_minimum and overall_available < minimum_required:
+            has_minimum_conflict = True
             capacity_details.append(
-                f"the overall minimum of {overall_minimum} needs {overall_required} "
+                f"the overall minimum of {overall_minimum} needs {minimum_required} "
                 f"resident-weeks, but at most {overall_available} are available"
             )
 
@@ -200,21 +229,55 @@ def _rotation_rule_conflicts(
             required = minimum * minimum_weeks
             if available >= required:
                 continue
+            has_minimum_conflict = True
             level = instance.training_level_label(rule.pgy, compact=True)
             capacity_details.append(
                 f"the {level} minimum of {minimum} needs {required} resident-weeks, "
                 f"but at most {available} are available"
             )
 
+        for rule in staffed_rules:
+            maximum = rule.max_concurrent
+            if maximum is None:
+                continue
+            required = required_weeks[rotation.id, rule.pgy]
+            capacity = maximum * calendar_weeks
+            if required <= capacity:
+                continue
+            has_maximum_conflict = True
+            level = instance.training_level_label(rule.pgy, compact=True)
+            shortfall = required - capacity
+            needed = -(-required // calendar_weeks)
+            capacity_details.append(
+                f"{required} {level} resident-weeks are required, but the {level} "
+                f"maximum of {_resident_count(maximum)} at a time allows {capacity} across the "
+                f"{calendar_weeks}-week year, a shortfall of {shortfall}"
+            )
+            maximum_suggestions.append(
+                f"Raise the {level} maximum for {rotation.name} to at least "
+                f"{_resident_count(needed)}."
+            )
+
         if capacity_details:
+            suggestions: list[str] = []
+            if has_minimum_conflict:
+                suggestions.extend(
+                    [
+                        "Clear a minimum unless this rotation must be staffed every week.",
+                        "Keep training-level minimums within the overall maximum.",
+                    ]
+                )
+            if has_maximum_conflict:
+                suggestions.extend(maximum_suggestions)
+                suggestions.append(
+                    "Or reduce or replace required blocks until they fit the available "
+                    "resident-weeks."
+                )
             issues.append(
                 ReadinessIssue(
                     code="rotation_capacity_conflict",
                     message=f"{rotation.name}: " + "; ".join(capacity_details) + ".",
-                    suggestions=(
-                        "Clear a minimum unless this rotation must be staffed every week.",
-                        "Keep training-level minimums within the overall maximum.",
-                    ),
+                    suggestions=tuple(suggestions),
                     rotation_id=rotation.id,
                 )
             )
@@ -258,6 +321,29 @@ def _rotation_rule_conflicts(
                 )
             )
     return issues
+
+
+def _resident_count(count: int) -> str:
+    return f"{count} {'resident' if count == 1 else 'residents'}"
+
+
+def _required_resident_weeks(
+    instance: SolverProblem,
+) -> defaultdict[tuple[str, int], int]:
+    """Return fixed resident-weeks which every feasible schedule must place.
+
+    Direct Elective slots are choices, so they contribute no lower bound for
+    any one service. Required curriculum blocks, resident-specific additions,
+    and fixed Clinic blocks do contribute; occurrence expansion also removes
+    any direct blocks consumed by replacements or waivers.
+    """
+    result: defaultdict[tuple[str, int], int] = defaultdict(int)
+    for occurrence in expand_occurrences(
+        instance,
+        require_configured_electives=False,
+    ):
+        result[occurrence.rotation_id, occurrence.pgy] += occurrence.duration_weeks
+    return result
 
 
 def _some_resident_still_requires(
