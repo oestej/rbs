@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from rbs.models.clinic import ClinicSlot
@@ -166,3 +166,12 @@ class CompiledProblem:
     clinic: ClinicModelState
     matching: ElectiveMatchingState
     reference_schedule: Schedule | None = None
+
+    def clone_for_search(self) -> CompiledProblem:
+        """Give each search its own mutable model and share read-only planning data.
+
+        CP-SAT expressions and decoding handles address variables by proto index;
+        Clone preserves those indices. Only the model is changed by the search
+        (objectives and proven matching tiers), never the shared handles or maps.
+        """
+        return replace(self, context=replace(self.context, model=self.context.model.Clone()))

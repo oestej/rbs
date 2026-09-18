@@ -1768,6 +1768,136 @@ def test_instance_save_refreshes_the_visible_tab_only(tmp_path) -> None:
     assert "rotations" not in session.stale_panels
 
 
+def test_save_shares_snapshot_only_until_the_render_finishes(tmp_path, monkeypatch) -> None:
+    from rbs.catalog import sample_instance
+    from rbs.store import Store
+    from rbs.ui.session import WorkspaceSession
+    from rbs.workspaces import WorkspaceController
+
+    store = Store(tmp_path / "rbs.sqlite")
+    store.init()
+    workspace = store.create("Original", sample_instance())
+    session = WorkspaceSession(store=store, workspace_id=workspace.id)
+    session.panels = {"block_schedule": _DummyPanel()}
+    reads = []
+    observed = []
+    get = store.get
+
+    def read(workspace_id):
+        reads.append(workspace_id)
+        return get(workspace_id)
+
+    monkeypatch.setattr(store, "get", read)
+    session._refresh_status = lambda current: observed.append(current.workspace())
+    session._render_tab = lambda current, _name: observed.append(current.workspace())
+    saved = session.persist_instance(workspace, workspace.instance)
+
+    assert reads == [workspace.id]  # The repository returns the committed snapshot once.
+    assert all(snapshot is saved for snapshot in observed)
+    newer = WorkspaceController(store).rename(saved, "Changed elsewhere")
+    assert session.workspace().workspace_revision == newer.workspace_revision
+    assert session.workspace().name == "Changed elsewhere"
+
+    with pytest.raises(RuntimeError), session.render_snapshot(saved):
+        raise RuntimeError("render failed")
+    assert session.workspace().name == "Changed elsewhere"
+
+
+def test_selecting_resident_preserves_directory_search(tmp_path) -> None:
+    from nicegui import ui
+
+    from rbs.catalog import sample_instance
+    from rbs.store import Store
+    from rbs.ui.app_shell import _render_tab
+    from rbs.ui.session import WorkspaceSession
+
+    store = Store(tmp_path / "rbs.sqlite")
+    store.init()
+    workspace = store.create("Residents", sample_instance())
+    session = WorkspaceSession(store=store, workspace_id=workspace.id, active_tab="residents")
+    session.panels["residents"] = ui.column()
+    session._render_tab = _render_tab
+    before = set(ui.context.client.elements)
+    session.refresh_visible()
+    created = [e for key, e in ui.context.client.elements.items() if key not in before]
+    search = next(e for e in created if e._props.get("label") == "Search residents")
+    resident = workspace.instance.residents[0]
+    search.set_value(resident.name)
+    item = next(
+        e for key, e in ui.context.client.elements.items()
+        if key not in before
+        and e.__class__.__name__ == "ItemLabel"
+        and getattr(e, "_text", None) == resident.name
+    ).parent_slot.parent.parent_slot.parent
+    for listener in item._event_listeners.values():
+        if listener.type == "click":
+            listener.handler(None)
+    assert session.resident_id == resident.id
+    assert not search.is_deleted
+    assert search.value == resident.name
+    assert "rbs-master-selected" in item._classes
+
+    from rbs.ui.residents.ops import replace_resident
+    from rbs.workspaces import InstanceEditImpact, WorkspaceController
+
+    WorkspaceController(store).save_instance(
+        workspace,
+        replace_resident(
+            workspace.instance, resident.id, resident.revised(name="Updated elsewhere"),
+        ),
+        impact=InstanceEditImpact.PRESENTATION,
+    )
+    for listener in list(item._event_listeners.values()):
+        if listener.type == "click":
+            listener.handler(None)
+    assert search.is_deleted  # External directory edits require a full refresh.
+    assert any(
+        getattr(e, "_text", None) == "Updated elsewhere"
+        for e in session.panels["residents"].descendants()
+    )
+
+
+def test_in_place_schedule_edits_advance_their_own_snapshot(tmp_path, monkeypatch) -> None:
+    from rbs.catalog import sample_instance
+    from rbs.models.enums import SolverEngineName, SolverStatus
+    from rbs.models.schedule import Schedule, ScheduleMeta
+    from rbs.models.workspace import WorkspaceConflictError
+    from rbs.store import Store
+    from rbs.ui import app_shell
+    from rbs.ui.session import WorkspaceSession
+    from rbs.workspaces import WorkspaceController
+
+    store = Store(tmp_path / "rbs.sqlite")
+    store.init()
+    instance = sample_instance()
+    schedule = Schedule(meta=ScheduleMeta(
+        academic_year=instance.academic_year,
+        engine=SolverEngineName.STUB,
+        status=SolverStatus.UNKNOWN,
+        solver_status=SolverStatus.UNKNOWN,
+    ))
+    workspace = store.create("Clinic edits", instance, schedule)
+    session = WorkspaceSession(store=store, workspace_id=workspace.id)
+    callbacks = {}
+
+    def render(*_args, **kwargs):
+        callbacks.update(kwargs)
+        return _DummyPanel()
+
+    monkeypatch.setattr(app_shell, "render_residents_tab", render)
+    app_shell._render_residents(session, workspace)
+    save = callbacks["on_schedule_change"]
+    for label in ("First edit", "Second edit"):
+        schedule = schedule.revised(meta=schedule.meta.revised(notes=[label]))
+        save(schedule, instance.residents[0].id, False)
+    current = store.get(workspace.id)
+    assert current.workspace_revision == workspace.workspace_revision + 2
+    assert current.schedule.meta.notes == ["Second edit"]
+    WorkspaceController(store).rename(current, "Edited elsewhere")
+    with pytest.raises(WorkspaceConflictError):
+        save(schedule, instance.residents[0].id, False)
+
+
 def test_schedule_save_can_defer_the_visible_tab_refresh(tmp_path) -> None:
     from rbs.catalog import sample_instance
     from rbs.models.enums import SolverEngineName, SolverStatus

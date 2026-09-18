@@ -45,11 +45,13 @@ def _document_io(session: WorkspaceSession):
     return getattr(session.workspace_host, "document_io", None)
 
 
-def document_summary(documents) -> tuple[str, str]:
+def document_summary(documents, *, dirty: bool | None = None) -> tuple[str, str]:
     """Describe native document state without browser/download terminology."""
     if documents.path is None:
         return "Not saved", PILL_ALERT
-    if documents.dirty:
+    if dirty is None:
+        dirty = documents.dirty
+    if dirty:
         return "Changes to save", PILL_WARN
     return "Saved", PILL_OK
 

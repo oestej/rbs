@@ -330,6 +330,44 @@ def test_semantic_dirty_tracking_catches_rename_and_ignores_export_metadata(tmp_
     assert controller.dirty
 
 
+def test_dirty_and_recovery_share_fingerprint_and_invalidate_on_restore(tmp_path, monkeypatch):
+    from rbs.desktop import documents
+
+    store = _store(tmp_path / "desktop.sqlite", "Original")
+    controller = DesktopDocumentController(
+        store,
+        Dialogs(save_path=tmp_path / "original.rbsc"),
+        recovery_path=tmp_path / "recovery.sqlite",
+    )
+    asyncio.run(controller.save())
+    original = store.export_rbsc()
+    calls = []
+    fingerprint = documents._semantic_fingerprint
+
+    def measured(workspace):
+        calls.append(workspace.workspace_revision)
+        return fingerprint(workspace)
+
+    monkeypatch.setattr(documents, "_semantic_fingerprint", measured)
+    workspace = controller.workspace
+    changed = WorkspaceController(store).rename(workspace, "Renamed")
+    assert len(calls) == 1  # Recovery prepared the fingerprint at commit.
+    assert controller.is_dirty(changed)
+    assert controller.dirty
+    assert controller.checkpoint()
+    assert len(calls) == 1
+
+    # Two imported documents may carry identical ids and revision numbers.
+    with controller._suspend_recovery():
+        store.restore_rbsc(original)
+        assert not controller.dirty
+        different = json.loads(original)
+        different["workspaces"][0]["name"] = "Different document, same revision"
+        store.restore_rbsc(json.dumps(different))
+        assert controller.dirty
+    assert len(calls) == 3
+
+
 def test_application_setting_edits_persist_without_dirtying_the_document(tmp_path) -> None:
     from rbs.solver.core import get_engine
 

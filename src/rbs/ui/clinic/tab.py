@@ -83,7 +83,7 @@ def render_clinic_tab(
         subtitle="Configure clinics, block rules, and manual placements.",
     ):
         with (
-            ui.tabs(on_change=on_section_change)
+            ui.tabs()
             .props("dense no-caps align=left")
             .classes("rbs-configuration-tabs w-full") as tabs
         ):
@@ -103,26 +103,47 @@ def render_clinic_tab(
             "clinic_block_rules": rules_tab,
             "clinic_manual_blocks": manual_tab,
         }
+        panels = {}
         with (
             ui.tab_panels(tabs, value=sections.get(active_section, sites_tab))
             .props("animated")
             .classes("rbs-configuration-panels w-full")
         ):
-            with ui.tab_panel(sites_tab).classes("p-0 pt-4"):
-                _clinic_directory_configuration(
-                    instance,
-                    selected_rotation_id=None,
-                    on_save=on_save,
-                )
-            with ui.tab_panel(rules_tab).classes("p-0 pt-4"):
-                _clinic_block_rules_configuration(instance, on_save=on_save)
-            with ui.tab_panel(manual_tab).classes("p-0 pt-4"):
-                _manual_clinic_blocks_configuration(
-                    instance,
-                    on_save=on_save,
-                    schedule=schedule,
-                    on_block_schedule_save=on_block_schedule_save,
-                )
+            for name, tab in sections.items():
+                panels[name] = ui.tab_panel(tab).classes("p-0 pt-4")
+
+        rendered: set[str] = set()
+
+        def render_section(name: str) -> None:
+            if name not in panels or name in rendered:
+                return
+            with panels[name]:
+                if name == "clinic_sites":
+                    _clinic_directory_configuration(
+                        instance,
+                        selected_rotation_id=None,
+                        on_save=on_save,
+                    )
+                elif name == "clinic_block_rules":
+                    _clinic_block_rules_configuration(instance, on_save=on_save)
+                else:
+                    _manual_clinic_blocks_configuration(
+                        instance,
+                        on_save=on_save,
+                        schedule=schedule,
+                        on_block_schedule_save=on_block_schedule_save,
+                    )
+            rendered.add(name)
+
+        def select_section(event) -> None:
+            value = getattr(event.value, "name", event.value)
+            render_section(value)
+            if on_section_change is not None:
+                on_section_change(event)
+
+        # Keep visited sections mounted so returning to an editor retains its draft.
+        render_section(active_section if active_section in sections else "clinic_sites")
+        tabs.on_value_change(select_section)
 
 
 def _clinic_block_rules_configuration(

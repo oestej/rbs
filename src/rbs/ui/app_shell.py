@@ -673,7 +673,23 @@ def _render_residents(
             session.resident_schedule_section = "resident_block_schedule"
         session.resident_id = resident_id
         session.active_tab = "residents"
-        session.refresh_panel("residents")
+        current = session.workspace()
+        if current is None:
+            session.refresh_panel("residents")
+            return
+        update_directory = session._select_resident_in_directory
+        with session.render_snapshot(current):
+            if (
+                current.instance.residents == workspace.instance.residents
+                and current.instance.requirements == workspace.instance.requirements
+                and update_directory is not None
+                and update_directory(resident_id)
+                and session.refresh_region(RESIDENT_DETAIL_REGION)
+            ):
+                return
+            # A different caller may have changed names, training levels, or time
+            # away since this directory was drawn; refresh those rows as well.
+            session.refresh_panel("residents")
 
     def persist_resident(updated: SchedulerInput, resident_id: str) -> None:
         session.resident_block_schedule_editing = False
@@ -720,9 +736,10 @@ def _render_residents(
         resident_id: str,
         refresh: bool,
     ) -> None:
+        nonlocal workspace
         session.resident_id = resident_id
         session.active_tab = "residents"
-        session.persist_schedule(workspace, updated, refresh=refresh)
+        workspace = session.persist_schedule(workspace, updated, refresh=refresh)
 
     def set_block_schedule_editing(editing: bool) -> None:
         session.resident_block_schedule_editing = editing
@@ -748,6 +765,7 @@ def _render_residents(
         workspace.instance,
         workspace.latest_schedule,
         detail_panel=detail_panel,
+        on_directory_ready=lambda select: setattr(session, "_select_resident_in_directory", select),
         selected_resident_id=session.resident_id,
         on_select=select_resident,
         on_save=persist_resident,

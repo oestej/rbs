@@ -23,6 +23,7 @@ from typing import Any, Literal, Protocol
 from pydantic import ValidationError
 
 from rbs import __version__
+from rbs.desktop.atomic_files import atomic_write_text, fsync_directory
 from rbs.logging import LOG_SCHEMA_VERSION, LoggingRuntime, get_logger
 from rbs.models.common import StrictModel
 
@@ -321,7 +322,7 @@ def export_log_bundle(
         with temporary.open("rb") as stream:
             os.fsync(stream.fileno())
         os.replace(temporary, destination)
-        _fsync_directory(destination.parent)
+        fsync_directory(destination.parent)
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
@@ -484,38 +485,9 @@ def _directory_lock(root: Path) -> Iterator[None]:
 def _atomic_write(destination: Path, payload: str) -> None:
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(destination.parent, 0o700)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=destination.parent,
-        prefix=f".{destination.name}.",
-        suffix=".tmp",
+    atomic_write_text(
+        destination, payload, mode=stat.S_IRUSR | stat.S_IWUSR, sync_directory=True,
     )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.chmod(temporary, stat.S_IRUSR | stat.S_IWUSR)
-        os.replace(temporary, destination)
-        _fsync_directory(destination.parent)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-
-
-def _fsync_directory(directory: Path) -> None:
-    if not hasattr(os, "O_DIRECTORY"):
-        return
-    try:
-        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-    except OSError:
-        # The completed file is still atomically visible on filesystems which
-        # do not permit syncing directory handles.
-        pass
 
 
 __all__ = [

@@ -20,6 +20,11 @@
 
 ### Fixed
 
+- **Desktop:** Editing solved schedules and checking save status do less repeated
+  work. Clinic sections and edit menus load when opened, switching residents
+  retains the directory search, and multi-attempt solves share model preparation
+  to leave more of the time budget for finding a schedule. Saved file formats
+  and scheduling priorities are unchanged.
 - **Residents:** Ranking elective preferences is about an order of magnitude
   faster, and no longer slows down as the list grows. A resident's block and
   clinic schedule reports are now drawn when their tab is opened, and saving

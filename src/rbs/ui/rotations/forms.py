@@ -52,12 +52,12 @@ from rbs.ui.rotations.ops import (
     add_mandatory_rotation,
     next_mandatory_rotation_id,
     replace_standard_rotation,
+    resident_override_managed_by_rotation,
     rotation_editor_state,
     rotation_from_editor_state,
     rotation_group_members_by_pgy,
 )
 from rbs.ui.rotations.overrides import (
-    _editor_manages_resident_override,
     _resident_rotation_overrides_editor,
     _resident_rotation_overrides_view,
 )
@@ -227,7 +227,7 @@ def _rotation_editor(
         [
             override.model_dump(mode="json")
             for override in instance.resident_rotation_overrides
-            if _editor_manages_resident_override(instance, override, rotation.id)
+            if resident_override_managed_by_rotation(instance, override, rotation.id)
         ]
         if rotation is not None
         else []

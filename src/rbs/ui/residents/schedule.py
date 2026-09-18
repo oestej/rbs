@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from functools import partial
 from typing import Any
@@ -2213,20 +2213,37 @@ def _resident_clinic_context_menu(
 ) -> None:
     from nicegui import ui
 
-    available_site_ids = resident_clinic_available_site_ids(
-        context.instance,
-        context.schedule,
-        resident_id=context.resident.id,
-        week=context.week,
-        weekday=state.weekday,
-        session=state.session,
-        clinic_occupancy=context.clinic_occupancy,
-    )
-    with ui.context_menu().classes("rbs-resident-clinic-context-menu"):
-        if state.visible_slot is None:
-            _resident_clinic_add_menu(context, state, available_site_ids)
-        else:
-            _resident_clinic_existing_menu(context, state, available_site_ids)
+    menu = ui.context_menu().classes("rbs-resident-clinic-context-menu")
+
+    def populate() -> None:
+        schedule = context.active_schedule()
+        current = replace(
+            context,
+            schedule=schedule,
+            clinic_occupancy=(
+                context.clinic_occupancy
+                if schedule is context.schedule
+                else occupancy(context.instance, schedule)
+            ),
+        )
+        current_state = _resident_clinic_cell_state(current, state.weekday, state.session)
+        available_site_ids = resident_clinic_available_site_ids(
+            current.instance,
+            schedule,
+            resident_id=current.resident.id,
+            week=current.week,
+            weekday=state.weekday,
+            session=state.session,
+            clinic_occupancy=current.clinic_occupancy,
+        )
+        menu.clear()
+        with menu:
+            if current_state.visible_slot is None:
+                _resident_clinic_add_menu(current, current_state, available_site_ids)
+            else:
+                _resident_clinic_existing_menu(current, current_state, available_site_ids)
+
+    menu.on("before-show", populate)
 
 
 def _resident_clinic_add_menu(

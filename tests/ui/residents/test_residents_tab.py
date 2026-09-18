@@ -2918,6 +2918,17 @@ def test_resident_clinic_manual_override_renders_context_actions_and_week_callou
 
     assert "Manual override" in labels
     assert "1 extra clinic half-day than usual this week · manual override" in labels
+    assert "Add extra block" not in labels
+    assert "Delete clinic block" not in labels
+    for menu in context_menus:
+        for listener in menu._event_listeners.values():
+            if listener.type == "beforeShow":
+                listener.handler()
+    labels = {
+        getattr(element, "_text", None)
+        for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    }
     assert "Add extra block" in labels
     assert "Change clinic site" in labels
     assert "Delete clinic block" in labels

@@ -15,7 +15,7 @@ from rbs.models.instance import SolverConfig, SolverProblem
 from rbs.models.schedule import Schedule, SolverDiagnostic
 from rbs.solver.core.base import SchedulerEngine, empty_schedule
 from rbs.solver.core.compile import compile_problem
-from rbs.solver.core.context import ModelBuildError
+from rbs.solver.core.context import CompiledProblem, ModelBuildError
 from rbs.solver.core.decode import decode_solution
 from rbs.solver.core.diagnostics import explain_infeasibility
 from rbs.solver.planning import resolve_clinic_block_band
@@ -80,48 +80,6 @@ class CpSatEngine:
         handful of concurrent seeds does escape it. CP-SAT releases the GIL, so
         threads give real parallelism and the attempts share one wall clock.
         """
-        attempts, workers = portfolio_plan(options)
-        if attempts == 1:
-            return self._solve_once(
-                instance,
-                options=options,
-                workers=workers,
-                reference_schedule=reference_schedule,
-            )
-
-        base = options.random_seed or 0
-        started = time.perf_counter()
-        with ThreadPoolExecutor(max_workers=attempts) as pool:
-            schedules = list(
-                pool.map(
-                    lambda index: self._solve_once(
-                        instance,
-                        options=options,
-                        workers=workers,
-                        seed=base + index,
-                        reference_schedule=reference_schedule,
-                    ),
-                    range(attempts),
-                )
-            )
-        best = min(schedules, key=_attempt_rank)
-        best.meta.wall_time_seconds = time.perf_counter() - started
-        if not best.is_empty():
-            best.meta.notes = [
-                *best.meta.notes,
-                f"best of {attempts} concurrent solves x {workers} workers",
-            ]
-        return best
-
-    def _solve_once(
-        self,
-        instance: SolverProblem,
-        *,
-        options: SolverConfig,
-        workers: int | None = None,
-        seed: int | None = None,
-        reference_schedule: Schedule | None = None,
-    ) -> Schedule:
         try:
             from ortools.sat.python import cp_model
         except ImportError as exc:  # pragma: no cover
@@ -153,6 +111,50 @@ class CpSatEngine:
                 ],
                 wall_time_seconds=time.perf_counter() - started,
             )
+
+        attempts, workers = portfolio_plan(options)
+        if attempts == 1:
+            return self._solve_once(
+                problem,
+                started=started,
+                workers=workers,
+            )
+
+        base = options.random_seed or 0
+        with ThreadPoolExecutor(max_workers=attempts) as pool:
+            schedules = list(
+                pool.map(
+                    lambda index: self._solve_once(
+                        problem.clone_for_search(),
+                        started=started,
+                        workers=workers,
+                        seed=base + index,
+                    ),
+                    range(attempts),
+                )
+            )
+        best = min(schedules, key=_attempt_rank)
+        best.meta.wall_time_seconds = time.perf_counter() - started
+        if not best.is_empty():
+            best.meta.notes = [
+                *best.meta.notes,
+                f"best of {attempts} concurrent solves x {workers} workers",
+            ]
+        return best
+
+    def _solve_once(
+        self,
+        problem: CompiledProblem,
+        *,
+        started: float,
+        workers: int | None = None,
+        seed: int | None = None,
+    ) -> Schedule:
+        from ortools.sat.python import cp_model
+
+        instance = problem.context.instance
+        options = problem.context.options
+        reference_schedule = problem.reference_schedule
 
         deadline = started + options.time_limit_seconds
         worker_count = max(1, workers if workers is not None else options.num_workers)

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Protocol, runtime_checkable
@@ -107,6 +108,10 @@ class WorkspaceSession:
     _refresh_status: RefreshStatus | None = field(default=None, repr=False)
     _recovery_error: str | None = field(default=None, repr=False)
     _leave_guard_baseline: tuple[int, int] | None = field(default=None, repr=False)
+    _render_workspace: Workspace | None = field(default=None, repr=False)
+    _select_resident_in_directory: Callable[[str | None], bool] | None = field(
+        default=None, repr=False,
+    )
 
     def __post_init__(self) -> None:
         # A session built without a host is the desktop case: one database, one
@@ -127,10 +132,22 @@ class WorkspaceSession:
         """Return the current workspace without changing it."""
         if self.workspace_id is None:
             return None
+        if self._render_workspace is not None and self._render_workspace.id == self.workspace_id:
+            return self._render_workspace
         try:
             return self.store.get(self.workspace_id)
         except KeyError:
             return None
+
+    @contextmanager
+    def render_snapshot(self, workspace: Workspace) -> Iterator[None]:
+        """Reuse one snapshot during a synchronous render, never across UI events."""
+        previous = self._render_workspace
+        self._render_workspace = workspace
+        try:
+            yield
+        finally:
+            self._render_workspace = previous
 
     def refresh_automatic_locks(
         self,
@@ -157,6 +174,7 @@ class WorkspaceSession:
     def reset_navigation(self, workspace_id: int | None) -> None:
         self.workspace_id = workspace_id
         self._leave_guard_baseline = None
+        self._select_resident_in_directory = None
         self.resident_id = None
         self.rotation_id = None
         self.show_past_block_weeks = False
@@ -201,10 +219,11 @@ class WorkspaceSession:
         sync_settings = getattr(documents, "sync_application_settings", None)
         if sync_settings is not None:
             sync_settings(saved.instance)
-        self.touch()
-        self.mark_stale()
-        if region is None or not self.refresh_region(region):
-            self.refresh_visible()
+        with self.render_snapshot(saved):
+            self.touch()
+            self.mark_stale()
+            if region is None or not self.refresh_region(region):
+                self.refresh_visible()
         return saved
 
     def persist_schedule(
@@ -220,10 +239,11 @@ class WorkspaceSession:
         except WorkspaceConflictError:
             self._refresh_after_conflict()
             raise
-        self.touch()
-        self.mark_stale()
-        if refresh:
-            self.refresh_visible()
+        with self.render_snapshot(saved):
+            self.touch()
+            self.mark_stale()
+            if refresh:
+                self.refresh_visible()
         return saved
 
     def _require_active_snapshot(self, workspace: Workspace) -> None:

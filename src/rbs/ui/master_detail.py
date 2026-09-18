@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Any
 
 from rbs.ui.buttons import PRIMARY_BUTTON_PROPS
 
@@ -51,7 +52,7 @@ def page() -> Iterator[None]:
 
 
 @contextmanager
-def split(*, detail_selected: bool | None = None) -> Iterator[None]:
+def split(*, detail_selected: bool | None = None) -> Iterator[Any]:
     from nicegui import ui
 
     state_class = (
@@ -61,8 +62,8 @@ def split(*, detail_selected: bool | None = None) -> Iterator[None]:
         if detail_selected
         else " rbs-master-no-selection"
     )
-    with ui.row().classes(f"rbs-master-split{state_class} w-full items-stretch gap-5"):
-        yield
+    with ui.row().classes(f"rbs-master-split{state_class} w-full items-stretch gap-5") as row:
+        yield row
 
 
 def directory(

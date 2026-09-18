@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+
+import pytest
 
 from rbs.catalog import sample_instance
 from rbs.store import DownloadState, Store
@@ -515,6 +519,53 @@ def test_the_two_packagings_declare_opposite_answers(tmp_path) -> None:
     assert cloud.product is CLOUD_PRODUCT
     assert local.allows_database_restore is True
     assert cloud.allows_database_restore is False
+
+
+@pytest.mark.parametrize(
+    "state,label,visible",
+    [
+        ("sample", "Sample Data", True),
+        ("never", "Never downloaded", False),
+        ("current", "Downloaded just now", True),
+        ("stale", "Changes since download", True),
+        ("desktop-new", "Not saved", True),
+        ("desktop-clean", "Saved", True),
+        ("desktop-dirty", "Changes to save", True),
+    ],
+)
+def test_initial_and_refreshed_file_status_agree(tmp_path, monkeypatch, state, label, visible):
+    from rbs.ui import app_status
+
+    session, store = _session(tmp_path)
+    controller = WorkspaceController(store)
+    workspace = store.list()[0]
+    if state == "sample":
+        workspace = replace(workspace, is_sample=True)
+    elif state in {"current", "stale"}:
+        workspace = controller.mark_exported(workspace)
+        if state == "stale":
+            workspace = controller.save_instance(
+                workspace, workspace.instance.revised(lock_through_today=True),
+            )
+    documents = None
+    if state.startswith("desktop"):
+        documents = SimpleNamespace(
+            path=None if state == "desktop-new" else tmp_path / "schedule.rbsc",
+            dirty=state != "desktop-clean",
+        )
+    monkeypatch.setattr(app_status, "_document_io", lambda _session: documents)
+    warnings = []
+    monkeypatch.setattr(
+        app_status.file_handle, "set_unsaved", lambda _ui, unsaved: warnings.append(unsaved),
+    )
+    app_status._download_chip(session, workspace)
+    chip = session.download_chip
+    initial = (chip.text, chip.visible, tuple(chip._classes))
+    assert initial[:2] == (label, visible)
+    app_status._refresh_download_chip(session, workspace)
+    assert session.download_chip is chip
+    assert (chip.text, chip.visible, tuple(chip._classes)) == initial
+    assert warnings == [False, False]
 
 
 def test_a_never_downloaded_workspace_has_no_header_warning(tmp_path) -> None:

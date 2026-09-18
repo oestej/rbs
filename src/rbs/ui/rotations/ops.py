@@ -525,7 +525,7 @@ def replace_standard_rotation(
         updates["resident_rotation_overrides"] = [
             override
             for override in instance.resident_rotation_overrides
-            if not _resident_override_managed_by_rotation(
+            if not resident_override_managed_by_rotation(
                 instance,
                 override,
                 original_id,
@@ -549,11 +549,12 @@ def replace_standard_rotation(
     return instance.revised(**updates)
 
 
-def _resident_override_managed_by_rotation(
+def resident_override_managed_by_rotation(
     instance: SchedulerInput,
     override: ResidentRotationOverride,
     rotation_id: str,
 ) -> bool:
+    """Whether a rotation editor owns this direct or unanchored-group override."""
     if override.rotation_id == rotation_id:
         return True
     if override.group_instance_id is None:
