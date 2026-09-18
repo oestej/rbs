@@ -577,6 +577,29 @@ def _render_rotations(session: WorkspaceSession, workspace: Workspace) -> None:
             impact=InstanceEditImpact.PRESENTATION,
         )
 
+    async def export_rotations_csv(content: str, filename: str) -> None:
+        from nicegui import ui
+
+        try:
+            if not await _present_csv_export(session, content, filename):
+                get_logger("documents").info(
+                    "schedule.export_cancelled",
+                    source="rotations_csv",
+                )
+                return
+            get_logger("documents").info(
+                "schedule.exported",
+                source="rotations_csv",
+            )
+        except Exception as exc:
+            get_logger("documents").error(
+                "schedule.export_failed",
+                source="rotations_csv",
+                error_code=type(exc).__name__,
+                exc_info=True,
+            )
+            ui.notify(str(exc), type="negative")
+
     render_rotations_tab(
         workspace.instance,
         schedule=workspace.latest_schedule,
@@ -587,6 +610,7 @@ def _render_rotations(session: WorkspaceSession, workspace: Workspace) -> None:
         active_section=session.rotation_section,
         on_section_change=lambda event: _remember_rotation_section(session, event.value),
         resident_edit_url="/",
+        on_export_csv=export_rotations_csv,
     )
 
 

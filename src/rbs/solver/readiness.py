@@ -115,6 +115,10 @@ def _missing_elective_fallbacks(
     instance: SolverProblem,
     staffed: set[int],
 ) -> list[ReadinessIssue]:
+    # Placeholder mode never backfills electives with Clinic, so no fallback
+    # configuration is required.
+    if getattr(instance, "use_placeholder_electives", False):
+        return []
     issues: list[ReadinessIssue] = []
     for pgy in instance.training_level_ids:
         if pgy not in staffed:

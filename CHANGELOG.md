@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Rotations:** The Rotations screen now has an Export CSV button that
+  downloads every rotation and its configured parameters as a single
+  spreadsheet-friendly CSV file.
+- **Configuration:** A new Use placeholder electives option, off by default,
+  solves every elective slot as a generic gray Placeholder block with no
+  clinic hours instead of matching elective preferences or backfilling with
+  Clinic.
+
 ### Fixed
 
 - **Residents:** Ranking elective preferences is about an order of magnitude
@@ -14,6 +24,9 @@
   need more resident-weeks than an overall or training-level maximum can hold,
   including resident-specific additions and waivers, instead of starting a
   solve that can only return infeasible.
+- **Academic year:** Moving to a new academic year now clears resident rotation
+  exceptions and overrides along with the block schedule and other
+  year-specific entries.
 
 ## [0.1.11] - 2026-09-12
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from rbs.models.clinic import clinic_slot_date
+from rbs.models.elective import PLACEHOLDER_ELECTIVE_ID
 from rbs.models.instance import SolverProblem
 from rbs.models.rotation import RotationBlockConfig
 from rbs.models.schedule import Schedule
@@ -72,9 +73,16 @@ def _validate_assignment_header(
         errors.append(f"{label}: Elective Clinic assignments must carry the fallback marker")
     resident = instance.residents_by_id[assignment.resident_id]
     option = instance.electives.option_for(assignment.rotation_id)
+    # The generic placeholder is always eligible for any elective slot while
+    # the option is on; it intentionally has no elective option record.
+    placeholder = (
+        assignment.rotation_id == PLACEHOLDER_ELECTIVE_ID
+        and bool(getattr(instance, "use_placeholder_electives", False))
+    )
     if assignment.elective and not (
         (option is not None and option.allows(resident.pgy, assignment.block_duration_weeks))
         or fallback
+        or placeholder
     ):
         errors.append(f"{label}: assignment is marked Elective but the service is not eligible")
     if rotation.kind.value == "elective" and not assignment.elective:

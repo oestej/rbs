@@ -62,15 +62,30 @@ def configuration(
     *,
     subtitle: str | None = None,
     max_width: str = "max-w-7xl",
-) -> Iterator[None]:
-    """Centered shell for settings and other tabbed configuration pages."""
+    with_header_actions: bool = False,
+) -> Iterator[object | None]:
+    """Centered shell for settings and other tabbed configuration pages.
+
+    When ``with_header_actions`` is set, the yielded container places compact
+    controls beside the title at the top right of the page.
+    """
     from nicegui import ui
 
     with ui.column().classes(
         f"rbs-page-shell rbs-configuration-page w-full {max_width} mx-auto gap-4"
     ):
-        page_header(title, subtitle=subtitle)
-        yield
+        header_actions = None
+        if with_header_actions:
+            with ui.row().classes(
+                "rbs-schedule-heading-row w-full min-w-0 items-center justify-between gap-4"
+            ):
+                page_header(title, subtitle=subtitle)
+                header_actions = ui.row().classes(
+                    "rbs-schedule-heading-actions items-center gap-2"
+                )
+        else:
+            page_header(title, subtitle=subtitle)
+        yield header_actions
 
 
 @contextmanager

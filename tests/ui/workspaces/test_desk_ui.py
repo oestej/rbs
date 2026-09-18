@@ -921,7 +921,7 @@ def test_academic_year_change_requires_confirmation_and_cancel_keeps_schedule(
         "Changing the academic year to 2027-2028 will clear the entire block and "
         "clinic schedule and all year-specific entries, including vacation weeks, "
         "individual days off, dated conferences and events, clinic date exceptions, "
-        "and manual placements."
+        "resident rotation exceptions and overrides, and manual placements."
     ) in labels
     assert (
         "Residents, rotations, recurring clinic settings, and scheduling rules will "

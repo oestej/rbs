@@ -15,7 +15,9 @@ from rbs.models.rotation import (
 )
 from rbs.models.schedule import Schedule
 from rbs.ui import master_detail, page_shells
+from rbs.ui.buttons import SECONDARY_BUTTON_PROPS, button_props
 from rbs.ui.rotations.academic import _academic_configuration
+from rbs.ui.rotations.csv_export import build_rotations_csv, rotations_csv_filename
 from rbs.ui.rotations.elective import _elective_configuration
 from rbs.ui.rotations.fmed import _dedicated_rotation_cards
 from rbs.ui.rotations.forms import (
@@ -28,6 +30,7 @@ from rbs.ui.rotations.special import _special_configuration
 from rbs.ui.rotations.summary import _rotation_summary
 from rbs.ui.rotations.types import (
     NEW_MANDATORY_ROTATION_ID,
+    ExportRotationsCsv,
     SaveRotation,
     SelectRotation,
 )
@@ -47,6 +50,7 @@ def render_rotations_tab(
     active_section: str = "rotation_summary",
     on_section_change=None,
     resident_edit_url: str | None = None,
+    on_export_csv: ExportRotationsCsv | None = None,
 ) -> None:
     """Render rotation-summary and rotation-configuration workspaces."""
     from nicegui import ui
@@ -72,10 +76,26 @@ def render_rotations_tab(
             ),
         )
 
+    def export_csv() -> object:
+        content = build_rotations_csv(instance)
+        filename = rotations_csv_filename(instance.academic_year)
+        if on_export_csv is not None:
+            return on_export_csv(content, filename)
+        ui.download.content(content, filename, "text/csv")
+        return None
+
     with page_shells.configuration(
         "Rotations",
         subtitle="Review and configure rotations, curricula, and scheduling rules.",
-    ):
+        with_header_actions=True,
+    ) as header_actions:
+        assert header_actions is not None
+        with header_actions:
+            ui.button(
+                "Export CSV",
+                icon="table_view",
+                on_click=export_csv,
+            ).props(button_props(SECONDARY_BUTTON_PROPS, "dense"))
         with (
             ui.tabs(on_change=on_section_change)
             .props("dense no-caps align=left")

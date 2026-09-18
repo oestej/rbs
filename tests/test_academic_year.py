@@ -11,7 +11,11 @@ from rbs.academic_year import (
     week_start_choices,
 )
 from rbs.catalog import sample_instance
-from rbs.models.case_blocks import ManualClinicBlock
+from rbs.models.case_blocks import (
+    ManualClinicBlock,
+    ResidentRotationOverride,
+    ResidentRotationWaiver,
+)
 from rbs.models.clinic_site import ClinicCapacityOverride
 from rbs.models.enums import Session
 
@@ -91,6 +95,21 @@ def test_start_new_academic_year_clears_year_specific_work() -> None:
                 replaces_rotation_id="elective",
             )
         ],
+        resident_rotation_overrides=[
+            ResidentRotationOverride(
+                resident_id=instance.residents[0].id,
+                rotation_id="night_float",
+                duration_weeks=2,
+                replaces_rotation_id="elective",
+            )
+        ],
+        resident_rotation_waivers=[
+            ResidentRotationWaiver(
+                resident_id=instance.residents[1].id,
+                rotation_id="clinic",
+                duration_weeks=2,
+            )
+        ],
     )
 
     moved = start_new_academic_year(configured, "2027-2028")
@@ -102,6 +121,8 @@ def test_start_new_academic_year_clears_year_specific_work() -> None:
     assert not moved.academic_half_day_overrides
     assert not moved.locks
     assert not moved.manual_clinic_blocks
+    assert not moved.resident_rotation_overrides
+    assert not moved.resident_rotation_waivers
     assert not moved.special_rotations
     assert not moved.clinic_policy.closure_days
     assert all(not site.closure_days for site in moved.clinic_policy.sites)

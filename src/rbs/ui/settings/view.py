@@ -193,6 +193,16 @@ def _general_settings(
         except (ValidationError, ValueError) as exc:
             ui.notify(str(exc), type="negative")
 
+    def toggle_placeholder_electives(event) -> None:
+        enabled = bool(event.value)
+        try:
+            persist_instance(
+                instance.revised(use_placeholder_electives=enabled),
+                impact=InstanceEditImpact.SOLVER_INPUT,
+            )
+        except (ValidationError, ValueError) as exc:
+            ui.notify(str(exc), type="negative")
+
     current_start = instance.calendar.first_week_start
     start_options = week_start_choices(
         current_start, academic_year=instance.academic_year
@@ -293,6 +303,17 @@ def _general_settings(
                     ):
                         ui.icon("lock_clock").classes("rbs-text-secondary")
                         ui.label(status).classes("rbs-type-body")
+                ui.checkbox(
+                    "Use placeholder electives",
+                    value=instance.use_placeholder_electives,
+                    on_change=toggle_placeholder_electives,
+                )
+                ui.label(
+                    "Every elective slot solves as a generic Placeholder block instead "
+                    "of a named service. Placeholder blocks are always eligible, "
+                    "carry no clinic hours so no clinic sessions are scheduled, and "
+                    "elective time is never backfilled with Clinic. Re-solve to apply."
+                ).classes("rbs-type-body rbs-text-muted")
 
 
 def _application_settings_io(state):
