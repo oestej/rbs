@@ -199,8 +199,9 @@ def start_new_academic_year(instance: SchedulerInput, value: str) -> SchedulerIn
     """Start another academic year without carrying year-specific work forward.
 
     Reusable resident, rotation, curriculum, recurring-clinic, and solver settings
-    remain. Time away, dated calendar exceptions, week-specific exceptions, and
-    manual placements belong to the old year and are cleared rather than shifted.
+    remain. Time away, dated calendar exceptions, week-specific exceptions,
+    resident rotation exceptions and overrides, and manual placements belong to
+    the old year and are cleared rather than shifted.
     """
     normalized = academic_year_label(academic_year_start_year(value))
     if normalized == instance.academic_year:
@@ -229,6 +230,8 @@ def start_new_academic_year(instance: SchedulerInput, value: str) -> SchedulerIn
         academic_half_day_overrides=[],
         locks=[],
         manual_clinic_blocks=[],
+        resident_rotation_overrides=[],
+        resident_rotation_waivers=[],
         special_rotations=[],
     )
 

@@ -8,6 +8,9 @@
   need more resident-weeks than an overall or training-level maximum can hold,
   including resident-specific additions and waivers, instead of starting a
   solve that can only return infeasible.
+- **Academic year:** Moving to a new academic year now clears resident rotation
+  exceptions and overrides along with the block schedule and other
+  year-specific entries.
 
 ## [0.1.11] - 2026-09-12
 

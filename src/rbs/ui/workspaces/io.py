@@ -275,7 +275,8 @@ def _open_academic_year_change_dialog(
                 f"Changing the academic year to {academic_year} will clear the entire "
                 "block and clinic schedule and all year-specific entries, including "
                 "vacation weeks, individual days off, dated conferences and events, "
-                "clinic date exceptions, and manual placements."
+                "clinic date exceptions, resident rotation exceptions and overrides, "
+                "and manual placements."
             ).classes("rbs-type-body")
             ui.label(
                 "Residents, rotations, recurring clinic settings, and scheduling rules "
