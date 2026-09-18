@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-09-18
+
 ### Security
 
 - **Desktop:** Imported names remain literal text in action buttons, spreadsheet
@@ -355,7 +357,8 @@
 - **Releases:** Download a macOS disk image built from the tagged commit, with
   that release's changelog section as its published description.
 
-[Unreleased]: https://github.com/oestej/rbs/compare/v0.1.11...HEAD
+[Unreleased]: https://github.com/oestej/rbs/compare/v0.1.12...HEAD
+[0.1.12]: https://github.com/oestej/rbs/compare/v0.1.11...v0.1.12
 [0.1.11]: https://github.com/oestej/rbs/compare/v0.1.10...v0.1.11
 [0.1.10]: https://github.com/oestej/rbs/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/oestej/rbs/compare/v0.1.8...v0.1.9
