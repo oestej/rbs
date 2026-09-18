@@ -7,6 +7,10 @@
 - **Rotations:** The Rotations screen now has an Export CSV button that
   downloads every rotation and its configured parameters as a single
   spreadsheet-friendly CSV file.
+- **Configuration:** A new Use placeholder electives option, off by default,
+  solves every elective slot as a generic gray Placeholder block with no
+  clinic hours instead of matching elective preferences or backfilling with
+  Clinic.
 
 ### Fixed
 

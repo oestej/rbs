@@ -24,9 +24,11 @@ from rbs.models.curriculum import (
     default_training_level_name,
 )
 from rbs.models.elective import (
+    PLACEHOLDER_ELECTIVE_ID,
     ElectiveConfiguration,
     apply_elective_option_defaults,
     apply_shared_elective_color,
+    placeholder_elective_rotation,
 )
 from rbs.models.enums import RotationKind, Session, Weekday
 from rbs.models.locks import LockedPlacement
@@ -62,6 +64,13 @@ class SolverCase(StrictModel):
     academic_year: str
     calendar: Calendar
     residents: list[Resident]
+    use_placeholder_electives: bool = Field(
+        default=False,
+        description=(
+            "Replace elective slots and preferences with generic placeholder blocks "
+            "during the solve."
+        ),
+    )
     academic_half_day_overrides: list[AcademicHalfDayOverride] = Field(
         default_factory=list,
         description=(
@@ -151,6 +160,7 @@ class SchedulingCase(SolverCase):
             special_rotations=instance.special_rotations,
             lock_through_today=instance.lock_through_today,
             solver=instance.solver,
+            use_placeholder_electives=instance.use_placeholder_electives,
         )
 
 
@@ -212,7 +222,15 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
 
     @cached_property
     def rotations_by_id(self) -> dict[str, Rotation]:
-        return {rotation.id: rotation for rotation in self.rotations}
+        by_id = {rotation.id: rotation for rotation in self.rotations}
+        # The generic placeholder is resolved transiently so timetables that
+        # reference it (including out-of-date ones saved while the option was
+        # on) keep rendering without persisting a synthetic catalog record.
+        if PLACEHOLDER_ELECTIVE_ID not in by_id:
+            by_id[PLACEHOLDER_ELECTIVE_ID] = placeholder_elective_rotation(
+                [curriculum.pgy for curriculum in self.requirements]
+            )
+        return by_id
 
     @cached_property
     def _curriculum_by_pgy(self) -> dict[int, PGYCurriculum]:
@@ -296,38 +314,41 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
         # Catalog and training-level edits can make previously saved requests
         # impossible. Keep the remaining stack in its original order and cap
         # duplicate requests at the direct inventory available for that shape.
-        normalized_residents: list[Resident] = []
-        for resident in self.residents:
-            inventory = self.direct_elective_block_counts_for_pgy(resident.pgy)
-            used: Counter[tuple[str, int]] = Counter()
-            used_rotations: Counter[str] = Counter()
-            preferences: list[ElectivePreferenceRequest] = []
-            for request in resident.elective_preferences:
-                option = self.electives.option_for(request.rotation_id)
-                rotation = self.rotations_by_id.get(request.rotation_id)
-                key = (request.rotation_id, request.duration_weeks)
-                if (
-                    option is None
-                    or rotation is None
-                    or request.duration_weeks not in inventory
-                    or not option.allows(resident.pgy, request.duration_weeks)
-                    or not rotation.allows_duration(
-                        request.duration_weeks,
-                        pgy=resident.pgy,
-                    )
-                    or used[key] >= inventory[request.duration_weeks]
-                    or (not option.repeatable and used_rotations[request.rotation_id])
-                ):
-                    continue
-                used[key] += 1
-                used_rotations[request.rotation_id] += 1
-                preferences.append(request)
-            normalized_residents.append(
-                resident
-                if preferences == resident.elective_preferences
-                else resident.model_copy(update={"elective_preferences": preferences})
-            )
-        self.residents = normalized_residents
+        # Placeholder mode ignores preferences at solve time, so leave the
+        # stack untouched here: switching the option off must restore it.
+        if not self.use_placeholder_electives:
+            normalized_residents: list[Resident] = []
+            for resident in self.residents:
+                inventory = self.direct_elective_block_counts_for_pgy(resident.pgy)
+                used: Counter[tuple[str, int]] = Counter()
+                used_rotations: Counter[str] = Counter()
+                preferences: list[ElectivePreferenceRequest] = []
+                for request in resident.elective_preferences:
+                    option = self.electives.option_for(request.rotation_id)
+                    rotation = self.rotations_by_id.get(request.rotation_id)
+                    key = (request.rotation_id, request.duration_weeks)
+                    if (
+                        option is None
+                        or rotation is None
+                        or request.duration_weeks not in inventory
+                        or not option.allows(resident.pgy, request.duration_weeks)
+                        or not rotation.allows_duration(
+                            request.duration_weeks,
+                            pgy=resident.pgy,
+                        )
+                        or used[key] >= inventory[request.duration_weeks]
+                        or (not option.repeatable and used_rotations[request.rotation_id])
+                    ):
+                        continue
+                    used[key] += 1
+                    used_rotations[request.rotation_id] += 1
+                    preferences.append(request)
+                normalized_residents.append(
+                    resident
+                    if preferences == resident.elective_preferences
+                    else resident.model_copy(update={"elective_preferences": preferences})
+                )
+            self.residents = normalized_residents
 
         for resident in self.residents:
             for week in resident.vacation_weeks:

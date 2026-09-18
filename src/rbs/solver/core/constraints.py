@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
+from rbs.models.elective import PLACEHOLDER_ELECTIVE_ID
 from rbs.models.enums import RotationKind
 from rbs.solver.core.context import (
     ElectiveMatchingState,
@@ -266,11 +267,20 @@ def _add_capacity_bounds(
 
 
 def _locks(context: PlanningContext) -> None:
+    placeholder_mode = bool(getattr(context.instance, "use_placeholder_electives", False))
     for lock in context.instance.locks:
+        # Placeholder mode replaces every elective slot with the generic
+        # placeholder, so an elective lock pins placeholder weeks instead of
+        # the originally named service.
+        wanted_id = (
+            PLACEHOLDER_ELECTIVE_ID
+            if placeholder_mode and lock.elective
+            else lock.rotation_id
+        )
         occurrences = [
             occurrence
             for occurrence in context.by_resident.get(lock.resident_id, [])
-            if occurrence.rotation_id == lock.rotation_id and occurrence.elective == lock.elective
+            if occurrence.rotation_id == wanted_id and occurrence.elective == lock.elective
         ]
         if lock.exact_block:
             start = lock.weeks[0]
