@@ -1750,6 +1750,8 @@ def test_clinic_editor_is_large_and_keeps_internal_id_hidden() -> None:
         element for element in inputs if element._props.get("label") == "Clinic name"
     )
     assert clinic_name.value == "Maple"
+    assert any(element._props.get("label") == "Capacity per attending" for element in created)
+    assert not any(element._props.get("label") == "Residents per attending" for element in created)
     assert not any(element._props.get("label") == "Clinic code" for element in inputs)
     clinic_editor_tabs = {
         element._props.get("label") for element in created if element.__class__.__name__ == "Tab"
@@ -2251,7 +2253,7 @@ def test_standalone_clinic_tab_uses_tabs_and_structured_site_cards() -> None:
     assert {"Clinic", "Clinic sites"} <= labels
     assert "Clinic block rules" not in labels
     assert "Resident Clinic exceptions" not in labels
-    assert {"Target", "Weekly sessions", "Max residents", "Exceptions", "Primary"} <= labels
+    assert {"Target", "Weekly sessions", "Max capacity", "Exceptions", "Primary"} <= labels
     assert add_clinic._props.get("unelevated") is True
     assert "No minimum or maximum" not in labels
     assert "Dedicated Clinic configuration" not in labels
@@ -2323,6 +2325,12 @@ def test_clinic_block_rules_dialog_uses_clinic_name_and_compact_pgy_controls() -
         for element in created
     ) == len(instance.color_scheme.palette)
     assert "Clinic required for PGY 1" in text
+    capacity_fields = [
+        element for element in created
+        if element._props.get("label") == "Capacity per resident"
+    ]
+    assert len(capacity_fields) == len(instance.rotation("clinic").pgy_rules)
+    assert all(element.value == 1 for element in capacity_fields)
     assert "4 Clinic weeks per resident" not in text
     assert "Count changes automatically add or remove Elective blocks." not in text
     assert not any(

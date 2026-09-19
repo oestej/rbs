@@ -387,7 +387,7 @@ class ClinicPolicy(StrictModel):
         return [site.id for site in self.sites if site.max_capacity(weekday, session) > 0]
 
     def attendings_needed(self, resident_count: int, site_id: str | None = None) -> int:
-        """Attendings required for this many residents at one site in a half-day."""
+        """Attendings required for this many capacity points at one site in a half-day."""
         if resident_count <= 0:
             return 0
         ratio = self.site(site_id or self.primary_site_id).residents_per_attending

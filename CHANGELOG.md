@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Desktop:** Clinic staffing now uses capacity points. Set Capacity per attending
+  in the Clinic editor and Capacity per resident for each training level in Clinic
+  block rules (default 1). These points apply to clinic attendance on every rotation,
+  including allocation, capacity checks, and attending totals.
+- **Data compatibility:** Documents and catalogs now use schemas 10 and 9;
+  preceding schemas migrate with capacity defaulting to 1. Older builds cannot
+  read newly saved files. Solver protocol 6 requires matching solver binaries;
+  schedule output and settings formats are unchanged.
+
 ## [0.1.12] - 2026-09-18
 
 ### Security

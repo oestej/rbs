@@ -1,5 +1,5 @@
 {
-  "schema_version": 8,
+  "schema_version": 9,
   "calendar_weeks": 52,
   "electives": {
     "color": "#326800",
@@ -236,7 +236,8 @@
                 "max_weeks_per_block": 1
               }
             }
-          ]
+          ],
+          "capacity_per_resident": 1
         },
         {
           "pgy": 2,
@@ -259,7 +260,8 @@
                 "max_weeks_per_block": 1
               }
             }
-          ]
+          ],
+          "capacity_per_resident": 1
         },
         {
           "pgy": 3,
@@ -282,7 +284,8 @@
                 "max_weeks_per_block": 1
               }
             }
-          ]
+          ],
+          "capacity_per_resident": 1
         }
       ],
       "clinic": {

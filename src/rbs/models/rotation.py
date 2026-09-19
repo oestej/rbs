@@ -89,6 +89,10 @@ class PGYRotationRule(StrictModel):
     """Availability, placement, staffing, and block shapes for one training level."""
 
     pgy: int = Field(ge=1)
+    capacity_per_resident: int = Field(
+        default=1, ge=1,
+        description="Capacity points per clinic half-day for this training level, on any rotation.",
+    )
     min_concurrent: int | None = Field(default=None, ge=0)
     max_concurrent: int | None = Field(default=None, ge=0)
     max_total_weeks: int | None = Field(

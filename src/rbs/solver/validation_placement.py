@@ -14,14 +14,14 @@ from rbs.models.schedule import Schedule
 
 @dataclass(frozen=True)
 class ClinicCapacityViolation:
-    """One clinic half-day whose final assigned headcount exceeds coverage."""
+    """One clinic half-day whose final assigned capacity load exceeds coverage."""
 
     clinic_id: str
     clinic_name: str
     week: int
     weekday: Weekday
     session: Session
-    resident_count: int
+    capacity_points: int
     maximum: int
 
     @property
@@ -34,7 +34,7 @@ class ClinicCapacityViolation:
         return (
             f"{self.clinic_name} capacity exceeded: week {self.week} "
             f"{self.weekday.value} {self.session.value} "
-            f"({self.resident_count} residents; max {self.maximum})"
+            f"({self.capacity_points} capacity points; max {self.maximum})"
         )
 
 
@@ -45,13 +45,20 @@ def clinic_capacity_violations(
     """Return final per-slot clinic capacity failures without incremental duplicates."""
     policy = instance.clinic_policy
     filled: dict[tuple[str, int, Weekday, Session], int] = defaultdict(int)
+    residents = instance.residents_by_id
+    rotations = {rotation.id: rotation for rotation in instance.rotations}
     for assignment in schedule.assignments:
+        rotation = rotations.get(assignment.rotation_id)
+        if rotation is None:
+            continue  # Unknown rotations are reported by placement validation.
+        resident = residents.get(assignment.resident_id)
+        points = instance.clinic_capacity_for_pgy(resident.pgy if resident is not None else None)
         for slot in assignment.clinic_slots:
             if slot.admin or slot.site is None or slot.site not in policy.site_ids:
                 continue
             weeks = [slot.week] if slot.week is not None else assignment.weeks
             for week in weeks:
-                filled[slot.site, week, slot.weekday, slot.session] += 1
+                filled[slot.site, week, slot.weekday, slot.session] += points
 
     site_order = {site_id: index for index, site_id in enumerate(policy.site_ids)}
     weekday_order = {weekday: index for index, weekday in enumerate(Weekday)}
@@ -81,7 +88,7 @@ def clinic_capacity_violations(
                 week=week,
                 weekday=weekday,
                 session=session,
-                resident_count=count,
+                capacity_points=count,
                 maximum=maximum,
             )
         )

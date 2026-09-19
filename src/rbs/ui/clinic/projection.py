@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
 from rbs.models.clinic import ClinicPolicy, clinic_slot_date
@@ -37,6 +37,7 @@ class ClinicOccupant:
     name: str
     pgy: int
     admin: bool = False
+    capacity_points: int = 1
     site: str | None = None
     site_name: str | None = None
     site_color: str | None = None
@@ -229,6 +230,9 @@ def occupancy(
             resident,
             instance,
         ):
+            occupant = replace(
+                occupant, capacity_points=instance.clinic_capacity_for_pgy(resident.pgy)
+            )
             if rotation.away and not occupant.manual_override:
                 continue
             if week in vacation and not occupant.manual_override:
@@ -284,6 +288,11 @@ def occupant_site(person: ClinicOccupant) -> str | None:
     if person.admin:
         return None
     return person.site
+
+
+def site_capacity_points(people: list[ClinicOccupant], site: str) -> int:
+    """Staffing load, excluding administrative sessions."""
+    return sum(person.capacity_points for person in people if occupant_site(person) == site)
 
 
 def site_headcount(people: list[ClinicOccupant], site: str) -> int:
@@ -344,7 +353,7 @@ def attending_load(
         half_day = 0
         for this_site in sites:
             needed = policy.attendings_needed(
-                site_headcount(people, this_site),
+                site_capacity_points(people, this_site),
                 this_site,
             )
             half_day += needed
@@ -368,7 +377,7 @@ def weekly_attending_sessions(
     }
     for (week, _weekday, _session), people in board.items():
         by_week[week] += policy.attendings_needed(
-            site_headcount(people, selected_site),
+            site_capacity_points(people, selected_site),
             selected_site,
         )
     return by_week

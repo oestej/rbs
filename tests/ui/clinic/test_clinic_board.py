@@ -268,7 +268,7 @@ def test_clinic_capacity_failure_is_reported_once_with_the_final_headcount() -> 
     ]
     assert capacity_errors == [
         f"{site.name} capacity exceeded: week 1 {half_day.weekday.value} "
-        f"{half_day.session.value} ({maximum + 2} residents; max {maximum})"
+        f"{half_day.session.value} ({maximum + 2} capacity points; max {maximum})"
     ]
 
     diagnostics = validation_failure_diagnostics(instance, schedule, validation.errors)
@@ -281,7 +281,7 @@ def test_clinic_capacity_failure_is_reported_once_with_the_final_headcount() -> 
     assert clinic[0].message == (
         f"{site.name}: 1 clinic half-day exceeds capacity; the largest overflow is "
         f"week 1 {half_day.weekday.value} {half_day.session.value} "
-        f"({maximum + 2} residents; max {maximum})."
+        f"({maximum + 2} capacity points; max {maximum})."
     )
     assert clinic[0].weeks == [1]
 

@@ -506,6 +506,19 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
                 weeks.add((calendar_day - first_day).days // 7 + 1)
         return weeks
 
+    def clinic_capacity_for_pgy(self, pgy: int | None) -> int:
+        """Capacity per clinic session for this training level, on any rotation."""
+        return next(
+            (
+                rule.capacity_per_resident
+                for rotation in self.rotations
+                if rotation.kind == RotationKind.CLINIC
+                for rule in rotation.pgy_rules
+                if rule.pgy == pgy
+            ),
+            1,
+        )
+
     def rotation(self, rotation_id: str) -> Rotation:
         try:
             return self.rotations_by_id[rotation_id]

@@ -235,6 +235,9 @@ def _finish_clinic_objective(
     instance = context.instance
     policy = instance.clinic_policy
     n_residents = len(instance.residents)
+    capacity_points = sum(
+        instance.clinic_capacity_for_pgy(resident.pgy) for resident in instance.residents
+    )
     kind_spread = _clinic_kind_pgy_spread(
         context.model,
         pgys,
@@ -243,7 +246,7 @@ def _finish_clinic_objective(
         instance,
     )
     weekly_attending_bound = max(
-        policy.attendings_needed(max(n_residents, 1)) * (len(Weekday) * 2 - 1),
+        policy.attendings_needed(max(capacity_points, 1)) * (len(Weekday) * 2 - 1),
         1,
     )
     primary_evenness = _primary_site_week_evenness(

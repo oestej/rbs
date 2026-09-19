@@ -79,10 +79,16 @@ already exist in `rbs.cloud` and surface in the UI behind `rbs ui --cloud`.
 
 ## File formats
 
-- `.rbsc` workspaces are schema v6 and validated strictly — there are no legacy
-  upgrades, only the current shape.
-- Constraint catalogs (rotations, curricula, clinic policy) are schema v5;
+- `.rbsc` workspaces use schema v10; v9 documents migrate with resident capacity
+  defaulting to one point. Earlier versions are rejected.
+- Constraint catalogs (rotations, curricula, clinic policy) are schema v9 (v8 migrates automatically);
   `data/catalog.json` is the bundled default.
+- Clinic block training-level rules set `capacity_per_resident` (positive integer,
+  default 1), applied whenever that training level attends clinic on any rotation.
+  Staffing maxima count these points; allocation percentages and
+  minimum resident requirements still count sessions and residents. The stored
+  `residents_per_attending` field now represents capacity points per attending.
+  New documents and catalogs require a current build.
 - `schedule.json` carries the result plus `meta` describing validation status,
   raw solver status, and attending-count metrics.
 
@@ -90,7 +96,7 @@ already exist in `rbs.cloud` and surface in the UI behind `rbs ui --cloud`.
 
 The UI never calls CP-SAT directly. It shells out to `rbs-solver` with one
 JSON document on stdin and reads one back on stdout
-(`protocol: "rbs.solve"`, version 5). Set `RBS_SOLVER_COMMAND` to swap the
+(`protocol: "rbs.solve"`, version 6). Set `RBS_SOLVER_COMMAND` to swap the
 executable; the desktop bundle ships its own so no system Python is needed.
 
 ```text

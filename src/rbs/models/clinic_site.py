@@ -80,7 +80,7 @@ class ClinicHalfDayCapacity(StrictModel):
     min_residents: int = Field(default=0, ge=0)
 
     def max_residents(self, residents_per_attending: int) -> int:
-        """Return the derived resident ceiling for this half-day."""
+        """Return capacity points (legacy method name retained)."""
         return self.attendings * residents_per_attending
 
 
@@ -93,7 +93,7 @@ class ClinicCapacityOverride(StrictModel):
     min_residents: int = Field(default=0, ge=0)
 
     def max_residents(self, residents_per_attending: int) -> int:
-        """Return the override's derived resident ceiling."""
+        """Return override capacity points (legacy method name retained)."""
         return self.attendings * residents_per_attending
 
 
@@ -103,7 +103,10 @@ class ClinicSiteConfig(StrictModel):
     id: str
     name: str = Field(min_length=1)
     color: str
-    residents_per_attending: int = Field(default=4, ge=1)
+    residents_per_attending: int = Field(
+        default=4, ge=1,
+        description="Capacity points per attending (legacy serialized key retained).",
+    )
     half_days: list[ClinicHalfDayCapacity] = Field(default_factory=list)
     capacity_overrides: list[ClinicCapacityOverride] = Field(default_factory=list)
     closure_days: list[ClinicSiteClosure] = Field(default_factory=list)

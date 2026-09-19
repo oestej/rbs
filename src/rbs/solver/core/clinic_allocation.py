@@ -55,6 +55,7 @@ class _Candidate:
     pgy: int | None
     clinic_ids: list[str]
     calendar_day: date
+    capacity_points: int = 1
     preferred_clinic_id: str | None = None
     locked_clinic_id: str | None = None
 
@@ -136,6 +137,9 @@ def assign_clinic_sites(
                     pgy=resident.pgy if resident is not None else None,
                     clinic_ids=allowed,
                     calendar_day=calendar_day,
+                    capacity_points=instance.clinic_capacity_for_pgy(
+                        resident.pgy if resident is not None else None
+                    ),
                     preferred_clinic_id=preferred_sites.get(occurrence_key),
                     locked_clinic_id=protected_sites.get(occurrence_key),
                 )
@@ -407,7 +411,7 @@ def _assign(
 ) -> None:
     week, weekday, session = candidate.key
     candidate.slot.site = clinic_id
-    filled[clinic_id, week, weekday, session] += 1
+    filled[clinic_id, week, weekday, session] += candidate.capacity_points
     assigned_by_resident[candidate.resident_id, clinic_id] += 1
     assigned_by_resident_day[
         candidate.resident_id,
@@ -427,7 +431,8 @@ def _under_capacity(
     filled: dict[tuple[str, int, object, object], int],
 ) -> bool:
     week, weekday, session = candidate.key
-    return filled[clinic_id, week, weekday, session] < policy.max_capacity_on(
+    used = filled[clinic_id, week, weekday, session]
+    return used + candidate.capacity_points <= policy.max_capacity_on(
         clinic_id, candidate.calendar_day, session
     )
 
@@ -551,7 +556,9 @@ def clinic_weekly_attendings(
                 slot.session,
             ):
                 continue
-            counts[slot.week, slot.weekday, slot.session] += 1
+            counts[slot.week, slot.weekday, slot.session] += instance.clinic_capacity_for_pgy(
+                resident.pgy if resident is not None else None
+            )
     by_week: dict[int, int] = defaultdict(int)
     for (week, _weekday, _session), resident_count in counts.items():
         by_week[week] += instance.clinic_policy.attendings_needed(

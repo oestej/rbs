@@ -22,7 +22,7 @@ from rbs.ui.clinic.projection import (
     is_academic_week,
     occupancy,
     occupants_for_site,
-    site_headcount,
+    site_capacity_points,
     special_events_for_slot,
 )
 from rbs.ui.schedule_projection import visible_week_numbers, week_monday
@@ -214,7 +214,7 @@ def _calendar_session_html(
     sites = (site,) if site is not None else policy.site_ids
     for clinic_site in sites:
         needed = policy.attendings_needed(
-            site_headcount(people, clinic_site),
+            site_capacity_points(people, clinic_site),
             clinic_site,
         )
         if needed:

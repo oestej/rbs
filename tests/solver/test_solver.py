@@ -1658,7 +1658,7 @@ def test_attempt_rank_refuses_an_invalid_attempt_holding_a_better_objective() ->
     valid = attempt(1_233_681_318.0, [])
     invalid = attempt(
         996_481_423.0,
-        ["Hacienda Clinic capacity exceeded: week 22 monday morning (5 residents; max 4)"],
+        ["Hacienda Clinic capacity exceeded: week 22 monday morning (5 capacity points; max 4)"],
     )
 
     assert _attempt_rank(valid) < _attempt_rank(invalid)

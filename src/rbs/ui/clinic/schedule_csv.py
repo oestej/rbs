@@ -17,7 +17,7 @@ from rbs.ui.clinic.projection import (
     is_academic_week,
     occupancy,
     occupants_for_site,
-    site_headcount,
+    site_capacity_points,
     special_events_for_slot,
 )
 from rbs.ui.csv_export import build_spreadsheet_csv
@@ -102,7 +102,7 @@ def clinic_schedule_csv_rows(
             attending_labels = []
             for clinic_site in visible_sites:
                 needed = policy.attendings_needed(
-                    site_headcount(people, clinic_site),
+                    site_capacity_points(people, clinic_site),
                     clinic_site,
                 )
                 if needed:

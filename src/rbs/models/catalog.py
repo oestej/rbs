@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 class ConstraintCatalog(StrictModel):
     """Versioned block constraints that can be imported and stored independently."""
 
-    schema_version: Literal[8] = 8
+    schema_version: Literal[9] = 9
     calendar_weeks: int = Field(default=52, ge=1)
     rotations: list[Rotation]
     requirements: list[PGYCurriculum] = Field(min_length=1)
@@ -35,9 +35,10 @@ class ConstraintCatalog(StrictModel):
     def migrate_legacy(cls, value: Any) -> Any:
         """Upgrade path for catalogs written by older schema versions.
 
-        No older version is accepted right now: only the current schema
-        loads. When the next schema ships, upgrade its predecessor here.
+        Version 8 has implicit capacity of one point per resident.
         """
+        if isinstance(value, dict) and value.get("schema_version") == 8:
+            return {**value, "schema_version": 9}
         return value
 
     @model_validator(mode="after")
@@ -61,7 +62,7 @@ class ConstraintCatalog(StrictModel):
     @classmethod
     def from_instance(cls, instance: SolverProblem) -> ConstraintCatalog:
         return cls(
-            schema_version=8,
+            schema_version=9,
             calendar_weeks=instance.calendar.weeks,
             rotations=instance.rotations,
             requirements=instance.requirements,

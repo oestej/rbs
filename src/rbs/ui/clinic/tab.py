@@ -492,6 +492,19 @@ def _clinic_pgy_rule_panel(
             if rule is None:
                 return
 
+            capacity_points = ui.number(
+                "Capacity per resident",
+                value=int(rule.get("capacity_per_resident", 1)),
+                min=1,
+                precision=0,
+                step=1,
+            ).props("outlined").classes("w-full sm:w-80")
+            capacity_points.bind_value(rule, "capacity_per_resident", forward=_as_int)
+            ui.label(
+                "Capacity points used whenever a resident of this training level attends clinic, "
+                "on any rotation."
+            ).classes("rbs-type-caption rbs-text-muted")
+
             with ui.row().classes("w-full items-center justify-between gap-3 pt-2"):
                 ui.label("Required blocks").classes("rbs-type-control-label")
                 add_button = ui.button(
@@ -1605,7 +1618,7 @@ def _clinic_directory_configuration(
                         )
                         _clinic_metric("Weekly sessions", str(len(clinic.half_days)))
                         _clinic_metric(
-                            "Max residents",
+                            "Max capacity",
                             str(max(maximums)) if maximums else "—",
                         )
                         _clinic_metric("Exceptions", str(exception_count))
@@ -1846,11 +1859,11 @@ def _open_clinic_editor_dialog(
                                 )
                                 ui.label(
                                     "Choose staffed half-days from Monday through Sunday. "
-                                    "Each maximum is attendings × residents per attending."
+                                    "Each maximum is attendings × capacity per attending."
                                 ).classes("rbs-type-caption rbs-text-muted")
                             ratio = (
                                 ui.number(
-                                    "Residents per attending",
+                                    "Capacity per attending",
                                     value=int(draft["residents_per_attending"]),
                                     min=1,
                                     step=1,
@@ -2143,7 +2156,7 @@ def _clinic_capacity_grid(draft: Draft) -> Callable[[], None]:
                 label.set_text("Not staffed")
             else:
                 maximum = int(rule.get("attendings") or 1) * ratio
-                label.set_text(f"Maximum {maximum} residents")
+                label.set_text(f"Maximum {maximum} capacity points")
 
     with ui.element("div").classes("rbs-clinic-capacity-grid w-full"):
         for weekday in capacity_week:
@@ -2266,7 +2279,7 @@ def _clinic_capacity_overrides_editor(
         ratio = max(int(draft.get("residents_per_attending") or 1), 1)
         for label, override in maximum_labels:
             maximum = int(override.get("attendings") or 0) * ratio
-            label.set_text(f"Maximum {maximum} residents")
+            label.set_text(f"Maximum {maximum} capacity points")
 
     def add_override() -> None:
         used = {(str(item.get("date") or ""), str(item.get("session") or "")) for item in overrides}

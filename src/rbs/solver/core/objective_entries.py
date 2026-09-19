@@ -385,20 +385,12 @@ def _materialize_week_entries(
             slots_by_resident[resident_id].append(literal)
             present_by_slot[weekday, session].append(literal)
             present_by_pgy[weekday, session, pgy].append(literal)
-            # Decoding drops a vacation week, so a true literal there seats
-            # nobody. Only the sessions that survive into the schedule may be
-            # held against a half-day's capacity.
+        points = context.instance.clinic_capacity_for_pgy(pgy)
+        for literal in literals:
             if not on_vacation:
-                occupied_by_slot[weekday, session].append(literal)
-            if _counts_at_primary_site(
-                context,
-                week,
-                weekday,
-                session,
-                pinned,
-                literal,
-            ):
-                primary_by_slot[weekday, session].append(literal)
+                occupied_by_slot[weekday, session].extend([literal] * points)
+            if _counts_at_primary_site(context, week, weekday, session, pinned, literal):
+                primary_by_slot[weekday, session].extend([literal] * points)
     return (
         slots_by_resident,
         present_by_slot,

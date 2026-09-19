@@ -36,8 +36,8 @@ def validation_failure_diagnostics(
             peak = max(
                 over_capacity,
                 key=lambda item: (
-                    item.resident_count - item.maximum,
-                    item.resident_count,
+                    item.capacity_points - item.maximum,
+                    item.capacity_points,
                 ),
             )
             count = len(over_capacity)
@@ -45,7 +45,7 @@ def validation_failure_diagnostics(
                 f"{count} clinic {'half-day exceeds' if count == 1 else 'half-days exceed'} "
                 f"capacity; the largest overflow is week {peak.week} "
                 f"{peak.weekday.value} {peak.session.value} "
-                f"({peak.resident_count} residents; max {peak.maximum})"
+                f"({peak.capacity_points} capacity points; max {peak.maximum})"
             )
         if uncovered:
             count = len(uncovered)
