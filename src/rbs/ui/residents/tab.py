@@ -58,6 +58,7 @@ def render_residents_tab(
     schedule_editing: bool = False,
     on_schedule_editing_change: Callable[[bool], None] | None = None,
     active_schedule_section: str = "resident_block_schedule",
+    focus_week: int | None = None,
     on_schedule_section_change=None,
     on_pdf_open: OpenPdfExport | None = None,
     detail_panel=None,
@@ -95,6 +96,7 @@ def render_residents_tab(
         "schedule_editing": schedule_editing,
         "on_schedule_editing_change": on_schedule_editing_change,
         "active_schedule_section": active_schedule_section,
+        "focus_week": focus_week,
         "on_schedule_section_change": on_schedule_section_change,
         "on_pdf_open": on_pdf_open,
     }
@@ -249,6 +251,7 @@ def _resident_detail_panel(
     schedule_editing: bool = False,
     on_schedule_editing_change: Callable[[bool], None] | None = None,
     active_schedule_section: str = "resident_block_schedule",
+    focus_week: int | None = None,
     on_schedule_section_change=None,
     on_pdf_open: OpenPdfExport | None = None,
     panel=None,
@@ -303,6 +306,7 @@ def _resident_detail_panel(
                     schedule_editing=schedule_editing,
                     on_schedule_editing_change=on_schedule_editing_change,
                     active_schedule_section=active_schedule_section,
+                    focus_week=focus_week,
                     on_schedule_section_change=on_schedule_section_change,
                     on_pdf_open=on_pdf_open,
                 )
@@ -329,6 +333,7 @@ def _resident_view(
     schedule_editing: bool = False,
     on_schedule_editing_change: Callable[[bool], None] | None = None,
     active_schedule_section: str = "resident_block_schedule",
+    focus_week: int | None = None,
     on_schedule_section_change=None,
     on_pdf_open: OpenPdfExport | None = None,
 ) -> None:
@@ -372,6 +377,7 @@ def _resident_view(
             schedule_editing=schedule_editing,
             on_schedule_editing_change=on_schedule_editing_change,
             active_section=active_schedule_section,
+            focus_week=focus_week,
             on_section_change=on_schedule_section_change,
             on_pdf_open=on_pdf_open,
         )

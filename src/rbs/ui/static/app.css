@@ -2895,3 +2895,9 @@
   color: var(--rbs-text-muted);
   font-size: var(--rbs-type-section-size);
 }
+
+.rbs-schedule-navigation-target {
+  outline: 2px solid var(--rbs-primary);
+  outline-offset: 2px;
+  background: var(--rbs-surface-subtle);
+}

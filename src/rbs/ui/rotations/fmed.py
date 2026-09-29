@@ -55,7 +55,9 @@ def _dedicated_rotation_cards(
 
     rotations = sorted(
         (rotation for rotation in instance.rotations if rotation.kind is kind),
-        key=rotation_display_sort_key,
+        key=lambda rotation: (
+            rotation.id != selected_rotation_id, rotation_display_sort_key(rotation),
+        ),
     )
     if not rotations:
         master_detail.empty_detail(

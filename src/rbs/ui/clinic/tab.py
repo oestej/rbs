@@ -71,6 +71,7 @@ def render_clinic_tab(
     *,
     on_save: SaveRotation,
     active_section: str = "clinic_sites",
+    selected_rotation_id: str | None = None,
     on_section_change=None,
     schedule: Schedule | None = None,
     on_block_schedule_save: SaveClinicBlockSchedule | None = None,
@@ -125,7 +126,9 @@ def render_clinic_tab(
                         on_save=on_save,
                     )
                 elif name == "clinic_block_rules":
-                    _clinic_block_rules_configuration(instance, on_save=on_save)
+                    _clinic_block_rules_configuration(
+                        instance, on_save=on_save, selected_rotation_id=selected_rotation_id,
+                    )
                 else:
                     _manual_clinic_blocks_configuration(
                         instance,
@@ -150,12 +153,15 @@ def _clinic_block_rules_configuration(
     instance: SchedulerInput,
     *,
     on_save: SaveRotation,
+    selected_rotation_id: str | None = None,
 ) -> None:
     from nicegui import ui
 
     clinic_rotations = sorted(
         (rotation for rotation in instance.rotations if rotation.kind is RotationKind.CLINIC),
-        key=rotation_display_sort_key,
+        key=lambda rotation: (
+            rotation.id != selected_rotation_id, rotation_display_sort_key(rotation),
+        ),
     )
     with ui.column().classes("w-full gap-5"):
         with ui.row().classes("w-full items-center justify-between gap-3 flex-wrap"):

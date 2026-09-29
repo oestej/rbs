@@ -283,7 +283,14 @@ def _resident_row_html(
         title = html.escape(" · ".join(title_bits))
         class_attr = f' class="{" ".join(classes)}"' if classes else ""
         span = f' colspan="{len(group)}"' if len(group) > 1 else ""
-        cells.append(f'<td{span}{class_attr}{style_attr} title="{title}">{content}</td>')
+        context_attrs = (
+            f' data-resident-id="{html.escape(resident.id, quote=True)}"'
+            f' data-rotation-id="{html.escape(rotation_id or "", quote=True)}"'
+            f' data-start-week="{group[0]}"'
+        )
+        cells.append(
+            f'<td{span}{class_attr}{style_attr}{context_attrs} title="{title}">{content}</td>'
+        )
     name = html.escape(resident.name)
     if resident_edit_url is not None:
         separator = "&" if "?" in resident_edit_url else "?"

@@ -139,17 +139,18 @@ def _resident_schedule_workspace(
     schedule_editing: bool = False,
     on_schedule_editing_change: ChangeResidentScheduleEditing | None = None,
     active_section: str = "resident_block_schedule",
+    focus_week: int | None = None,
     on_section_change=None,
     on_pdf_open: OpenPdfExport | None = None,
 ):
     from nicegui import ui
 
     block_report_state = {
-        "show_completed": False,
+        "show_completed": focus_week is not None,
         "editing": bool(block_schedule_editing),
     }
     clinic_report_state = {
-        "show_completed": False,
+        "show_completed": focus_week is not None,
         "editing": bool(schedule_editing and not block_schedule_editing),
     }
     schedule_state: dict[str, Schedule | None] = {"value": schedule}
@@ -278,6 +279,7 @@ def _resident_schedule_workspace(
                             schedule_state["value"],
                             resident,
                             show_completed=bool(block_report_state["show_completed"]),
+                            focus_week=focus_week,
                             on_show_completed_change=toggle_completed,
                             editing=bool(block_report_state["editing"]),
                             on_editing_change=toggle_block_editing,
@@ -319,6 +321,7 @@ def _resident_schedule_workspace(
                             schedule_state,
                             resident,
                             show_completed=bool(clinic_report_state["show_completed"]),
+                            focus_week=focus_week,
                             on_show_completed_change=toggle_clinic_completed,
                             editing=bool(clinic_report_state["editing"]),
                             on_editing_change=toggle_clinic_editing,
@@ -1375,6 +1378,7 @@ def _resident_block_schedule_report(
     on_schedule_change: SaveResidentScheduleResult | None = None,
     schedule_is_current: bool = True,
     today: date | None = None,
+    focus_week: int | None = None,
 ) -> None:
     from nicegui import ui
 
@@ -1385,6 +1389,7 @@ def _resident_block_schedule_report(
         schedule,
         resident.id,
         show_completed=show_completed,
+        focus_week=focus_week,
         today=today,
     )
     with ui.column().classes("rbs-resident-schedule-content w-full min-w-0 gap-3 p-5"):
@@ -1437,17 +1442,43 @@ def _resident_block_schedule_report(
             .classes("rbs-resident-block-timeline w-full")
             .props('role="list" aria-label="Block schedule"')
         ):
+            focus_pending = True
             for row in report_rows:
-                _resident_block_schedule_lane(row)
+                focused = focus_pending and row.get("focused") == "true"
+                _resident_block_schedule_lane(row, focused=focused)
+                if focused:
+                    focus_pending = False
 
 
-def _resident_block_schedule_lane(row: dict[str, str]) -> None:
+def _reveal_schedule_target(lane) -> None:
+    from nicegui import ui
+
+    lane.classes("rbs-schedule-navigation-target").props('tabindex="-1"')
+    ui.run_javascript(f"""(() => {{
+        let attempts = 0;
+        const reveal = () => {{
+            const lane = document.getElementById('c{lane.id}');
+            if (lane && lane.getClientRects().length) {{
+                lane.scrollIntoView({{block: 'center'}});
+                lane.focus({{preventScroll: true}});
+            }} else if (++attempts < 120) {{
+                requestAnimationFrame(reveal);
+            }}
+        }};
+        requestAnimationFrame(reveal);
+    }})();""")
+
+
+def _resident_block_schedule_lane(row: dict[str, str], *, focused: bool = False) -> None:
     """Render one calm, uninterrupted lane in the resident block timeline."""
     from nicegui import ui
 
     kind = row["kind"]
     week_label = "Week" if "–" not in row["weeks"] else "Weeks"
-    with ui.element("div").classes(f"rbs-resident-block-lane is-{kind}").props('role="listitem"'):
+    lane = ui.element("div").classes(f"rbs-resident-block-lane is-{kind}").props('role="listitem"')
+    if focused:
+        _reveal_schedule_target(lane)
+    with lane:
         with ui.element("div").classes("rbs-resident-block-period"):
             ui.label(f"{week_label} {row['weeks']}").classes("rbs-resident-block-week-range")
             ui.label(row["dates"]).classes("rbs-resident-block-date-range")
@@ -1500,6 +1531,7 @@ def _resident_clinic_schedule_report(
     on_editing_change: Callable[[], None] | None = None,
     on_schedule_change: SaveResidentScheduleResult | None = None,
     today: date | None = None,
+    focus_week: int | None = None,
 ) -> None:
     from nicegui import ui
 
@@ -1621,6 +1653,8 @@ def _resident_clinic_schedule_report(
                 assert current_schedule is not None
                 week = int(row["week"])
                 week_containers[week] = ui.column().classes("w-full gap-0")
+                if week == focus_week:
+                    _reveal_schedule_target(week_containers[week])
                 with week_containers[week]:
                     _resident_clinic_week_calendar(
                         instance,

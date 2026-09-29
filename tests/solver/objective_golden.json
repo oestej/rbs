@@ -2,15 +2,15 @@
   "academic_override": {
     "has_objective": true,
     "num_attending_variables": 468,
-    "num_constraints": 231981,
+    "num_constraints": 227301,
     "num_decisions": 368,
     "num_in_clinic_entries": 11231,
-    "num_variables": 68926,
-    "proto_sha256": "42275702c68651e2ba439af12fd26350f9afa6c9939b3bb5fbf21f6d248b8dbc",
+    "num_variables": 66118,
+    "proto_sha256": "70ff636a15a4e9b49e648cc6aa244b8df6a7b6078a7edd1370198574d994532a",
     "quality_bound": 1636660,
     "stability_comparisons": 0
   },
-  "configured_sample": {
+  "all_goals_enabled": {
     "has_objective": true,
     "num_attending_variables": 468,
     "num_constraints": 231967,
@@ -18,6 +18,17 @@
     "num_in_clinic_entries": 11242,
     "num_variables": 68925,
     "proto_sha256": "2d5cb2f6ae087a3f0e9c48d468c0a9aeb42d8fd80e641fa86cdbc9202b9bb55c",
+    "quality_bound": 1648792,
+    "stability_comparisons": 0
+  },
+  "configured_sample": {
+    "has_objective": true,
+    "num_attending_variables": 468,
+    "num_constraints": 227287,
+    "num_decisions": 368,
+    "num_in_clinic_entries": 11242,
+    "num_variables": 66117,
+    "proto_sha256": "f2690122182102ee02fe56b1c630cef1beb845f17364f06946362e4d662c9eaf",
     "quality_bound": 1637560,
     "stability_comparisons": 0
   }

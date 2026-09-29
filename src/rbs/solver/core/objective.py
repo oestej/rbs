@@ -124,9 +124,10 @@ def add_clinic_objective(
         for occurrence in context.occurrences
         if context.rotations[occurrence.rotation_id].kind is RotationKind.CLINIC
     }
-    preferred_penalties, preferred_bound = _preferred_slot_penalties(
-        decisions,
-        excluded_keys=admin_keys,
+    preferred_penalties, preferred_bound = (
+        _preferred_slot_penalties(decisions, excluded_keys=admin_keys)
+        if context.options.weights.preferred_clinic_slots
+        else ([], 0)
     )
     occurrences = _clinic_occurrences(context, decisions)
     viable_locks = (
@@ -165,7 +166,7 @@ def add_clinic_objective(
         _add_week_objective_terms(
             context,
             week,
-            clinic_kind.week_domain(context.instance, week),
+            clinic_kind.cached_week_domain(context, week),
             pgys,
             slot_groups,
             state,
@@ -234,32 +235,45 @@ def _finish_clinic_objective(
 ) -> ClinicModelState:
     instance = context.instance
     policy = instance.clinic_policy
+    weights = context.options.weights
     n_residents = len(instance.residents)
     capacity_points = sum(
         instance.clinic_capacity_for_pgy(resident.pgy) for resident in instance.residents
     )
-    kind_spread = _clinic_kind_pgy_spread(
-        context.model,
-        pgys,
-        context.weeks,
-        state.clinic_kind_week,
-        instance,
+    kind_spread = (
+        _clinic_kind_pgy_spread(
+            context.model,
+            pgys,
+            context.weeks,
+            state.clinic_kind_week,
+            instance,
+        )
+        if weights.clinic_kind_pgy_spread
+        else []
     )
     weekly_attending_bound = max(
         policy.attendings_needed(max(capacity_points, 1)) * (len(Weekday) * 2 - 1),
         1,
     )
-    primary_evenness = _primary_site_week_evenness(
-        context.model,
-        context.weeks,
-        state.attending_by_week,
-        weekly_attending_bound,
+    primary_evenness = (
+        _primary_site_week_evenness(
+            context.model,
+            context.weeks,
+            state.attending_by_week,
+            weekly_attending_bound,
+        )
+        if weights.primary_site_week_evenness
+        else []
     )
-    clinic_evenness = _clinic_block_week_evenness(
-        context.model,
-        context.weeks,
-        state.clinic_kind_week,
-        n_residents,
+    clinic_evenness = (
+        _clinic_block_week_evenness(
+            context.model,
+            context.weeks,
+            state.clinic_kind_week,
+            n_residents,
+        )
+        if weights.clinic_block_week_evenness
+        else []
     )
     stability_cost, comparisons = _schedule_stability_cost(
         context,
@@ -300,4 +314,3 @@ def _finish_clinic_objective(
         quality_bound=quality_bound,
         synthetic_reference_locks=set(state.synthetic_reference_locks),
     )
-

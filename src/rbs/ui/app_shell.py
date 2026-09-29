@@ -15,6 +15,7 @@ from rbs.models.color_scheme import (
     accessible_text_color,
     contrasting_text_color,
 )
+from rbs.models.enums import RotationKind
 from rbs.models.instance import SchedulerInput
 from rbs.models.schedule import Schedule
 from rbs.models.workspace import Workspace, WorkspaceConflictError
@@ -151,7 +152,7 @@ def _mount_shell(session: WorkspaceSession) -> None:
             session.active_tab,
             session.navigation.block_schedule,
         )
-        with ui.tab_panels(session.navigation.tabs, value=active).classes(
+        with ui.tab_panels(session.navigation.tabs, value=active, animated=False).classes(
             "w-full min-w-0 max-w-full"
         ):
             for name in TAB_NAMES:
@@ -305,6 +306,7 @@ def _render_tab(session: WorkspaceSession, name: str) -> None:
             workspace.instance,
             on_save=persist_clinic,
             active_section=session.clinic_section,
+            selected_rotation_id=session.rotation_id,
             on_section_change=lambda event: _remember_clinic_section(session, event.value),
             schedule=workspace.latest_schedule,
             on_block_schedule_save=persist_clinic_block_schedule,
@@ -335,6 +337,10 @@ def _render_tab(session: WorkspaceSession, name: str) -> None:
             active_section=session.settings_section,
             on_section_change=lambda event: _remember_settings_section(session, event.value),
             apply_theme=lambda scheme: _set_nicegui_theme(session, scheme),
+            can_preload=lambda: (
+                session.workspace_id == workspace.id and "settings" not in session.stale_panels
+            ),
+            is_active=lambda: session.active_tab == "settings",
         )
 
 
@@ -397,14 +403,16 @@ def _render_block_schedule(session: WorkspaceSession, workspace: Workspace) -> N
         def render_grid() -> None:
             grid.clear()
             with grid:
-                _html(
-                    render_grid_html(
-                        instance,
-                        schedule,
-                        resident_edit_url="/",
-                        show_past_weeks=bool(session.show_past_block_weeks),
+                with ui.element("div").classes("w-full min-w-0") as board:
+                    _html(
+                        render_grid_html(
+                            instance,
+                            schedule,
+                            resident_edit_url="/",
+                            show_past_weeks=bool(session.show_past_block_weeks),
+                        )
                     )
-                )
+                _schedule_context_menu(board, session, instance)
 
         def toggle_block_past(event) -> None:
             session.show_past_block_weeks = bool(event.value)
@@ -412,6 +420,82 @@ def _render_block_schedule(session: WorkspaceSession, workspace: Workspace) -> N
 
         block_past.on_value_change(toggle_block_past)
         render_grid()
+
+
+def _schedule_context_menu(
+    board, session: WorkspaceSession, instance: SchedulerInput, *, clinic: bool = False,
+) -> None:
+    from nicegui import ui
+
+    selection: dict[str, object] = {}
+
+    def navigate(destination: str) -> None:
+        current = session.workspace()
+        if current is None:
+            return
+        resident_id = selection.get("resident_id")
+        rotation_id = selection.get("rotation_id")
+        week = selection.get("week")
+        if resident_id not in current.instance.residents_by_id:
+            return
+        if destination == "residents":
+            if not isinstance(week, int) or not 1 <= week <= current.instance.calendar.weeks:
+                return
+            session.resident_id = resident_id
+            session.resident_focus_week = week
+            session.resident_schedule_section = (
+                "resident_clinic_schedule" if clinic else "resident_block_schedule"
+            )
+            session.resident_block_schedule_editing = False
+            session.resident_schedule_editing = False
+        else:
+            if rotation_id not in current.instance.rotations_by_id:
+                return
+            session.rotation_id = rotation_id
+            rotation = current.instance.rotation(rotation_id)
+            if rotation.kind is RotationKind.CLINIC:
+                destination = "clinic"
+                session.clinic_section = "clinic_block_rules"
+            else:
+                session.rotation_section = {
+                    RotationKind.FMED: "fmed_configuration",
+                    RotationKind.ELECTIVE: "elective_configuration",
+                }.get(rotation.kind, "standard_rotations")
+        session.active_tab = destination
+        session.refresh_panel(destination)
+        if session.navigation is not None:
+            session.navigation.tabs.set_value(getattr(session.navigation, destination))
+
+    with board:
+        with ui.context_menu() as menu:
+            ui.menu_item(
+                "Go to resident" if clinic else "Go to Resident",
+                on_click=lambda: navigate("residents"),
+            )
+            rotation_item = None
+            if not clinic:
+                rotation_item = ui.menu_item(
+                    "Go to Rotation", on_click=lambda: navigate("rotations"),
+                )
+
+    def select(event) -> None:
+        selection.clear()
+        args = event.args
+        if not isinstance(args, dict):
+            menu.close()
+            return
+        selection.update(args)
+        if rotation_item is not None:
+            rotation_item.set_visibility(args.get("rotation_id") in instance.rotations_by_id)
+
+    board.on("contextmenu.capture", select, js_handler="""(event) => {
+      const cell = event.target.closest('SELECTION_TARGET');
+      if (!cell) { event.stopImmediatePropagation(); return; }
+      emit({resident_id: cell.dataset.residentId, rotation_id: cell.dataset.rotationId,
+            week: Number(cell.dataset.startWeek)});
+    }""".replace(
+        "SELECTION_TARGET", ".rbs-clinic-person" if clinic else "td[data-resident-id]",
+    ))
 
 
 def _render_clinic_schedule(session: WorkspaceSession, workspace: Workspace) -> None:
@@ -432,15 +516,17 @@ def _render_clinic_schedule(session: WorkspaceSession, workspace: Workspace) -> 
     def render_board() -> None:
         clinic_schedule.clear()
         with clinic_schedule:
-            _html(
-                render_clinic_html(
-                    instance,
-                    schedule,
-                    show_past_weeks=bool(session.show_past_clinic_weeks),
-                    site=selected_clinic_site(),
-                    show_legend=False,
+            with ui.element("div").classes("w-full min-w-0") as board:
+                _html(
+                    render_clinic_html(
+                        instance,
+                        schedule,
+                        show_past_weeks=bool(session.show_past_clinic_weeks),
+                        site=selected_clinic_site(),
+                        show_legend=False,
+                    )
                 )
-            )
+            _schedule_context_menu(board, session, instance, clinic=True)
 
     def toggle_clinic_past(event) -> None:
         session.show_past_clinic_weeks = bool(event.value)
@@ -611,6 +697,10 @@ def _render_rotations(session: WorkspaceSession, workspace: Workspace) -> None:
         on_section_change=lambda event: _remember_rotation_section(session, event.value),
         resident_edit_url="/",
         on_export_csv=export_rotations_csv,
+        can_preload=lambda: (
+            session.workspace_id == workspace.id and "rotations" not in session.stale_panels
+        ),
+        is_active=lambda: session.active_tab == "rotations",
     )
 
 
@@ -778,11 +868,13 @@ def _render_residents(
         schedule_editing=session.resident_schedule_editing,
         on_schedule_editing_change=set_clinic_schedule_editing,
         active_schedule_section=session.resident_schedule_section,
+        focus_week=getattr(session, "resident_focus_week", None),
         on_schedule_section_change=remember_schedule_section,
         on_pdf_open=lambda content, filename: _open_exported_pdf(
             session, content, filename
         ),
     )
+    session.resident_focus_week = None
     if detail_panel is None:
         session.register_region(
             RESIDENT_DETAIL_REGION,

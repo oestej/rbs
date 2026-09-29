@@ -208,6 +208,10 @@ def test_solved_grid_uses_uninterrupted_assignment_and_vacation_runs() -> None:
         markup,
         instance.residents_by_id[resident_id].name,
     )
+    assert (
+        f'data-resident-id="{resident_id}" data-rotation-id="fmed" data-start-week="1"'
+        in resident_markup
+    )
     assert "rbs-block-schedule-grid grouped" in markup
     assert "rbs-rotation-color-" in markup
     assert rotation_color_class(instance.rotation("fmed").color) in markup
@@ -225,6 +229,10 @@ def test_solved_grid_uses_uninterrupted_assignment_and_vacation_runs() -> None:
     assert " lock" not in markup
     assert "locked week" not in markup
     assert "vacation 12, 13" in markup
+    assert (
+        f'data-resident-id="{resident_id}" data-rotation-id="" data-start-week="12"'
+        in resident_markup
+    )
     assert resident_markup.count('<strong class="rbs-vacation-marker">VAC</strong>') == 3
     assert "rbs-four-week-boundary" in resident_markup
 

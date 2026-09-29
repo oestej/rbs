@@ -4,6 +4,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from rbs.models.clinic import ClinicSlot
+from rbs.models.enums import Session, Weekday
 from rbs.models.instance import SolverConfig, SolverProblem
 from rbs.models.resident import Resident
 from rbs.models.rotation import Rotation
@@ -91,6 +92,28 @@ class PlanningContext:
     placements: dict[tuple[str, int], Any]
     by_resident: dict[str, list[Occurrence]]
     by_rotation: dict[str, list[Occurrence]]
+    # These lookups belong to one input snapshot. Search clones share the
+    # completed caches along with the other read-only planning data.
+    clinic_week_domains: dict[tuple[int, str | None], tuple[ClinicSlot, ...]] = field(
+        default_factory=dict, repr=False
+    )
+    _blocked_clinic_slots: dict[tuple[str, int, Weekday, Session | None], bool] = field(
+        default_factory=dict, repr=False
+    )
+
+    def resident_clinic_is_blocked(
+        self,
+        resident_id: str,
+        week: int,
+        weekday: Weekday,
+        session: Session | None = None,
+    ) -> bool:
+        key = resident_id, week, weekday, session
+        if key not in self._blocked_clinic_slots:
+            self._blocked_clinic_slots[key] = self.instance.resident_clinic_is_blocked(
+                resident_id, week, weekday, session
+            )
+        return self._blocked_clinic_slots[key]
 
     @classmethod
     def compile(

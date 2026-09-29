@@ -2197,3 +2197,118 @@ def test_ranking_electives_redraws_one_resident_not_the_whole_directory(tmp_path
 
     ranked = store.get(workspace.id).instance.residents_by_id[resident_id].elective_preferences
     assert [f"{item.rotation_id}|{item.duration_weeks}" for item in ranked] == options[:2]
+
+
+def test_block_context_menu_navigates_to_selected_resident_and_rotation() -> None:
+    from nicegui import ui
+
+    from rbs.catalog import sample_instance
+    from rbs.ui.app_shell import _schedule_context_menu
+
+    instance = sample_instance()
+    resident = instance.residents[0]
+    refreshed = []
+    selected_tabs = []
+    session = SimpleNamespace(
+        workspace=lambda: SimpleNamespace(instance=instance),
+        refresh_panel=refreshed.append,
+        navigation=SimpleNamespace(
+            tabs=SimpleNamespace(set_value=selected_tabs.append),
+            residents="residents", rotations="rotations", clinic="clinic",
+        ),
+    )
+    before = set(ui.context.client.elements)
+    board = ui.element("div")
+    _schedule_context_menu(board, session, instance)
+    created = _created_elements(before)
+    items = [element for element in created if element.__class__.__name__ == "MenuItem"]
+    assert [item.default_slot.children[0]._text for item in items] == [
+        "Go to Resident", "Go to Rotation",
+    ]
+    select = next(iter(board._event_listeners.values())).handler
+    select(SimpleNamespace(args={"resident_id": resident.id, "rotation_id": "clinic", "week": 9}))
+    next(iter(items[0]._event_listeners.values())).handler(None)
+    assert session.resident_id == resident.id
+    assert session.resident_focus_week == 9
+    assert session.resident_schedule_section == "resident_block_schedule"
+    assert not session.resident_block_schedule_editing
+    assert selected_tabs == ["residents"]
+    next(iter(items[1]._event_listeners.values())).handler(None)
+    assert session.rotation_id == "clinic"
+    assert session.clinic_section == "clinic_block_rules"
+    assert refreshed == ["residents", "clinic"]
+    select(SimpleNamespace(args={"resident_id": resident.id, "rotation_id": "", "week": 10}))
+    assert not items[1].visible
+    next(iter(items[1]._event_listeners.values())).handler(None)
+    assert refreshed == ["residents", "clinic"]
+    next(iter(items[0]._event_listeners.values())).handler(None)
+    assert session.resident_focus_week == 10
+    select(SimpleNamespace(args={"resident_id": resident.id, "rotation_id": "clinic", "week": 11}))
+    assert items[1].visible
+
+    for kind, section in (
+        ("standard", "standard_rotations"),
+        ("fmed", "fmed_configuration"),
+        ("elective", "elective_configuration"),
+    ):
+        rotation = next(item for item in instance.rotations if item.kind.value == kind)
+        select(SimpleNamespace(args={
+            "resident_id": resident.id, "rotation_id": rotation.id, "week": 11,
+        }))
+        next(iter(items[1]._event_listeners.values())).handler(None)
+        assert session.rotation_id == rotation.id
+        assert session.rotation_section == section
+        assert selected_tabs[-1] == "rotations"
+        assert refreshed[-1] == "rotations"
+
+
+def test_resident_block_navigation_reveals_completed_block(monkeypatch) -> None:
+    from rbs.catalog import sample_instance
+    from rbs.models.enums import SolverEngineName, SolverStatus
+    from rbs.models.schedule import Assignment, Schedule, ScheduleMeta
+    from rbs.ui.residents import schedule as view
+
+    instance = sample_instance()
+    resident = instance.residents[0]
+    schedule = Schedule(
+        meta=ScheduleMeta(academic_year=instance.academic_year,
+                          engine=SolverEngineName.STUB, status=SolverStatus.FEASIBLE),
+        assignments=[Assignment(resident_id=resident.id, rotation_id="clinic",
+                                start_week=1, end_week=4, weeks=[1, 2, 3, 4])],
+    )
+    lanes = []
+    monkeypatch.setattr(view, "_resident_block_schedule_lane",
+                        lambda row, *, focused=False: lanes.append((row, focused)))
+    view._resident_schedule_workspace(instance, schedule, resident,
+                                      today=date(2027, 7, 1), focus_week=2)
+    assert any(focused and row["rotation_name"] == "Clinic" for row, focused in lanes)
+
+
+def test_clinic_context_menu_opens_resident_clinic_schedule() -> None:
+    from nicegui import ui
+
+    from rbs.catalog import sample_instance
+    from rbs.ui.app_shell import _schedule_context_menu
+
+    instance = sample_instance()
+    resident = instance.residents[0]
+    destinations = []
+    session = SimpleNamespace(
+        workspace=lambda: SimpleNamespace(instance=instance),
+        refresh_panel=destinations.append,
+        navigation=None,
+    )
+    before = set(ui.context.client.elements)
+    board = ui.element("div")
+    _schedule_context_menu(board, session, instance, clinic=True)
+    items = [item for item in _created_elements(before) if item.__class__.__name__ == "MenuItem"]
+    assert len(items) == 1
+    assert items[0].default_slot.children[0]._text == "Go to resident"
+    select = next(iter(board._event_listeners.values())).handler
+    select(SimpleNamespace(args={"resident_id": resident.id, "week": 7}))
+    next(iter(items[0]._event_listeners.values())).handler(None)
+    assert session.resident_id == resident.id
+    assert session.resident_focus_week == 7
+    assert session.resident_schedule_section == "resident_clinic_schedule"
+    assert not session.resident_schedule_editing
+    assert destinations == ["residents"]
