@@ -2,6 +2,9 @@ from pathlib import Path
 
 import pytest
 from release_changelog import (
+    CHANGELOG_PATH,
+    VERSION_ASSIGNMENT_PATTERN,
+    VERSION_PATH,
     ReleasePreparationError,
     build_release_updates,
     prepare_release,
@@ -19,6 +22,25 @@ All notable changes are documented here.
 - First user-facing capability.
 """
 INITIAL_VERSION_SOURCE = '"""Residency block scheduler."""\n\n__version__ = "0.1.0"\n'
+
+
+def test_current_unreleased_notes_can_be_prepared_when_present() -> None:
+    changelog = CHANGELOG_PATH.read_text(encoding="utf-8")
+    unreleased = changelog.split("## [Unreleased]", 1)[1].split("\n## [", 1)[0]
+    if not any(line.startswith("- ") for line in unreleased.splitlines()):
+        return
+
+    version_source = VERSION_PATH.read_text(encoding="utf-8")
+    match = VERSION_ASSIGNMENT_PATTERN.search(version_source)
+    assert match is not None
+    major, minor, patch = map(int, match.group("version").split("."))
+    updates = build_release_updates(
+        changelog=changelog,
+        version_source=version_source,
+        target_version=f"{major}.{minor}.{patch + 1}",
+        release_date="2026-09-28",
+    )
+    assert "## [Unreleased]\n\n## [" in updates.changelog
 
 
 def _first_release():
