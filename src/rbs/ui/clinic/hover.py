@@ -21,6 +21,11 @@ CLINIC_HOVER_SCRIPT = """
     if (titled) { title = titled.title; titled.removeAttribute('title'); }
     card = document.createElement('div');
     card.className = 'rbs-clinic-detail-card';
+    const appearance = getComputedStyle(target);
+    for (const property of ['--rbs-clinic-site-color', '--rbs-clinic-site-tint']) {
+      card.style.setProperty(property, appearance.getPropertyValue(property));
+    }
+    if (target.classList.contains('admin')) card.classList.add('is-admin');
     card.id = 'rbs-clinic-active-detail';
     card.setAttribute('role', 'tooltip');
     for (const child of source.childNodes) card.append(child.cloneNode(true));

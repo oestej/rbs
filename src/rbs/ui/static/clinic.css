@@ -379,11 +379,13 @@
 .rbs-clinic-detail-card {
   position: fixed;
   z-index: 6000;
-  width: 340px;
+  width: 320px;
+  box-sizing: border-box;
+  font-family: var(--rbs-font-ui);
   max-width: calc(100vw - 16px);
   max-height: calc(100vh - 16px);
   overflow: auto;
-  padding: var(--rbs-space-3);
+  padding: 0;
   border: 1px solid var(--rbs-border);
   border-radius: var(--rbs-radius-md);
   background: var(--rbs-surface);
@@ -395,8 +397,10 @@
 }
 
 .rbs-clinic-detail-date {
-  padding-bottom: var(--rbs-space-2);
+  padding: var(--rbs-space-2) var(--rbs-space-3);
   border-bottom: 1px solid var(--rbs-border-subtle);
+  background: var(--rbs-surface-subtle);
+  font-weight: var(--rbs-weight-medium);
   color: var(--rbs-text-muted);
   font-size: var(--rbs-type-caption-size);
 }
@@ -405,7 +409,9 @@
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
   gap: var(--rbs-space-2) var(--rbs-space-3);
-  margin: var(--rbs-space-2) 0 0;
+  margin: 0;
+  padding: var(--rbs-space-3);
+  align-items: baseline;
 }
 
 .rbs-clinic-detail-card dt {
@@ -419,4 +425,47 @@
 
 .rbs-clinic-detail-card dd:first-of-type {
   font-weight: var(--rbs-weight-semibold);
+}
+
+.rbs-clinic-detail-card.is-admin {
+  --rbs-clinic-site-color: var(--rbs-admin-grey);
+  --rbs-clinic-site-tint: var(--rbs-admin-tint);
+}
+
+.rbs-clinic-detail-site {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--rbs-space-1);
+  color: var(--rbs-text);
+  font-weight: var(--rbs-weight-medium);
+}
+
+.rbs-clinic-detail-site::before {
+  content: "";
+  width: var(--rbs-space-2);
+  height: var(--rbs-space-2);
+  flex: 0 0 auto;
+  border-radius: var(--rbs-radius-full);
+  background: var(--rbs-clinic-site-color, var(--rbs-text-muted));
+}
+
+.rbs-clinic-detail-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--rbs-space-1);
+}
+
+.rbs-clinic-detail-option {
+  padding: 1px var(--rbs-space-1);
+  border: 1px solid var(--rbs-border-subtle);
+  border-radius: var(--rbs-radius-sm);
+  background: var(--rbs-surface-muted);
+  font-size: var(--rbs-type-caption-size);
+  line-height: var(--rbs-type-caption-leading);
+  font-weight: var(--rbs-weight-medium);
+  white-space: nowrap;
+}
+
+.rbs-clinic-detail-notice {
+  color: var(--rbs-warning-strong);
 }

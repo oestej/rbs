@@ -324,9 +324,7 @@ def _person_html(
     style = ""
     if person.site_color and person.site_light_color:
         style = f' style="{_site_style(person.site_color, person.site_light_color)}"'
-    rows = "".join(
-        f"<dt>{html.escape(label)}</dt><dd>{html.escape(value)}</dd>" for label, value in details
-    )
+    rows = "".join(_detail_row_html(label, value) for label, value in details)
     return (
         f'<div class="{classes}"{style} tabindex="0" '
         f'aria-label="{html.escape(person.label())}; clinic details">'
@@ -335,6 +333,20 @@ def _person_html(
         f'<div class="rbs-clinic-detail-date">{html.escape(when)}</div>'
         f"<dl>{rows}</dl></div></div>"
     )
+
+
+def _detail_row_html(label: str, value: str) -> str:
+    content = html.escape(value)
+    if label == "Allowed options" and value != "None":
+        content = '<span class="rbs-clinic-detail-options">' + "".join(
+            f'<span class="rbs-clinic-detail-option">{html.escape(option)}</span>'
+            for option in value.split(", ")
+        ) + "</span>"
+    elif label == "Scheduled":
+        content = f'<span class="rbs-clinic-detail-site">{content}</span>'
+    elif label in {"Restrictions", "Placement"}:
+        content = f'<span class="rbs-clinic-detail-notice">{content}</span>'
+    return f"<dt>{html.escape(label)}</dt><dd>{content}</dd>"
 
 
 def _site_style(color: str, light_color: str) -> str:
