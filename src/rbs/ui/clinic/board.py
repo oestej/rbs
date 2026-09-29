@@ -9,8 +9,9 @@ from rbs.models.clinic import ClinicPolicy
 from rbs.models.curriculum import default_training_level_code
 from rbs.models.enums import Session, Weekday
 from rbs.models.instance import SchedulerInput
-from rbs.models.schedule import Schedule
+from rbs.models.schedule import Assignment, Schedule
 from rbs.models.special import SpecialRotation
+from rbs.ui.clinic.details import clinic_details
 from rbs.ui.clinic.projection import (
     ACADEMIC_LABEL,
     SESSION_SHORT,
@@ -40,6 +41,11 @@ def render_clinic_html(
     show_legend: bool = True,
 ) -> str:
     board = occupancy(instance, schedule)
+    assignments = {
+        (assignment.resident_id, week): assignment
+        for assignment in (schedule.assignments if schedule else [])
+        for week in assignment.weeks
+    }
     start = instance.calendar.first_week_start
     policy = instance.clinic_policy
     weekdays = clinic_weekdays(instance)
@@ -50,7 +56,7 @@ def render_clinic_html(
         today=today,
     )
     calendar = "".join(
-        _calendar_week_html(instance, board, week, site) for week in weeks
+        _calendar_week_html(instance, board, week, site, assignments) for week in weeks
     )
     legend = render_clinic_legend_html(policy) if show_legend else ""
     return (
@@ -66,6 +72,7 @@ def _calendar_week_html(
     board: dict[tuple[int, Weekday, Session], list[ClinicOccupant]],
     week: int,
     site: str | None,
+    assignments: dict[tuple[str, int], Assignment],
 ) -> str:
     monday = week_monday(instance.calendar.first_week_start, week)
     weekdays = clinic_weekdays(instance)
@@ -77,6 +84,7 @@ def _calendar_week_html(
             weekday,
             monday + timedelta(days=list(Weekday).index(weekday)),
             site,
+            assignments,
         )
         for weekday in weekdays
     )
@@ -95,12 +103,12 @@ def _calendar_day_html(
     weekday: Weekday,
     calendar_day: date,
     site: str | None,
+    assignments: dict[tuple[str, int], Assignment],
 ) -> str:
     closure = clinic_closure_view(instance.clinic_policy, calendar_day, site)
     if closure.all_selected_sites_closed:
         sessions = "".join(
-            _closed_session_html(instance, calendar_day, session, closure)
-            for session in Session
+            _closed_session_html(instance, calendar_day, session, closure) for session in Session
         )
     else:
         sessions = "".join(
@@ -112,12 +120,12 @@ def _calendar_day_html(
                 session,
                 calendar_day,
                 site,
+                assignments,
             )
             for session in Session
         )
     full_label = (
-        f"{weekday.value.title()}, {calendar_day:%B} "
-        f"{calendar_day.day}, {calendar_day.year}"
+        f"{weekday.value.title()}, {calendar_day:%B} {calendar_day.day}, {calendar_day.year}"
     )
     classes = ["rbs-clinic-day"]
     closure_badge = ""
@@ -176,6 +184,7 @@ def _calendar_session_html(
     session: Session,
     calendar_day: date,
     site: str | None,
+    assignments: dict[tuple[str, int], Assignment],
 ) -> str:
     policy = instance.clinic_policy
     session_label = SESSION_SHORT[session]
@@ -208,7 +217,21 @@ def _calendar_session_html(
         occupants_for_site(board[(week, weekday, session)], site),
         policy,
     )
-    names = "".join(_person_html(person) for person in people)
+    names = "".join(
+        _person_html(
+            person,
+            clinic_details(
+                instance,
+                assignments.get((person.resident_id, week)),
+                person,
+                week,
+                weekday,
+                session,
+            ),
+            f"{calendar_day:%B} {calendar_day.day}, {calendar_day.year} · {session_label}",
+        )
+        for person in people
+    )
     attending_details = []
     attending_markers = []
     sites = (site,) if site is not None else policy.site_ids
@@ -234,8 +257,7 @@ def _calendar_session_html(
     title_bits.extend(
         f"{special.name}: "
         + ", ".join(
-            instance.residents_by_id[resident_id].name
-            for resident_id in special.resident_ids
+            instance.residents_by_id[resident_id].name for resident_id in special.resident_ids
         )
         for special in special_events
     )
@@ -261,13 +283,9 @@ def _special_event_html(
     instance: SchedulerInput,
     special: SpecialRotation,
 ) -> str:
-    people = [
-        instance.residents_by_id[resident_id]
-        for resident_id in special.resident_ids
-    ]
+    people = [instance.residents_by_id[resident_id] for resident_id in special.resident_ids]
     resident_labels = ", ".join(
-        f"{instance.training_level_label(resident.pgy, compact=True)} "
-        f"{resident.name}"
+        f"{instance.training_level_label(resident.pgy, compact=True)} {resident.name}"
         for resident in people
     )
     return (
@@ -293,7 +311,11 @@ def render_clinic_legend_html(policy: ClinicPolicy) -> str:
     )
 
 
-def _person_html(person: ClinicOccupant) -> str:
+def _person_html(
+    person: ClinicOccupant,
+    details: list[tuple[str, str]],
+    when: str,
+) -> str:
     classes = "rbs-clinic-person"
     if person.admin:
         classes += " admin"
@@ -302,9 +324,16 @@ def _person_html(person: ClinicOccupant) -> str:
     style = ""
     if person.site_color and person.site_light_color:
         style = f' style="{_site_style(person.site_color, person.site_light_color)}"'
+    rows = "".join(
+        f"<dt>{html.escape(label)}</dt><dd>{html.escape(value)}</dd>" for label, value in details
+    )
     return (
-        f'<div class="{classes}"{style} title="{html.escape(person.label())}">'
-        f"{_display_label_html(person)}</div>"
+        f'<div class="{classes}"{style} tabindex="0" '
+        f'aria-label="{html.escape(person.label())}; clinic details">'
+        f"{_display_label_html(person)}"
+        '<div class="rbs-clinic-detail-source" hidden>'
+        f'<div class="rbs-clinic-detail-date">{html.escape(when)}</div>'
+        f"<dl>{rows}</dl></div></div>"
     )
 
 
@@ -315,10 +344,7 @@ def _site_style(color: str, light_color: str) -> str:
 def _display_label_html(person: ClinicOccupant) -> str:
     name_parts = person.name.rsplit(" ", 1)
     if len(name_parts) == 1:
-        name_html = (
-            f'<strong class="rbs-clinic-last-name">'
-            f"{html.escape(person.name)}</strong>"
-        )
+        name_html = f'<strong class="rbs-clinic-last-name">{html.escape(person.name)}</strong>'
     else:
         given_names, last_name = name_parts
         name_html = (
@@ -328,7 +354,4 @@ def _display_label_html(person: ClinicOccupant) -> str:
     training_level = html.escape(
         person.training_level_code or default_training_level_code(person.pgy)
     )
-    return (
-        f'<span class="rbs-clinic-training-level">{training_level}</span> '
-        f"{name_html}"
-    )
+    return f'<span class="rbs-clinic-training-level">{training_level}</span> {name_html}'

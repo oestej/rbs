@@ -33,9 +33,7 @@ from rbs.ui.clinic.projection import (
 def _with_closures(instance, closures: list[dict]):
     raw = instance.clinic_policy.model_dump(mode="json")
     raw["closure_days"] = closures
-    return instance.model_copy(
-        update={"clinic_policy": ClinicPolicy.model_validate(raw)}
-    )
+    return instance.model_copy(update={"clinic_policy": ClinicPolicy.model_validate(raw)})
 
 
 def _with_academic_override(
@@ -183,8 +181,8 @@ def test_empty_schedule_has_no_occupants_but_academic_cells() -> None:
     assert '<time datetime="2026-06-29">Jun 29</time>' in markup
     assert '<time datetime="2026-07-06">Jul 6</time>' in markup
     assert "Monday" in markup and "Friday" in markup
-    assert '>AM</span>' in markup
-    assert '>PM</span>' in markup
+    assert ">AM</span>" in markup
+    assert ">PM</span>" in markup
     assert "rbs-clinic-summary" not in markup
     assert "Peak" not in markup
 
@@ -201,9 +199,7 @@ def test_schedule_validation_uses_specific_date_capacity_override() -> None:
             "min_residents": 0,
         }
     ]
-    instance = instance.model_copy(
-        update={"clinic_policy": ClinicPolicy.model_validate(raw)}
-    )
+    instance = instance.model_copy(update={"clinic_policy": ClinicPolicy.model_validate(raw)})
     schedule = _schedule(
         Assignment(
             resident_id=instance.residents[0].id,
@@ -262,9 +258,7 @@ def test_clinic_capacity_failure_is_reported_once_with_the_final_headcount() -> 
     validation = validate_schedule(instance, schedule)
 
     capacity_errors = [
-        error
-        for error in validation.errors
-        if error.startswith(f"{site.name} capacity exceeded")
+        error for error in validation.errors if error.startswith(f"{site.name} capacity exceeded")
     ]
     assert capacity_errors == [
         f"{site.name} capacity exceeded: week 1 {half_day.weekday.value} "
@@ -273,9 +267,7 @@ def test_clinic_capacity_failure_is_reported_once_with_the_final_headcount() -> 
 
     diagnostics = validation_failure_diagnostics(instance, schedule, validation.errors)
     clinic = [
-        diagnostic
-        for diagnostic in diagnostics
-        if diagnostic.code == "clinic_allocation_capacity"
+        diagnostic for diagnostic in diagnostics if diagnostic.code == "clinic_allocation_capacity"
     ]
     assert len(clinic) == 1
     assert clinic[0].message == (
@@ -372,8 +364,7 @@ def test_partial_closure_keeps_open_sites_available_and_marks_the_calendar() -> 
 
     validation = validate_schedule(instance, schedule)
     assert any(
-        "Maple is closed on July 7, 2026 (Site maintenance)" in error
-        for error in validation.errors
+        "Maple is closed on July 7, 2026 (Site maintenance)" in error for error in validation.errors
     )
 
 
@@ -406,7 +397,7 @@ def test_clinic_kind_fills_all_half_days_except_academic() -> None:
     markup = render_clinic_html(instance, schedule)
     assert avery.name in markup
     assert f"PGY{avery.pgy} {avery.name}" in markup
-    assert f'>PGY{avery.pgy}</span>' in markup
+    assert f">PGY{avery.pgy}</span>" in markup
     assert ACADEMIC_LABEL in markup
 
 
@@ -428,7 +419,7 @@ def test_clinic_kind_admin_half_day_is_marked() -> None:
     assert (
         f'<span class="rbs-clinic-training-level">PGY{monday_am[0].pgy}</span> '
         f"{given_name} "
-        f'<strong class="rbs-clinic-last-name">{last_name}</strong></div>'
+        f'<strong class="rbs-clinic-last-name">{last_name}</strong>'
     ) in markup
     assert f">{monday_am[0].label()}</div>" not in markup
     assert 'class="rbs-clinic-person admin"' in markup
@@ -483,7 +474,7 @@ def test_access_and_cedar_shown_on_board() -> None:
         assert (
             f'<span class="rbs-clinic-training-level">PGY{person.pgy}</span> '
             f"{given_name} "
-            f'<strong class="rbs-clinic-last-name">{last_name}</strong></div>'
+            f'<strong class="rbs-clinic-last-name">{last_name}</strong>'
         ) in markup
         assert f">{person.label()}</div>" not in markup
     assert ">1 Maple</span>" in markup
@@ -615,23 +606,18 @@ def test_away_rotation_suppresses_a_resident_clinic_half_day() -> None:
     schedule = _schedule(assignment)
     assert [
         person.name
-        for person in occupancy(instance, schedule)[
-            (1, Weekday.TUESDAY, Session.MORNING)
-        ]
+        for person in occupancy(instance, schedule)[(1, Weekday.TUESDAY, Session.MORNING)]
     ] == [resident.name]
 
     away = instance.rotation("peds_community").model_copy(update={"away": True})
     away_instance = instance.model_copy(
         update={
             "rotations": [
-                away if rotation.id == away.id else rotation
-                for rotation in instance.rotations
+                away if rotation.id == away.id else rotation for rotation in instance.rotations
             ]
         }
     )
-    assert occupancy(away_instance, schedule)[
-        (1, Weekday.TUESDAY, Session.MORNING)
-    ] == []
+    assert occupancy(away_instance, schedule)[(1, Weekday.TUESDAY, Session.MORNING)] == []
 
 
 def test_vacation_week_omits_resident_from_clinic() -> None:
@@ -653,8 +639,7 @@ def test_individual_day_off_omits_only_that_day_from_clinic() -> None:
     tuesday_off = instance.calendar.first_week_start + timedelta(weeks=10, days=1)
     updated_avery = avery.model_copy(update={"days_off": [tuesday_off]})
     residents = [
-        updated_avery if resident.id == avery.id else resident
-        for resident in instance.residents
+        updated_avery if resident.id == avery.id else resident for resident in instance.residents
     ]
     instance = instance.model_copy(update={"residents": residents})
     schedule = _schedule(_clinic_assignment(avery.id, [11]))
@@ -665,8 +650,7 @@ def test_individual_day_off_omits_only_that_day_from_clinic() -> None:
     assert board[(11, Weekday.TUESDAY, Session.AFTERNOON)] == []
     assert any(person.name == avery.name for person in board[(11, Weekday.MONDAY, Session.MORNING)])
     assert any(
-        person.name == avery.name
-        for person in board[(11, Weekday.WEDNESDAY, Session.MORNING)]
+        person.name == avery.name for person in board[(11, Weekday.WEDNESDAY, Session.MORNING)]
     )
 
 
@@ -748,3 +732,86 @@ def test_academic_half_day_blocked_even_if_slot_listed() -> None:
     markup = render_clinic_html(instance, schedule)
     assert markup.count('class="rbs-clinic-session academic"') == instance.calendar.weeks
     assert avery.name not in markup
+
+
+def test_hover_details_follow_rotation_for_each_week_and_escape_names() -> None:
+    from html import escape
+
+    instance = sample_instance()
+    resident = instance.residents[0]
+    raw = instance.model_dump(mode="json")
+    raw["residents"][0]["name"] = '<img src=x onerror="alert(1)">'
+    instance = SchedulerInput.model_validate(raw)
+    schedule = _schedule(
+        _clinic_assignment(resident.id, [1]),
+        _overlay_assignment(resident.id, [2], Weekday.TUESDAY, Session.MORNING),
+    )
+    markup = render_clinic_html(instance, schedule)
+    assert 'tabindex="0"' in markup
+    assert 'class="rbs-clinic-detail-source" hidden' in markup
+    assert "<dt>Rotation</dt><dd>Clinic</dd>" in markup
+    assert escape(instance.rotation("emergency_medicine").name) in markup
+    assert "<img src=x" not in markup
+    assert escape(raw["residents"][0]["name"]) in markup
+    assert "Eligibility context" not in markup
+    assert "<dt>Resident</dt>" in markup
+    assert "<dt>Training level</dt>" not in markup
+
+
+def test_hover_details_explain_manual_override_on_vacation() -> None:
+    from rbs.ui.clinic.details import clinic_details
+
+    instance = sample_instance()
+    raw = instance.model_dump(mode="json")
+    raw["residents"][0]["vacation_weeks"] = [1]
+    instance = SchedulerInput.model_validate(raw)
+    resident = instance.residents[0]
+    person = ClinicOccupant(
+        resident.id,
+        resident.name,
+        resident.pgy,
+        manual_override=True,
+    )
+    details = dict(
+        clinic_details(
+            instance,
+            _clinic_assignment(resident.id, [1]),
+            person,
+            1,
+            Weekday.MONDAY,
+            Session.MORNING,
+        )
+    )
+    assert details["Rotation"] == instance.rotation("clinic").name
+    assert "Manual override" in details["Placement"]
+    assert "Vacation this week" in details["Restrictions"]
+    assert details["Allowed options"] == "M, T, W AM, Th, F"
+    assert not {"Clinic coverage", "Availability", "Clinic rule", "This half-day"} & details.keys()
+
+
+def test_hover_details_explain_admin_and_recurring_clinic() -> None:
+    from rbs.ui.clinic.details import clinic_details
+
+    instance = sample_instance()
+    raw = instance.model_dump(mode="json")
+    raw["residents"][0]["clinic_half_days"] = [
+        {"weekday": "monday", "session": "morning", "sites": []},
+    ]
+    instance = SchedulerInput.model_validate(raw)
+    resident = instance.residents[0]
+    person = ClinicOccupant(resident.id, resident.name, resident.pgy, admin=True)
+    details = dict(
+        clinic_details(
+            instance,
+            _clinic_assignment(resident.id, [1]),
+            person,
+            1,
+            Weekday.MONDAY,
+            Session.MORNING,
+        )
+    )
+    assert details["Scheduled"] == "Admin"
+    assert "Reserved for Admin" in details["Clinic attendance"]
+    assert all(
+        site.name in details["Recurring clinic"] for site in instance.clinic_policy.sites
+    )

@@ -370,3 +370,53 @@
     display: none;
   }
 }
+
+.rbs-clinic-person:focus-visible {
+  outline: 2px solid var(--rbs-primary);
+  outline-offset: 1px;
+}
+
+.rbs-clinic-detail-card {
+  position: fixed;
+  z-index: 6000;
+  width: 340px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+  padding: var(--rbs-space-3);
+  border: 1px solid var(--rbs-border);
+  border-radius: var(--rbs-radius-md);
+  background: var(--rbs-surface);
+  color: var(--rbs-text);
+  box-shadow: var(--rbs-shadow-raised);
+  font-size: var(--rbs-type-secondary-size);
+  line-height: var(--rbs-type-secondary-leading);
+  overflow-wrap: anywhere;
+}
+
+.rbs-clinic-detail-date {
+  padding-bottom: var(--rbs-space-2);
+  border-bottom: 1px solid var(--rbs-border-subtle);
+  color: var(--rbs-text-muted);
+  font-size: var(--rbs-type-caption-size);
+}
+
+.rbs-clinic-detail-card dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--rbs-space-2) var(--rbs-space-3);
+  margin: var(--rbs-space-2) 0 0;
+}
+
+.rbs-clinic-detail-card dt {
+  color: var(--rbs-text-muted);
+  font-size: var(--rbs-type-caption-size);
+}
+
+.rbs-clinic-detail-card dd {
+  margin: 0;
+}
+
+.rbs-clinic-detail-card dd:first-of-type {
+  font-weight: var(--rbs-weight-semibold);
+}

@@ -39,6 +39,7 @@ from rbs.ui.app_status import (
     _refresh_status_chips,
 )
 from rbs.ui.asgi import guard_nicegui_socket_mount
+from rbs.ui.clinic.hover import CLINIC_HOVER_SCRIPT
 from rbs.ui.diagnostics import CLIENT_ERROR_SCRIPT, install_client_error_endpoint
 from rbs.ui.host import WorkspaceHost
 from rbs.ui.legal_notices import load_application_license, load_third_party_licenses
@@ -208,6 +209,7 @@ def _register(workspace_host: WorkspaceHost) -> None:
         for stylesheet_url in STYLESHEET_URLS:
             ui.add_head_html(f'<link rel="stylesheet" href="{stylesheet_url}">')
         ui.add_head_html(f"<script>{BLOCK_LABEL_FIT_SCRIPT}</script>")
+        ui.add_head_html(f"<script>{CLINIC_HOVER_SCRIPT}</script>")
         ui.add_head_html(f"<script>{SPINNER_ELAPSED_SCRIPT}</script>")
         file_handle.install(ui)
         # Deliver a small, browser-native loading screen before building the
