@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- **Clinic schedule:** Hover over or keyboard-focus a resident’s name to see their
+  rotation, clinic rules, availability restrictions, and manual override details.
+
 ## [0.1.13] - 2026-09-19
 
 ### Changed
