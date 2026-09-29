@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import partial
 
 from rbs.models.curriculum import (
@@ -16,6 +17,7 @@ from rbs.models.rotation import (
 from rbs.models.schedule import Schedule
 from rbs.ui import master_detail, page_shells
 from rbs.ui.buttons import SECONDARY_BUTTON_PROPS, button_props
+from rbs.ui.deferred_sections import defer_sections
 from rbs.ui.rotations.academic import _academic_configuration
 from rbs.ui.rotations.csv_export import build_rotations_csv, rotations_csv_filename
 from rbs.ui.rotations.elective import _elective_configuration
@@ -51,6 +53,8 @@ def render_rotations_tab(
     on_section_change=None,
     resident_edit_url: str | None = None,
     on_export_csv: ExportRotationsCsv | None = None,
+    can_preload: Callable[[], bool] | None = None,
+    is_active: Callable[[], bool] | None = None,
 ) -> None:
     """Render rotation-summary and rotation-configuration workspaces."""
     from nicegui import ui
@@ -97,7 +101,7 @@ def render_rotations_tab(
                 on_click=export_csv,
             ).props(button_props(SECONDARY_BUTTON_PROPS, "dense"))
         with (
-            ui.tabs(on_change=on_section_change)
+            ui.tabs()
             .props("dense no-caps align=left")
             .classes("rbs-configuration-tabs w-full") as tabs
         ):
@@ -117,6 +121,7 @@ def render_rotations_tab(
             "academic_configuration": academic_tab,
         }
 
+        panels = {}
         with (
             ui.tab_panels(
                 tabs,
@@ -125,13 +130,17 @@ def render_rotations_tab(
             .props("animated")
             .classes("rbs-configuration-panels w-full")
         ):
-            with ui.tab_panel(summary_tab).classes("p-0 pt-4"):
+            for name, tab in section_tabs.items():
+                panels[name] = ui.tab_panel(tab).classes("p-0 pt-4")
+
+        def render_section(name: str) -> None:
+            if name == "rotation_summary":
                 _rotation_summary(
                     instance,
                     schedule=schedule,
                     resident_edit_url=resident_edit_url,
                 )
-            with ui.tab_panel(rotations_tab).classes("p-0 pt-4"):
+            elif name == "standard_rotations":
                 with master_detail.split(detail_selected=selected is not None or creating):
                     _rotation_directory(
                         instance,
@@ -154,7 +163,7 @@ def render_rotations_tab(
                         on_save=on_save,
                         guard=mandatory_guard,
                     )
-            with ui.tab_panel(fmed_tab).classes("p-0 pt-4"):
+            elif name == "fmed_configuration":
                 _dedicated_rotation_cards(
                     instance,
                     RotationKind.FMED,
@@ -162,7 +171,7 @@ def render_rotations_tab(
                     on_save=on_save,
                     on_color_save=on_color_save,
                 )
-            with ui.tab_panel(electives_tab).classes("p-0 pt-4"):
+            elif name == "elective_configuration":
                 _elective_configuration(
                     instance,
                     selected_rotation_id=selected_rotation_id,
@@ -171,18 +180,28 @@ def render_rotations_tab(
                     on_color_save=on_color_save or on_save,
                     guard=elective_guard,
                 )
-            with ui.tab_panel(special_tab).classes("p-0 pt-4"):
+            elif name == "special_configuration":
                 _special_configuration(
                     instance,
                     selected_rotation_id=selected_rotation_id,
                     on_save=on_save,
                 )
-            with ui.tab_panel(academic_tab).classes("p-0 pt-4"):
+            elif name == "academic_configuration":
                 _academic_configuration(
                     instance,
                     selected_rotation_id=selected_rotation_id,
                     on_save=on_save,
                 )
+
+        defer_sections(
+            tabs,
+            panels,
+            render_section,
+            active_section=active_section,
+            on_section_change=on_section_change,
+            can_preload=can_preload,
+            is_active=is_active,
+        )
 
 
 def _rotation_directory(

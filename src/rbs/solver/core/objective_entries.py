@@ -347,7 +347,7 @@ def _available_week_entries(
     surviving: dict[str, list[tuple]] = defaultdict(list)
     for entry in entries:
         occurrence, weekday, session, literal, pinned = entry
-        if context.instance.resident_clinic_is_blocked(
+        if context.resident_clinic_is_blocked(
             occurrence.resident_id,
             week,
             weekday,
@@ -473,7 +473,7 @@ def _clinic_kind_occupancy(
             for index, slot in enumerate(decision.domain)
             if slot.weekday is not None and slot.session is not None
         }
-        for slot in clinic_kind.week_domain(context.instance, week, rotation):
+        for slot in clinic_kind.cached_week_domain(context, week, rotation):
             if slot.weekday is None or slot.session is None:
                 continue
             selected = selected_by_slot.get((slot.weekday, slot.session))
@@ -490,7 +490,7 @@ def _clinic_kind_occupancy(
             )
             entries.append((occurrence, slot.weekday, slot.session, in_clinic, pinned))
         return
-    for slot in clinic_kind.week_domain(context.instance, week, rotation):
+    for slot in clinic_kind.cached_week_domain(context, week, rotation):
         entries.append(
             (
                 occurrence,
@@ -515,4 +515,3 @@ def _overlay_domain(rotation: Rotation, policy: ClinicPolicy) -> tuple[list, int
 def _pinned_site(policy: ClinicPolicy, site_ids: list[str]) -> str | None:
     resolved = policy.resolve_site_ids(site_ids)
     return resolved[0] if len(resolved) == 1 else None
-

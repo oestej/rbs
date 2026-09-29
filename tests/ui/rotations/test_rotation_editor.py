@@ -1217,6 +1217,13 @@ def test_rotation_summary_is_the_first_and_default_workspace_tab() -> None:
     assert tabs[0]._props.get("label") == "Summary"
     panels = next(element for element in created if element.__class__.__name__ == "TabPanels")
     assert panels._props.get("model-value") == "rotation_summary"
+    section_panels = [element for element in created if element.__class__.__name__ == "TabPanel"]
+    assert [bool(panel.default_slot.children) for panel in section_panels] == [
+        True, False, False, False, False, False,
+    ]
+    section_tabs = next(element for element in created if element.__class__.__name__ == "Tabs")
+    section_tabs.set_value("fmed_configuration")
+    created = _editor_elements_since(before)
     # FMED and Elective block colors are chosen in their pop-out editors, so the
     # tab itself reports the current color rather than offering a palette.
     dedicated_color_buttons = [
@@ -1324,6 +1331,7 @@ def test_academic_override_row_has_edit_and_delete_actions() -> None:
         selected_rotation_id=None,
         on_select=lambda _rotation_id: None,
         on_save=lambda _instance, _rotation_id: None,
+        active_section="academic_configuration",
     )
     created = [
         element
@@ -1345,6 +1353,7 @@ def test_academic_screen_offers_a_switch_to_turn_the_half_day_off() -> None:
         selected_rotation_id=None,
         on_select=lambda _rotation_id: None,
         on_save=lambda _instance, _rotation_id: None,
+        active_section="academic_configuration",
     )
     created = [
         element
@@ -1380,6 +1389,7 @@ def test_academic_screen_reflects_a_program_that_runs_none() -> None:
         selected_rotation_id=None,
         on_select=lambda _rotation_id: None,
         on_save=lambda _instance, _rotation_id: None,
+        active_section="academic_configuration",
     )
     created = [
         element
@@ -1406,6 +1416,7 @@ def test_a_cancelled_week_renders_as_no_academic_half_day() -> None:
         selected_rotation_id=None,
         on_select=lambda _rotation_id: None,
         on_save=lambda _instance, _rotation_id: None,
+        active_section="academic_configuration",
     )
     created = [
         element
@@ -4211,6 +4222,10 @@ def test_directory_click_with_two_dirty_editors_confirms_twice() -> None:
         on_save=lambda _instance, _rotation_id: None,
         active_section="standard_rotations",
     )
+    created = _editor_elements_since(before)
+    section_tabs = next(element for element in created if element.__class__.__name__ == "Tabs")
+    section_tabs.set_value("elective_configuration")
+    section_tabs.set_value("standard_rotations")
     created = _editor_elements_since(before)
     edits = [
         element

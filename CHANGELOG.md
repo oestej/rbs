@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+- Rotations and Configuration show the selected section first, then prepare
+  unopened sections while you are idle without replacing open editors.
+
+- **Scheduling:** Preparing a solve is faster and uses a smaller model when
+  quality goals are disabled, leaving more of the solve budget for scheduling.
+
+- Main pages open faster, and large block schedules resize more smoothly while
+  keeping rotation names readable.
+
+- **Clinic schedule:** Right-click a resident’s clinic block to open their clinic
+  schedule at the selected week. Hovering still shows the details card.
+
+- **Block schedule:** Right-click a block to jump to its resident’s schedule or
+  rotation configuration.
+
 - **Clinic schedule:** Hover over or keyboard-focus a resident’s name to see their
   rotation, clinic rules, availability restrictions, and manual override details.
 

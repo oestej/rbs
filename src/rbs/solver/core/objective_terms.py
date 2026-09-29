@@ -7,8 +7,10 @@ small model helpers (sums, ranges) they share.
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+from rbs.models.clinic import ClinicSlot
 from rbs.models.enums import Weekday
 from rbs.models.schedule import Schedule
 from rbs.solver.core.context import ClinicDecision, PlanningContext
@@ -25,7 +27,7 @@ from rbs.solver.reference import (
 def _add_week_objective_terms(
     context: PlanningContext,
     week: int,
-    half_day_slots: list,
+    half_day_slots: Sequence[ClinicSlot],
     pgys: list[int],
     slot_groups: tuple[dict, dict, dict, dict, dict],
     state: _ClinicObjectiveState,
@@ -33,6 +35,10 @@ def _add_week_objective_terms(
     _slots_by_resident, present_by_slot, primary_by_slot, present_by_pgy, _occupied = slot_groups
     model = context.model
     policy = context.instance.clinic_policy
+    weights = context.options.weights
+    # Weekly staffing evenness shares these counts with the attending-total
+    # goal, so either enabled goal needs them.
+    needs_attendings = weights.attending_sessions or weights.primary_site_week_evenness
     ratio = policy.site(policy.primary_site_id).residents_per_attending
     n_residents = len(context.instance.residents)
     week_slot_load = []
@@ -40,44 +46,48 @@ def _add_week_objective_terms(
 
     for slot in half_day_slots:
         weekday, session = slot.weekday, slot.session
-        primary = primary_by_slot.get((weekday, session), [])
-        primary_count = _sum_literals(
-            model,
-            f"primary_n:w{week}:{weekday}:{session}",
-            primary,
-            len(primary),
-        )
-        if primary:
-            cap = policy.attendings_needed(len(primary))
-            attendings = model.NewIntVar(
-                0,
-                cap,
-                f"att:w{week}:{weekday}:{session}:primary",
-            )
-            model.Add(ratio * attendings >= primary_count)
-            state.attending_variables.append(attendings)
-            state.attending_upper_bound += cap
-            state.attending_by_week[week].append(attendings)
-        total = _sum_literals(
-            model,
-            f"slot_n:w{week}:{weekday}:{session}",
-            present_by_slot.get((weekday, session), []),
-            n_residents,
-        )
-        week_slot_load.append(total)
-        week_day_parts[weekday].append(total)
-        state.pgy_mix_variables.extend(
-            _session_pgy_mix(
+        if needs_attendings:
+            primary = primary_by_slot.get((weekday, session), [])
+            primary_count = _sum_literals(
                 model,
-                week,
-                weekday,
-                session,
-                pgys,
-                present_by_pgy,
-                present_by_slot,
+                f"primary_n:w{week}:{weekday}:{session}",
+                primary,
+                len(primary),
             )
-        )
-    _append_week_spreads(model, week, week_slot_load, week_day_parts, n_residents, state)
+            if primary:
+                cap = policy.attendings_needed(len(primary))
+                attendings = model.NewIntVar(
+                    0,
+                    cap,
+                    f"att:w{week}:{weekday}:{session}:primary",
+                )
+                model.Add(ratio * attendings >= primary_count)
+                state.attending_variables.append(attendings)
+                state.attending_upper_bound += cap
+                state.attending_by_week[week].append(attendings)
+        if weights.within_week_evenness:
+            total = _sum_literals(
+                model,
+                f"slot_n:w{week}:{weekday}:{session}",
+                present_by_slot.get((weekday, session), []),
+                n_residents,
+            )
+            week_slot_load.append(total)
+            week_day_parts[weekday].append(total)
+        if weights.session_pgy_mix:
+            state.pgy_mix_variables.extend(
+                _session_pgy_mix(
+                    model,
+                    week,
+                    weekday,
+                    session,
+                    pgys,
+                    present_by_pgy,
+                    present_by_slot,
+                )
+            )
+    if weights.within_week_evenness:
+        _append_week_spreads(model, week, week_slot_load, week_day_parts, n_residents, state)
 
 
 def _append_week_spreads(
@@ -342,4 +352,3 @@ def _clinic_kind_pgy_spread(model, pgys, weeks, clinic_kind_week, instance) -> l
         if pgy_spread is not None:
             spread.append(pgy_spread)
     return spread
-

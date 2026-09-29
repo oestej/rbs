@@ -748,6 +748,7 @@ def test_hover_details_follow_rotation_for_each_week_and_escape_names() -> None:
     )
     markup = render_clinic_html(instance, schedule)
     assert 'tabindex="0"' in markup
+    assert f'data-resident-id="{resident.id}" data-start-week="1"' in markup
     assert 'class="rbs-clinic-detail-source" hidden' in markup
     assert "<dt>Rotation</dt><dd>Clinic</dd>" in markup
     assert escape(instance.rotation("emergency_medicine").name) in markup

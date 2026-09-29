@@ -90,6 +90,7 @@ class WorkspaceSession:
     resident_block_schedule_editing: bool = False
     resident_schedule_editing: bool = False
     resident_schedule_section: str = "resident_block_schedule"
+    resident_focus_week: int | None = None
     active_tab: str = "block_schedule"
     solving: bool = False
     theme: UiElement | None = field(default=None, repr=False)
@@ -186,6 +187,7 @@ class WorkspaceSession:
         self.resident_block_schedule_editing = False
         self.resident_schedule_editing = False
         self.resident_schedule_section = "resident_block_schedule"
+        self.resident_focus_week = None
         self.active_tab = "block_schedule"
         self.solving = False
 

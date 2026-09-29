@@ -57,6 +57,9 @@ CLINIC_HOVER_SCRIPT = """
   document.addEventListener('focusout', event => {
     if (event.target === active) close();
   });
+  document.addEventListener('contextmenu', event => {
+    if (event.target.closest('.rbs-clinic-person')) close();
+  }, true);
   document.addEventListener('keydown', event => { if (event.key === 'Escape') close(); });
   document.addEventListener('scroll', event => {
     if (card && !card.contains(event.target)) close();

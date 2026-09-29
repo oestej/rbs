@@ -229,6 +229,7 @@ def _calendar_session_html(
                 session,
             ),
             f"{calendar_day:%B} {calendar_day.day}, {calendar_day.year} · {session_label}",
+            week=week,
         )
         for person in people
     )
@@ -315,6 +316,8 @@ def _person_html(
     person: ClinicOccupant,
     details: list[tuple[str, str]],
     when: str,
+    *,
+    week: int,
 ) -> str:
     classes = "rbs-clinic-person"
     if person.admin:
@@ -327,6 +330,8 @@ def _person_html(
     rows = "".join(_detail_row_html(label, value) for label, value in details)
     return (
         f'<div class="{classes}"{style} tabindex="0" '
+        f'data-resident-id="{html.escape(person.resident_id, quote=True)}" '
+        f'data-start-week="{week}" '
         f'aria-label="{html.escape(person.label())}; clinic details">'
         f"{_display_label_html(person)}"
         '<div class="rbs-clinic-detail-source" hidden>'
