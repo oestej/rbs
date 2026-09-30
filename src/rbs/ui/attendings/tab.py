@@ -80,7 +80,9 @@ from rbs.ui.half_day_schedule import (
 
 SelectAttending = Callable[[str | None], None]
 SaveAttending = Callable[[SchedulerInput, str | None], None]
-SaveAttendingSchedule = Callable[[SchedulerInput, Schedule | None, str], None]
+SaveAttendingSchedule = Callable[
+    [SchedulerInput, Schedule | None, str], tuple[SchedulerInput, Schedule | None]
+]
 NEW_ATTENDING_ID = "__new_attending__"
 
 _WORK_TYPE_OPTIONS = {
@@ -251,10 +253,10 @@ def _attending_detail_panel(
 
     def save_work(
         updated: SchedulerInput, updated_schedule: Schedule | None, attending_id: str,
-    ) -> None:
+    ) -> tuple[SchedulerInput, Schedule | None]:
         nonlocal instance, schedule
-        on_work_save(updated, updated_schedule, attending_id)
-        instance, schedule = updated, updated_schedule
+        instance, schedule = on_work_save(updated, updated_schedule, attending_id)
+        return instance, schedule
 
     def set_schedule_editing(value: bool) -> None:
         nonlocal schedule_editing
@@ -633,7 +635,7 @@ def _attending_schedule_calendar(
         if updated == (instance, schedule):
             return False
         if on_work_save is not None:
-            on_work_save(*updated, attending.id)
+            updated = on_work_save(*updated, attending.id)
         elif on_save is not None and updated[1] == schedule:
             on_save(updated[0], attending.id)
         else:

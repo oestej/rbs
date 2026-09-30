@@ -1019,7 +1019,7 @@ def _render_attendings(session: WorkspaceSession, workspace: Workspace) -> None:
         updated: SchedulerInput,
         updated_schedule: Schedule | None,
         attending_id: str,
-    ) -> None:
+    ) -> tuple[SchedulerInput, Schedule | None]:
         nonlocal workspace
         if attending_id != session.attending_id or not session.attending_schedule_editing:
             raise WorkspaceConflictError("Reopen this attending's schedule before editing it.")
@@ -1036,6 +1036,7 @@ def _render_attendings(session: WorkspaceSession, workspace: Workspace) -> None:
         elif updated_schedule is not None:
             workspace = session.persist_schedule(workspace, updated_schedule, refresh=False)
         session.stale_panels.discard("attendings")
+        return workspace.instance, workspace.latest_schedule
 
     render_attendings_tab(
         workspace.instance,

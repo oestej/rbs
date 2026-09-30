@@ -1362,7 +1362,7 @@ def test_names_and_ids_with_quotes_keep_accessible_names_and_drop_scopes() -> No
         selected_attending_id=attending.id,
         on_select=lambda _attending_id: None,
         on_save=lambda _instance, _attending_id: None,
-        on_work_save=lambda *_args: None,
+        on_work_save=lambda updated, schedule, _attending_id: (updated, schedule),
         schedule_editing=True,
     )
 

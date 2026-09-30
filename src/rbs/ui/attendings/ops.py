@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import date, timedelta
+from uuid import uuid4
 
 from rbs.attending_schedule import ScheduledWorkByWeek, effective_attending_schedule_week
 from rbs.clinic_locks import attending_work_is_locked, clinic_slot_is_in_automatic_lock_window
@@ -108,13 +109,16 @@ def replace_attending_schedule(
 
 
 def next_attending_id(instance: SchedulerInput) -> str:
+    """Allocate a fresh identity, including after a prior attending is removed.
+
+    A stale schedule can still reference deleted attendings, so identities
+    cannot be derived from the remaining directory's gaps or list length.
+    """
     used = {attending.id for attending in instance.attendings}
-    sequence = 1
     while True:
-        candidate = f"attending-{sequence:03d}"
+        candidate = f"attending-{uuid4().hex}"
         if candidate not in used:
             return candidate
-        sequence += 1
 
 
 def academic_year_date_range(instance: SchedulerInput) -> tuple[date, date]:

@@ -1122,3 +1122,32 @@ def test_a_draft_holding_only_locked_attending_work_still_guides_the_solve() -> 
     assert draft.is_empty()
     assert _compatible_reference(problem, draft) is draft
     assert _compatible_reference(problem, _schedule(problem)) is None
+
+
+@pytest.mark.solve
+def test_attending_only_solve_preserves_locked_work_and_fills_open_half_days() -> None:
+    from rbs.solver import solve_problem
+
+    attending = _one_week(
+        "attending-001", "Ada Lovelace", half_days_per_week=4,
+        weekly_shift_targets=[_target(AC, 2, 2)],
+    )
+    problem = _problem([attending])
+    locked = AssignedAttendingWork(
+        attending_id=attending.id, week=1, weekday=MON, session=AM,
+        work_type=ADMIN, locked=True, manual_override=True, hand_entered=True,
+    )
+    draft = _schedule(problem, work=[locked])
+    options = blank_instance().solver.revised(
+        time_limit_seconds=5, num_workers=1, solve_attempts=1,
+    )
+
+    schedule = solve_problem(problem, options=options, reference_solution=draft)
+
+    assert problem.residents == []
+    assert schedule.assignments == []
+    assert schedule.meta.status in {SolverStatus.OPTIMAL, SolverStatus.FEASIBLE}
+    assert schedule.meta.validation_errors == []
+    assert locked in schedule.attending_work
+    assert _counts(schedule.attending_work, attending.id, AC) == 2
+    assert validate_schedule(problem, schedule).valid

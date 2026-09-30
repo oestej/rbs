@@ -1205,8 +1205,8 @@ def test_attending_crud_revalidates_the_complete_instance() -> None:
     replaced = replace_attending(added, attending.id, replacement)
     removed = remove_attending(replaced, replacement.id)
 
-    assert next_attending_id(instance) == "attending-001"
-    assert next_attending_id(added) == "attending-002"
+    assert next_attending_id(instance) != next_attending_id(instance)
+    assert next_attending_id(added) != attending.id
     assert replaced.attendings == [replacement]
     assert removed.attendings == []
     with pytest.raises(ValueError, match="unknown attending"):

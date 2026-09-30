@@ -20,9 +20,12 @@ from rbs.models.schedule import AssignedAttendingWork
 from rbs.solver.attending_availability import attending_week_facts
 from rbs.solver.validation import validate_schedule
 from rbs.ui.attendings.ops import (
+    add_attending,
     attending_working_draft,
     move_attending_schedule_half_day,
     move_attending_work_half_day,
+    next_attending_id,
+    remove_attending,
     set_attending_schedule_half_day,
     set_attending_schedule_locked,
     set_attending_work_half_day,
@@ -713,9 +716,18 @@ def test_generated_calendar_lock_changes_do_not_advance_instance_revision(calend
     assert removed.workspace_revision == saved.workspace_revision + 3
 
 
-def test_locking_a_stale_schedule_after_vacation_edits_keeps_compatible_work(calendar_page):
+@pytest.mark.parametrize("week", [1, 2], ids=["hand-entered", "generated"])
+def test_locking_a_stale_schedule_after_vacation_edits_keeps_compatible_work(calendar_page, week):
     page = calendar_page
     prior = _generated_schedule(page.workspace.instance)
+    masked_work, other_work = prior.attending_work
+    prior = prior.revised(attending_work=[
+        *prior.attending_work,
+        AssignedAttendingWork(
+            attending_id="attending-001", week=2, weekday=Weekday.TUESDAY,
+            session=Session.MORNING, work_type=AttendingWorkType.ATTENDING_CLINIC,
+        ),
+    ])
     saved = page.store.save_schedule(
         page.workspace.id, prior,
         expected_workspace_revision=page.workspace.workspace_revision,
@@ -734,15 +746,78 @@ def test_locking_a_stale_schedule_after_vacation_edits_keeps_compatible_work(cal
     assert page.store.get(saved.id).solution_is_out_of_date
     page.session.refresh_panel("attendings")
     _click(page.button("Edit schedule"))
-    _click(page.accessible("Lock work half-day: Tuesday Morning (AM) in week 1"))
+    _click(page.accessible(f"Lock work half-day: Tuesday Morning (AM) in week {week}"))
     current = page.store.get(saved.id)
     assert not current.solution_is_out_of_date
     assert current.schedule.is_working_draft
-    assert any(item.locked and item.weekday is Weekday.TUESDAY
+    assert any(item.locked and item.weekday is Weekday.TUESDAY and item.week == week
                for item in current.schedule.attending_work)
-    assert prior.attending_work[1] in current.schedule.attending_work  # other attending remains
-    assert prior.attending_work[0] not in current.schedule.attending_work  # vacation masks it
+    assert other_work in current.schedule.attending_work
+    assert masked_work not in current.schedule.attending_work
     assert any("vacation" in note for note in current.schedule.meta.notes)
+
+    # The mounted calendar must use the normalized draft on its next edit.
+    _click(page.accessible(f"Unlock work half-day: Tuesday Morning (AM) in week {week}"))
+    unlocked = page.store.get(saved.id)
+    assert unlocked.workspace_revision == current.workspace_revision + 1
+    assert masked_work not in unlocked.schedule.attending_work
+    assert other_work in unlocked.schedule.attending_work
+    assert not any(item.locked for item in unlocked.schedule.attending_work)
+
+    # The detail panel must retain that snapshot when it recreates the calendar.
+    _click(page.button("Edit attending"))
+    _click(page.accessible("Cancel attending editing"))
+    _click(page.button("Edit schedule"))
+    _click(page.accessible(f"Lock work half-day: Tuesday Morning (AM) in week {week}"))
+    relocked = page.store.get(saved.id)
+    assert relocked.workspace_revision == unlocked.workspace_revision + 1
+    assert relocked.schedule.attending_work == current.schedule.attending_work
+    assert relocked.schedule.meta.source_instance_revision == relocked.instance_revision
+    problem = SolverProblem.from_instance(relocked.instance)
+    assert validate_schedule(problem, relocked.schedule).valid
+
+
+@pytest.mark.parametrize("legacy_id", [False, True], ids=["new-id", "legacy-id"])
+def test_replacement_attending_does_not_inherit_prior_work_or_locks(tmp_path, legacy_id):
+    from rbs.store import Store
+
+    instance = blank_instance()
+    attending = Attending(
+        id="attending-001" if legacy_id else next_attending_id(instance), name="Ada Lovelace",
+    )
+    instance = add_attending(instance, attending)
+    work = [
+        AssignedAttendingWork(
+            attending_id=attending.id, week=1, weekday=weekday, session=Session.MORNING,
+            work_type=AttendingWorkType.ATTENDING_CLINIC, locked=locked,
+        )
+        for weekday, locked in [(Weekday.MONDAY, False), (Weekday.TUESDAY, True)]
+    ]
+    store = Store(tmp_path / "replacement.sqlite")
+    store.init()
+    workspace = store.create("Attending replacement", instance)
+    workspace = store.save_schedule(
+        workspace.id, attending_working_draft(instance, None).revised(attending_work=work),
+        expected_workspace_revision=workspace.workspace_revision,
+        expected_instance_revision=workspace.instance_revision,
+    )
+    removed = store.save_instance(
+        workspace.id, remove_attending(instance, attending.id),
+        expected_workspace_revision=workspace.workspace_revision,
+    )
+    replacement = Attending(id=next_attending_id(removed.instance), name="Grace Hopper")
+    saved = store.save_instance(
+        removed.id, add_attending(removed.instance, replacement),
+        expected_workspace_revision=removed.workspace_revision,
+    )
+
+    assert saved.solution_is_out_of_date
+    assert saved.latest_schedule.attending_work == work
+    assert saved.instance.scheduled_attending_work(saved.latest_schedule) == {}
+    facts = attending_week_facts(SolverProblem.from_instance(saved.instance), saved.latest_schedule)
+    assert all(not week.locked_work and not week.reference
+               for weeks in facts.values() for week in weeks)
+    assert replacement.id != attending.id
 
 
 def _hard_and_soft_half_days(instance, schedule, week=1, *, today=None):

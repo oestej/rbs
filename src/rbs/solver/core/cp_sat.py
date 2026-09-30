@@ -368,9 +368,10 @@ def _with_attending_work(
     rest of their week. The finished schedule is validated again against
     the preceptors it actually names.
     """
+    # A successful attending-only solve has no resident assignments. It still
+    # needs this pass to restore reference locks and fill the attending weeks.
     if (
         not instance.attendings
-        or schedule.is_empty()
         or schedule.meta.validation_errors
         or schedule.meta.status not in {SolverStatus.OPTIMAL, SolverStatus.FEASIBLE}
     ):

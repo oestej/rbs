@@ -98,6 +98,9 @@
 
 ### Fixed
 
+- **Attendings:** Solving before adding residents now preserves locked attending
+  work. New attendings no longer inherit a removed attending's work or locks,
+  and consecutive calendar edits save correctly after vacation changes.
 - **Clinic schedule:** Attending-managed clinic coverage and resident hover
   details now include preceptors placed by the solve, alongside hand-entered
   work, so displayed capacity matches the schedule's staffing. Locking
