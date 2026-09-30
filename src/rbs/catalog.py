@@ -14,6 +14,16 @@ from rbs.academic_year import (
     first_week_start_for_academic_year,
     rebase_academic_year,
 )
+from rbs.models.attending import (
+    Attending,
+    AttendingSchedule,
+    AttendingVacation,
+    AttendingWeeklyShiftTarget,
+    AttendingWeeklyTargetMode,
+    AttendingWeeklyWorkSchedule,
+    AttendingWorkHalfDay,
+    AttendingWorkType,
+)
 from rbs.models.catalog import ConstraintCatalog
 from rbs.models.clinic import (
     ALL_CLINIC_SITES,
@@ -175,6 +185,252 @@ def sample_days_off(resident_id: str, first_week_start: date) -> list[date]:
         "resident-017": [14 * 7 + 4],
     }
     return [first_week_start + timedelta(days=offset) for offset in offsets.get(resident_id, [])]
+
+
+SAMPLE_PRECEPTING_HALF_DAYS_PER_WEEK = 3
+
+
+def _sample_targets(
+    *targets: tuple[AttendingWorkType, int, int, AttendingWeeklyTargetMode],
+) -> list[AttendingWeeklyShiftTarget]:
+    """Every sample attending precepts exactly three half-days a week."""
+    precepting = AttendingWeeklyShiftTarget(
+        work_type=AttendingWorkType.PRECEPTING_CLINIC,
+        minimum_shifts_per_week=SAMPLE_PRECEPTING_HALF_DAYS_PER_WEEK,
+        maximum_shifts_per_week=SAMPLE_PRECEPTING_HALF_DAYS_PER_WEEK,
+        mode=AttendingWeeklyTargetMode.FIXED,
+    )
+    return [
+        precepting,
+        *(
+            AttendingWeeklyShiftTarget(
+                work_type=work_type,
+                minimum_shifts_per_week=minimum,
+                maximum_shifts_per_week=maximum,
+                mode=mode,
+            )
+            for work_type, minimum, maximum, mode in targets
+        ),
+    ]
+
+
+def _sample_half_days(
+    *half_days: tuple[Weekday, Session, AttendingWorkType, str | None],
+) -> list[AttendingWorkHalfDay]:
+    return [
+        AttendingWorkHalfDay(
+            weekday=weekday,
+            session=session,
+            work_type=work_type,
+            clinic_id=clinic_id,
+        )
+        for weekday, session, work_type, clinic_id in half_days
+    ]
+
+
+def sample_attendings(first_week_start: date) -> list[Attending]:
+    """Create an illustrative faculty whose work the solve schedules.
+
+    Each attending precepts three half-days a week. Their preferred precepting
+    half-days fall when the sample clinics run: Maple on Tuesday and Thursday
+    and Friday mornings with room for one attending, Cedar on weekday half-days
+    with room for four. Schedule dates and day-level vacations vary so the
+    solve has partial weeks to work around.
+    """
+    last_day = first_week_start + timedelta(days=52 * 7 - 1)
+    fixed = AttendingWeeklyTargetMode.FIXED
+    flexible = AttendingWeeklyTargetMode.FLEXIBLE
+    clinic = AttendingWorkType.ATTENDING_CLINIC
+    precepting = AttendingWorkType.PRECEPTING_CLINIC
+    inpatient = AttendingWorkType.INPATIENT_SERVICE
+    admin = AttendingWorkType.ADMIN_TIME
+    monday, tuesday, wednesday, thursday, friday = WEEKDAYS_MF
+    morning, afternoon = Session.MORNING, Session.AFTERNOON
+    return [
+        Attending(
+            id="attending-001",
+            name="Maya Singh",
+            weekly_shift_targets=_sample_targets(
+                (clinic, 4, 5, flexible),
+                (admin, 1, 2, flexible),
+            ),
+            minimum_attending_clinic_days_per_week=2,
+            preferred_weekly_schedule_half_days=_sample_half_days(
+                (monday, morning, clinic, None),
+                (monday, afternoon, clinic, None),
+                (tuesday, morning, precepting, "maple"),
+                (thursday, morning, clinic, None),
+                (thursday, afternoon, precepting, "maple"),
+                (friday, morning, precepting, "cedar"),
+            ),
+            vacation_ranges=[
+                AttendingVacation(
+                    start_date=first_week_start + timedelta(days=44),
+                    end_date=first_week_start + timedelta(days=50),
+                ),
+                AttendingVacation(
+                    start_date=first_week_start + timedelta(days=178),
+                    end_date=first_week_start + timedelta(days=183),
+                ),
+            ],
+        ),
+        Attending(
+            id="attending-002",
+            name="Noah Williams",
+            schedule_start_date=first_week_start + timedelta(days=33),
+            weekly_shift_targets=_sample_targets(
+                (inpatient, 2, 2, fixed),
+                (clinic, 3, 4, flexible),
+                (admin, 1, 2, flexible),
+            ),
+            preferred_weekly_schedule_half_days=_sample_half_days(
+                (monday, morning, precepting, "cedar"),
+                (tuesday, morning, inpatient, None),
+                (tuesday, afternoon, inpatient, None),
+                (wednesday, morning, precepting, "cedar"),
+                (friday, afternoon, precepting, "cedar"),
+            ),
+            vacation_ranges=[
+                AttendingVacation(
+                    start_date=first_week_start + timedelta(days=101),
+                    end_date=first_week_start + timedelta(days=101),
+                )
+            ],
+        ),
+        Attending(
+            id="attending-003",
+            name="Elena Garcia",
+            schedule_end_date=last_day - timedelta(days=28),
+            weekly_shift_targets=_sample_targets(
+                (clinic, 4, 6, flexible),
+                (admin, 1, 2, flexible),
+            ),
+            minimum_attending_clinic_days_per_week=3,
+            preferred_weekly_schedule_half_days=_sample_half_days(
+                (tuesday, afternoon, precepting, "cedar"),
+                (thursday, morning, precepting, "cedar"),
+                (friday, morning, precepting, "maple"),
+            ),
+            vacation_ranges=[
+                AttendingVacation(
+                    start_date=first_week_start + timedelta(days=250),
+                    end_date=first_week_start + timedelta(days=259),
+                )
+            ],
+        ),
+        Attending(
+            id="attending-004",
+            name="Theo Brooks",
+            # Part time: three precepting half-days plus the academic
+            # half-day's automatic Admin Time.
+            half_days_per_week=4,
+            schedule_start_date=first_week_start + timedelta(days=61),
+            schedule_end_date=last_day - timedelta(days=42),
+            weekly_shift_targets=_sample_targets(),
+            preferred_weekly_schedule_half_days=_sample_half_days(
+                (monday, afternoon, precepting, "cedar"),
+                (tuesday, morning, precepting, "cedar"),
+                (thursday, afternoon, precepting, "cedar"),
+            ),
+        ),
+        Attending(
+            id="attending-005",
+            name="Priya Patel",
+            weekly_shift_targets=_sample_targets(
+                (clinic, 4, 6, flexible),
+                (admin, 1, 2, flexible),
+            ),
+            minimum_attending_clinic_days_per_week=2,
+            preferred_weekly_schedule_half_days=_sample_half_days(
+                (monday, afternoon, precepting, "cedar"),
+                (tuesday, afternoon, precepting, "maple"),
+                (thursday, morning, precepting, "maple"),
+            ),
+            vacation_ranges=[
+                AttendingVacation(
+                    start_date=first_week_start + timedelta(days=175),
+                    end_date=first_week_start + timedelta(days=181),
+                )
+            ],
+        ),
+        Attending(
+            id="attending-006",
+            name="Samuel Okafor",
+            half_days_per_week=8,
+            weekly_shift_targets=_sample_targets(
+                (inpatient, 2, 2, fixed),
+                (clinic, 1, 2, flexible),
+            ),
+            preferred_weekly_schedule_half_days=_sample_half_days(
+                (monday, morning, precepting, "cedar"),
+                (wednesday, morning, precepting, "cedar"),
+                (thursday, afternoon, precepting, "cedar"),
+            ),
+        ),
+        Attending(
+            id="attending-007",
+            name="Hannah Kim",
+            # Joins the faculty partway through the academic year.
+            schedule_start_date=first_week_start + timedelta(days=140),
+            weekly_shift_targets=_sample_targets((clinic, 5, 6, flexible)),
+            minimum_attending_clinic_days_per_week=3,
+            preferred_weekly_schedule_half_days=_sample_half_days(
+                (tuesday, morning, precepting, "cedar"),
+                (thursday, morning, precepting, "cedar"),
+                (friday, afternoon, precepting, "cedar"),
+            ),
+        ),
+        Attending(
+            id="attending-008",
+            name="Daniel Reyes",
+            half_days_per_week=6,
+            weekly_shift_targets=_sample_targets(
+                (clinic, 1, 2, flexible),
+                (admin, 1, 2, flexible),
+            ),
+            preferred_weekly_schedule_half_days=_sample_half_days(
+                (monday, morning, precepting, "cedar"),
+                (tuesday, afternoon, precepting, "cedar"),
+                (friday, morning, precepting, "cedar"),
+            ),
+            vacation_ranges=[
+                AttendingVacation(
+                    start_date=first_week_start + timedelta(days=301),
+                    end_date=first_week_start + timedelta(days=305),
+                )
+            ],
+        ),
+    ]
+
+
+def sample_attending_schedules() -> list[AttendingSchedule]:
+    """Create illustrative accepted work without mixing it into roster inputs."""
+    return [
+        AttendingSchedule(
+            attending_id="attending-004",
+            weeks=[
+                AttendingWeeklyWorkSchedule(
+                    week=11,
+                    # Two week-specific meetings, the automatically reserved
+                    # academic Admin Time, and the usual three precepting
+                    # half-days, which the solve places around the meetings.
+                    half_days_override=6,
+                    half_days=[
+                        AttendingWorkHalfDay(
+                            weekday=Weekday.MONDAY,
+                            session=Session.MORNING,
+                            description="Credentialing committee",
+                        ),
+                        AttendingWorkHalfDay(
+                            weekday=Weekday.THURSDAY,
+                            session=Session.AFTERNOON,
+                            description="Community board meeting",
+                        ),
+                    ],
+                ),
+            ],
+        ),
+    ]
 
 
 def sample_special_rotations(first_week_start: date) -> list[SpecialRotation]:
@@ -371,6 +627,8 @@ def sample_instance(
             block_start_alignment=1,
         ),
         residents=residents,
+        attendings=sample_attendings(first_week_start),
+        attending_schedules=sample_attending_schedules(),
         rotations=constraints.rotations,
         requirements=constraints.requirements,
         rotation_groups=constraints.rotation_groups,

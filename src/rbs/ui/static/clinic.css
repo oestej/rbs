@@ -4,6 +4,22 @@
   border: 1px solid var(--rbs-border);
 }
 
+.rbs-clinic-views {
+  display: grid;
+}
+
+.rbs-clinic-view-panel {
+  grid-area: 1 / 1;
+  align-self: start;
+  will-change: opacity;
+}
+
+/* Keep each view's layout cached while excluding it from focus and accessibility. */
+.rbs-clinic-view-panel.is-inactive {
+  opacity: 0;
+  pointer-events: none;
+}
+
 .rbs-clinic-calendar-wrap {
   background: var(--rbs-surface-muted);
 }
@@ -272,6 +288,18 @@
   background: var(--rbs-clinic-site-tint);
 }
 
+.rbs-clinic-attending {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.rbs-clinic-attending-work {
+  display: block;
+  color: var(--rbs-text-muted);
+  font-size: var(--rbs-type-caption-size);
+  line-height: var(--rbs-type-caption-leading);
+}
+
 .rbs-clinic-last-name {
   font-weight: var(--rbs-weight-bold);
 }
@@ -355,6 +383,25 @@
   flex: 0 0 auto;
   flex-wrap: nowrap;
   margin-left: auto;
+}
+
+.rbs-clinic-view-toggle {
+  padding: var(--rbs-space-1);
+  border: 1px solid var(--rbs-border-strong);
+  border-radius: var(--rbs-radius-full);
+  background: var(--rbs-surface-muted);
+  gap: var(--rbs-space-1);
+}
+
+.rbs-clinic-view-toggle.q-btn-group > .q-btn {
+  min-width: 100px;
+  padding: var(--rbs-space-1) var(--rbs-space-3);
+  border-radius: var(--rbs-radius-full);
+  font-weight: var(--rbs-weight-medium);
+}
+
+.rbs-clinic-view-toggle .q-btn.bg-primary {
+  box-shadow: var(--rbs-shadow-low);
 }
 
 @media (max-width: 1023px) {

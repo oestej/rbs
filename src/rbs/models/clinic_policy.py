@@ -34,6 +34,13 @@ class ClinicPolicy(StrictModel):
     # ClinicSiteConfig.closure_days list as the source of truth.
     closure_days: list[ClinicClosureDay] = Field(default_factory=list)
     academic: ClinicSlot = Field(description="Recurring program-wide academic half-day.")
+    academic_half_day_is_attending_admin_time: bool = Field(
+        default=True,
+        description=(
+            "Whether each week's effective academic half-day is automatically "
+            "reserved as Admin Time for active attendings."
+        ),
+    )
     notes: str = ""
 
     @field_validator("primary_site_id")
@@ -354,14 +361,6 @@ class ClinicPolicy(StrictModel):
     ) -> int:
         return self.site(site_id).max_capacity(weekday, session)
 
-    def max_capacity_on(
-        self,
-        site_id: str,
-        calendar_day: date,
-        session: Session,
-    ) -> int:
-        return self.site(site_id).max_capacity_on(calendar_day, session)
-
     def min_capacity(
         self,
         site_id: str,
@@ -370,14 +369,6 @@ class ClinicPolicy(StrictModel):
     ) -> int:
         half_day = self.site(site_id).half_day(weekday, session)
         return half_day.min_residents if half_day is not None else 0
-
-    def min_capacity_on(
-        self,
-        site_id: str,
-        calendar_day: date,
-        session: Session,
-    ) -> int:
-        return self.site(site_id).min_capacity_on(calendar_day, session)
 
     def available_site_ids(
         self,

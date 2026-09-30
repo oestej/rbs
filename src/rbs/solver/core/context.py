@@ -13,7 +13,16 @@ from rbs.solver.planning import Occurrence, expand_occurrences, legal_starts
 
 
 class ModelBuildError(ValueError):
-    pass
+    """The configured rules could not be turned into a solver model.
+
+    ``issues`` holds the readiness conflicts that stopped the build, when
+    readiness is what stopped it, so each can be reported with its own code
+    and suggestions without checking readiness again.
+    """
+
+    def __init__(self, message: str, issues: tuple = ()) -> None:
+        super().__init__(message)
+        self.issues = tuple(issues)
 
 
 @dataclass(frozen=True)
@@ -100,6 +109,17 @@ class PlanningContext:
     _blocked_clinic_slots: dict[tuple[str, int, Weekday, Session | None], bool] = field(
         default_factory=dict, repr=False
     )
+    capacity_view: SolverProblem | None = field(default=None, repr=False)
+    """The problem with attending-managed capacity at its upper bound.
+
+    Entry filters use it to ask whether a clinic could hold residents at all;
+    the precepting envelope then decides how much it actually holds.
+    """
+    attending_envelope: Any | None = field(default=None, repr=False)
+
+    @property
+    def capacity(self) -> SolverProblem:
+        return self.capacity_view if self.capacity_view is not None else self.instance
 
     def resident_clinic_is_blocked(
         self,

@@ -300,14 +300,15 @@ def _general_settings(
             with ui.column().classes("w-full gap-3 p-5"):
                 ui.label("Automatic schedule locking").classes("rbs-type-section-title")
                 ui.checkbox(
-                    "Automatically lock blocks and clinic sessions through today",
+                    "Automatically lock blocks, clinic sessions, and attending work through today",
                     value=instance.lock_through_today,
                     on_change=toggle_lock_through_today,
                 )
                 ui.label(
                     f"Every solved block beginning on or before {today:%b %d, %Y} is "
                     "locked for its complete span, including the current block. Clinic "
-                    "sessions on or before that date are locked individually and can be "
+                    "sessions and attending work on or before that date are locked individually "
+                    "and can be "
                     "manually unlocked before moving them."
                 ).classes("rbs-type-body rbs-text-muted")
                 if instance.lock_through_today:

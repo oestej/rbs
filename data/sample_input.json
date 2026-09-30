@@ -495,6 +495,7 @@
       "elective_preferences": []
     }
   ],
+  "use_placeholder_electives": false,
   "academic_half_day_overrides": [
     {
       "week": 20,
@@ -532,6 +533,7 @@
   ],
   "manual_clinic_blocks": [],
   "resident_rotation_overrides": [],
+  "resident_rotation_waivers": [],
   "special_rotations": [
     {
       "id": "demo-educators-summit",
@@ -543,6 +545,511 @@
       "resident_ids": [
         "resident-017",
         "resident-018"
+      ]
+    }
+  ],
+  "attendings": [
+    {
+      "id": "attending-004",
+      "name": "Theo Brooks",
+      "half_days_per_week": 4,
+      "schedule_start_date": "2026-08-29",
+      "schedule_end_date": "2027-05-16",
+      "vacation_ranges": [],
+      "weekly_shift_targets": [
+        {
+          "work_type": "precepting_clinic",
+          "minimum_shifts_per_week": 3,
+          "maximum_shifts_per_week": 3,
+          "mode": "fixed"
+        }
+      ],
+      "minimum_attending_clinic_days_per_week": 0,
+      "preferred_weekly_schedule_half_days": [
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "cedar",
+          "description": null,
+          "weekday": "monday",
+          "session": "afternoon"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "cedar",
+          "description": null,
+          "weekday": "tuesday",
+          "session": "morning"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "cedar",
+          "description": null,
+          "weekday": "thursday",
+          "session": "afternoon"
+        }
+      ],
+      "schedule_template_half_days": []
+    },
+    {
+      "id": "attending-003",
+      "name": "Elena Garcia",
+      "half_days_per_week": 10,
+      "schedule_start_date": null,
+      "schedule_end_date": "2027-05-30",
+      "vacation_ranges": [
+        {
+          "start_date": "2027-03-06",
+          "end_date": "2027-03-15"
+        }
+      ],
+      "weekly_shift_targets": [
+        {
+          "work_type": "attending_clinic",
+          "minimum_shifts_per_week": 4,
+          "maximum_shifts_per_week": 6,
+          "mode": "flexible"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "minimum_shifts_per_week": 3,
+          "maximum_shifts_per_week": 3,
+          "mode": "fixed"
+        },
+        {
+          "work_type": "admin_time",
+          "minimum_shifts_per_week": 1,
+          "maximum_shifts_per_week": 2,
+          "mode": "flexible"
+        }
+      ],
+      "minimum_attending_clinic_days_per_week": 3,
+      "preferred_weekly_schedule_half_days": [
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "cedar",
+          "description": null,
+          "weekday": "tuesday",
+          "session": "afternoon"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "cedar",
+          "description": null,
+          "weekday": "thursday",
+          "session": "morning"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "maple",
+          "description": null,
+          "weekday": "friday",
+          "session": "morning"
+        }
+      ],
+      "schedule_template_half_days": []
+    },
+    {
+      "id": "attending-007",
+      "name": "Hannah Kim",
+      "half_days_per_week": 10,
+      "schedule_start_date": "2026-11-16",
+      "schedule_end_date": null,
+      "vacation_ranges": [],
+      "weekly_shift_targets": [
+        {
+          "work_type": "attending_clinic",
+          "minimum_shifts_per_week": 5,
+          "maximum_shifts_per_week": 6,
+          "mode": "flexible"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "minimum_shifts_per_week": 3,
+          "maximum_shifts_per_week": 3,
+          "mode": "fixed"
+        }
+      ],
+      "minimum_attending_clinic_days_per_week": 3,
+      "preferred_weekly_schedule_half_days": [
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "cedar",
+          "description": null,
+          "weekday": "tuesday",
+          "session": "morning"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "cedar",
+          "description": null,
+          "weekday": "thursday",
+          "session": "morning"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "cedar",
+          "description": null,
+          "weekday": "friday",
+          "session": "afternoon"
+        }
+      ],
+      "schedule_template_half_days": []
+    },
+    {
+      "id": "attending-006",
+      "name": "Samuel Okafor",
+      "half_days_per_week": 8,
+      "schedule_start_date": null,
+      "schedule_end_date": null,
+      "vacation_ranges": [],
+      "weekly_shift_targets": [
+        {
+          "work_type": "inpatient_service",
+          "minimum_shifts_per_week": 2,
+          "maximum_shifts_per_week": 2,
+          "mode": "fixed"
+        },
+        {
+          "work_type": "attending_clinic",
+          "minimum_shifts_per_week": 1,
+          "maximum_shifts_per_week": 2,
+          "mode": "flexible"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "minimum_shifts_per_week": 3,
+          "maximum_shifts_per_week": 3,
+          "mode": "fixed"
+        }
+      ],
+      "minimum_attending_clinic_days_per_week": 0,
+      "preferred_weekly_schedule_half_days": [
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "cedar",
+          "description": null,
+          "weekday": "monday",
+          "session": "morning"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "cedar",
+          "description": null,
+          "weekday": "wednesday",
+          "session": "morning"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "cedar",
+          "description": null,
+          "weekday": "thursday",
+          "session": "afternoon"
+        }
+      ],
+      "schedule_template_half_days": []
+    },
+    {
+      "id": "attending-005",
+      "name": "Priya Patel",
+      "half_days_per_week": 10,
+      "schedule_start_date": null,
+      "schedule_end_date": null,
+      "vacation_ranges": [
+        {
+          "start_date": "2026-12-21",
+          "end_date": "2026-12-27"
+        }
+      ],
+      "weekly_shift_targets": [
+        {
+          "work_type": "attending_clinic",
+          "minimum_shifts_per_week": 4,
+          "maximum_shifts_per_week": 6,
+          "mode": "flexible"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "minimum_shifts_per_week": 3,
+          "maximum_shifts_per_week": 3,
+          "mode": "fixed"
+        },
+        {
+          "work_type": "admin_time",
+          "minimum_shifts_per_week": 1,
+          "maximum_shifts_per_week": 2,
+          "mode": "flexible"
+        }
+      ],
+      "minimum_attending_clinic_days_per_week": 2,
+      "preferred_weekly_schedule_half_days": [
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "cedar",
+          "description": null,
+          "weekday": "monday",
+          "session": "afternoon"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "maple",
+          "description": null,
+          "weekday": "tuesday",
+          "session": "afternoon"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "maple",
+          "description": null,
+          "weekday": "thursday",
+          "session": "morning"
+        }
+      ],
+      "schedule_template_half_days": []
+    },
+    {
+      "id": "attending-008",
+      "name": "Daniel Reyes",
+      "half_days_per_week": 6,
+      "schedule_start_date": null,
+      "schedule_end_date": null,
+      "vacation_ranges": [
+        {
+          "start_date": "2027-04-26",
+          "end_date": "2027-04-30"
+        }
+      ],
+      "weekly_shift_targets": [
+        {
+          "work_type": "attending_clinic",
+          "minimum_shifts_per_week": 1,
+          "maximum_shifts_per_week": 2,
+          "mode": "flexible"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "minimum_shifts_per_week": 3,
+          "maximum_shifts_per_week": 3,
+          "mode": "fixed"
+        },
+        {
+          "work_type": "admin_time",
+          "minimum_shifts_per_week": 1,
+          "maximum_shifts_per_week": 2,
+          "mode": "flexible"
+        }
+      ],
+      "minimum_attending_clinic_days_per_week": 0,
+      "preferred_weekly_schedule_half_days": [
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "cedar",
+          "description": null,
+          "weekday": "monday",
+          "session": "morning"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "cedar",
+          "description": null,
+          "weekday": "tuesday",
+          "session": "afternoon"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "cedar",
+          "description": null,
+          "weekday": "friday",
+          "session": "morning"
+        }
+      ],
+      "schedule_template_half_days": []
+    },
+    {
+      "id": "attending-001",
+      "name": "Maya Singh",
+      "half_days_per_week": 10,
+      "schedule_start_date": null,
+      "schedule_end_date": null,
+      "vacation_ranges": [
+        {
+          "start_date": "2026-08-12",
+          "end_date": "2026-08-18"
+        },
+        {
+          "start_date": "2026-12-24",
+          "end_date": "2026-12-29"
+        }
+      ],
+      "weekly_shift_targets": [
+        {
+          "work_type": "attending_clinic",
+          "minimum_shifts_per_week": 4,
+          "maximum_shifts_per_week": 5,
+          "mode": "flexible"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "minimum_shifts_per_week": 3,
+          "maximum_shifts_per_week": 3,
+          "mode": "fixed"
+        },
+        {
+          "work_type": "admin_time",
+          "minimum_shifts_per_week": 1,
+          "maximum_shifts_per_week": 2,
+          "mode": "flexible"
+        }
+      ],
+      "minimum_attending_clinic_days_per_week": 2,
+      "preferred_weekly_schedule_half_days": [
+        {
+          "work_type": "attending_clinic",
+          "clinic_id": null,
+          "description": null,
+          "weekday": "monday",
+          "session": "morning"
+        },
+        {
+          "work_type": "attending_clinic",
+          "clinic_id": null,
+          "description": null,
+          "weekday": "monday",
+          "session": "afternoon"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "maple",
+          "description": null,
+          "weekday": "tuesday",
+          "session": "morning"
+        },
+        {
+          "work_type": "attending_clinic",
+          "clinic_id": null,
+          "description": null,
+          "weekday": "thursday",
+          "session": "morning"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "maple",
+          "description": null,
+          "weekday": "thursday",
+          "session": "afternoon"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "cedar",
+          "description": null,
+          "weekday": "friday",
+          "session": "morning"
+        }
+      ],
+      "schedule_template_half_days": []
+    },
+    {
+      "id": "attending-002",
+      "name": "Noah Williams",
+      "half_days_per_week": 10,
+      "schedule_start_date": "2026-08-01",
+      "schedule_end_date": null,
+      "vacation_ranges": [
+        {
+          "start_date": "2026-10-08",
+          "end_date": "2026-10-08"
+        }
+      ],
+      "weekly_shift_targets": [
+        {
+          "work_type": "inpatient_service",
+          "minimum_shifts_per_week": 2,
+          "maximum_shifts_per_week": 2,
+          "mode": "fixed"
+        },
+        {
+          "work_type": "attending_clinic",
+          "minimum_shifts_per_week": 3,
+          "maximum_shifts_per_week": 4,
+          "mode": "flexible"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "minimum_shifts_per_week": 3,
+          "maximum_shifts_per_week": 3,
+          "mode": "fixed"
+        },
+        {
+          "work_type": "admin_time",
+          "minimum_shifts_per_week": 1,
+          "maximum_shifts_per_week": 2,
+          "mode": "flexible"
+        }
+      ],
+      "minimum_attending_clinic_days_per_week": 0,
+      "preferred_weekly_schedule_half_days": [
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "cedar",
+          "description": null,
+          "weekday": "monday",
+          "session": "morning"
+        },
+        {
+          "work_type": "inpatient_service",
+          "clinic_id": null,
+          "description": null,
+          "weekday": "tuesday",
+          "session": "morning"
+        },
+        {
+          "work_type": "inpatient_service",
+          "clinic_id": null,
+          "description": null,
+          "weekday": "tuesday",
+          "session": "afternoon"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "cedar",
+          "description": null,
+          "weekday": "wednesday",
+          "session": "morning"
+        },
+        {
+          "work_type": "precepting_clinic",
+          "clinic_id": "cedar",
+          "description": null,
+          "weekday": "friday",
+          "session": "afternoon"
+        }
+      ],
+      "schedule_template_half_days": []
+    }
+  ],
+  "attending_schedules": [
+    {
+      "attending_id": "attending-004",
+      "weeks": [
+        {
+          "week": 11,
+          "half_days_override": 6,
+          "half_days": [
+            {
+              "work_type": "special_other",
+              "clinic_id": null,
+              "description": "Credentialing committee",
+              "weekday": "monday",
+              "session": "morning"
+            },
+            {
+              "work_type": "special_other",
+              "clinic_id": null,
+              "description": "Community board meeting",
+              "weekday": "thursday",
+              "session": "afternoon"
+            }
+          ]
+        }
       ]
     }
   ],

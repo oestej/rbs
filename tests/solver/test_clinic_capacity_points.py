@@ -35,9 +35,9 @@ def test_capacity_defaults_and_validated_roundtrip():
         for rule in rotation["pgy_rules"]:
             rule.pop("capacity_per_resident")
     migrated = ConstraintCatalog.model_validate(raw)
-    assert migrated.schema_version == 9
+    assert migrated.schema_version == 10
     assert all(r.capacity_per_resident == 1 for rot in migrated.rotations for r in rot.pgy_rules)
-    for version in (7, 10):
+    for version in (7, 11):
         with pytest.raises(ValidationError):
             ConstraintCatalog.model_validate({**raw, "schema_version": version})
     rule = instance.rotations[0].pgy_rules[0].model_dump()

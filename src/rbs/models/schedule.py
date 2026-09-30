@@ -1,7 +1,9 @@
+from collections.abc import Iterable
 from datetime import UTC, datetime
 
 from pydantic import Field, field_validator, model_validator
 
+from rbs.models.attending import AttendingWorkAssignment, AttendingWorkType
 from rbs.models.clinic import normalize_clinic_site_ids
 from rbs.models.common import StrictModel
 from rbs.models.enums import (
@@ -11,6 +13,81 @@ from rbs.models.enums import (
     SolverStatus,
     Weekday,
 )
+
+_WEEKDAY_ORDER = {weekday: index for index, weekday in enumerate(Weekday)}
+_SESSION_ORDER = {session: index for index, session in enumerate(Session)}
+
+
+class AssignedAttendingWork(AttendingWorkAssignment):
+    """One attending half-day of work carried by a schedule.
+
+    The solve places these around hand-entered week-by-week work, which stays
+    in the workspace case, and schedule editing can change them afterwards.
+    The lock fields mirror :class:`AssignedClinic`: a locked item is a hard
+    input for the next solve, and an unlocked one is only a stability
+    preference.
+
+    Hand-entered work moves here only while it needs a lock field: while it
+    is locked, or explicitly unlocked inside the automatic lock window. It
+    keeps ``hand_entered`` so it stays a hard input either way, and it
+    returns to the case once neither field applies.
+    """
+
+    attending_id: str = Field(min_length=1)
+    work_type: AttendingWorkType
+    week: int = Field(ge=1)
+    weekday: Weekday
+    session: Session
+    locked: bool = Field(
+        default=False,
+        description="Keeps this half-day unchanged when the schedule is solved again.",
+    )
+    automatic_lock_exempt: bool = Field(
+        default=False,
+        description=(
+            "Records an explicit unlock while automatic through-today locking is enabled."
+        ),
+    )
+    manual_override: bool = Field(
+        default=False,
+        description="Marks work placed or changed by hand after the solve.",
+    )
+    hand_entered: bool = Field(
+        default=False,
+        description=(
+            "Hand-entered week-by-week work kept here for its lock state. A solve "
+            "keeps it whether or not it is locked."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def hand_entered_work_is_a_manual_override(self) -> "AssignedAttendingWork":
+        if self.hand_entered and not self.manual_override:
+            raise ValueError("hand-entered attending work must be marked as placed by hand")
+        return self
+
+    @property
+    def key(self) -> tuple[str, int, Weekday, Session]:
+        return self.attending_id, self.week, self.weekday, self.session
+
+
+def ordered_attending_work(
+    items: Iterable[AssignedAttendingWork],
+) -> list[AssignedAttendingWork]:
+    """Return attending work in schedule order, rejecting a doubled half-day."""
+    ordered = sorted(
+        items,
+        key=lambda item: (
+            item.attending_id,
+            item.week,
+            _WEEKDAY_ORDER[item.weekday],
+            _SESSION_ORDER[item.session],
+        ),
+    )
+    keys = [item.key for item in ordered]
+    if len(keys) != len(set(keys)):
+        raise ValueError("attending work must use each attending half-day at most once")
+    return ordered
 
 
 class AssignedClinic(StrictModel):
@@ -172,6 +249,21 @@ class ScheduleMetrics(StrictModel):
     allocation_target_sessions: int | None = Field(default=None, ge=0)
     allocation_assigned_sessions: int | None = Field(default=None, ge=0)
     allocation_target_shortfall: int | None = Field(default=None, ge=0)
+    attending_scheduled_half_days: int | None = Field(
+        default=None,
+        ge=0,
+        description="Attending half-days the solve placed around hand-entered work.",
+    )
+    attending_precepting_half_days: int | None = Field(
+        default=None,
+        ge=0,
+        description="Scheduled Precepting Clinic half-days at attending-managed clinics.",
+    )
+    attending_relaxed_weeks: int | None = Field(
+        default=None,
+        ge=0,
+        description="Academic weeks in which some attending's required rules could not all be met.",
+    )
 
     @field_validator("elective_preference_rank_counts")
     @classmethod
@@ -220,6 +312,21 @@ class Schedule(StrictModel):
         default_factory=list,
         description="resident ids with no assignments",
     )
+    attending_work: list[AssignedAttendingWork] = Field(
+        default_factory=list,
+        description=(
+            "Attending half-days placed by the solve or edited in the schedule, outside "
+            "hand-entered week-by-week work and the automatic academic Admin Time."
+        ),
+    )
+
+    @field_validator("attending_work")
+    @classmethod
+    def attending_work_is_distinct_and_ordered(
+        cls,
+        items: list[AssignedAttendingWork],
+    ) -> list[AssignedAttendingWork]:
+        return ordered_attending_work(items)
 
     @model_validator(mode="after")
     def assignments_do_not_overlap(self) -> "Schedule":

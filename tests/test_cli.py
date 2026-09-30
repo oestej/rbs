@@ -62,6 +62,22 @@ def test_dump_sample(tmp_path: Path) -> None:
     assert main(["dump-sample", "-o", str(output)]) == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert len(payload["residents"]) == 24
+    assert len(payload["attendings"]) == 8
+    assert all(
+        {
+            "work_type": "precepting_clinic",
+            "minimum_shifts_per_week": 3,
+            "maximum_shifts_per_week": 3,
+            "mode": "fixed",
+        }
+        in attending["weekly_shift_targets"]
+        for attending in payload["attendings"]
+    )
+    assert any(
+        week["half_days_override"] is not None
+        for schedule in payload["attending_schedules"]
+        for week in schedule["weeks"]
+    )
     assert payload["residents"][0]["name"]
     assert "rotations" not in payload
     assert "requirements" not in payload
@@ -71,7 +87,7 @@ def test_dump_catalog(tmp_path: Path) -> None:
     output = tmp_path / "catalog.json"
     assert main(["dump-catalog", "-o", str(output)]) == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 9
+    assert payload["schema_version"] == 10
     assert payload["rotation_groups"]
     assert payload["rotations"]
     assert all("weekend" not in rotation for rotation in payload["rotations"])

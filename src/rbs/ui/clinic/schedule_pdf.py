@@ -26,7 +26,11 @@ from rbs.models.schedule import Schedule
 from rbs.models.special import SpecialRotation
 from rbs.ui.clinic.projection import (
     ACADEMIC_LABEL,
+    WEEKDAY_SHORT,
+    AttendingOccupant,
     ClinicOccupant,
+    ClinicScheduleView,
+    attending_occupancy,
     calendar_occupants,
     clinic_closure_view,
     clinic_weekdays,
@@ -93,9 +97,14 @@ def build_clinic_schedule_pdf(
     show_past_weeks: bool = True,
     today: date | None = None,
     site: str | None = None,
+    view: ClinicScheduleView = "residents",
 ) -> bytes:
     """Build a dated calendar with configured weekday AM/PM sections."""
-    board = occupancy(instance, schedule)
+    board = occupancy(instance, schedule) if view == "residents" else {}
+    attending_board = (
+        attending_occupancy(instance, schedule, site=site) if view == "attendings" else None
+    )
+    title = "Attending Schedule" if view == "attendings" else "Clinic Schedule"
     weeks = visible_week_numbers(
         instance.calendar.first_week_start,
         instance.calendar.weeks,
@@ -112,13 +121,13 @@ def build_clinic_schedule_pdf(
         rightMargin=0.35 * inch,
         topMargin=0.34 * inch,
         bottomMargin=0.38 * inch,
-        title=f"Clinic Schedule - {site_name}",
+        title=f"{title} - {site_name}",
         author="RBS",
-        subject=f"Calendar-style clinic schedule for {instance.academic_year}",
+        subject=f"{title} for {instance.academic_year}",
     )
     styles = _styles()
     story = [
-        Paragraph("Clinic Schedule", styles["title"]),
+        Paragraph(title, styles["title"]),
         Paragraph(
             _paragraph_text(f"{instance.academic_year} | {site_name} | {range_name}"),
             styles["meta"],
@@ -128,7 +137,7 @@ def build_clinic_schedule_pdf(
     if not weeks:
         story.append(
             Paragraph(
-                "No clinic schedule dates are available for the selected range.",
+                "No schedule dates are available for the selected range.",
                 styles["empty"],
             )
         )
@@ -139,17 +148,22 @@ def build_clinic_schedule_pdf(
                 story.append(PageBreak())
             story.extend(
                 [
-                    _calendar_page_header(instance, group, site, styles),
+                    _calendar_page_header(
+                        instance, group, site, styles, view=view, schedule=schedule,
+                    ),
                     Spacer(1, 0.08 * inch),
                 ]
             )
             for index, week in enumerate(group):
-                story.append(_week_calendar(instance, board, week, site, styles))
+                story.append(_week_calendar(
+                    instance, board, week, site, styles, attending_board=attending_board,
+                    schedule=schedule,
+                ))
                 if index < len(group) - 1:
                     story.append(Spacer(1, 0.08 * inch))
 
     def footer(canvas, doc) -> None:
-        _page_footer(canvas, doc, site_name)
+        _page_footer(canvas, doc, site_name, view=view)
 
     draw_page = with_export_timestamp(footer)
     document.build(story, onFirstPage=draw_page, onLaterPages=draw_page)
@@ -161,11 +175,13 @@ def clinic_schedule_pdf_filename(
     *,
     site: str | None,
     exported_on: date | None = None,
+    view: ClinicScheduleView = "residents",
 ) -> str:
     year_slug = re.sub(r"[^0-9a-z]+", "-", academic_year.lower()).strip("-")
     site_slug = site.replace("_", "-") if site is not None else "all-sites"
     export_date = (exported_on or date.today()).isoformat()
-    return f"clinic-schedule-{year_slug}-{site_slug}-exported-{export_date}.pdf"
+    prefix = "attending-schedule" if view == "attendings" else "clinic-schedule"
+    return f"{prefix}-{year_slug}-{site_slug}-exported-{export_date}.pdf"
 
 
 def _calendar_page_header(
@@ -173,9 +189,12 @@ def _calendar_page_header(
     weeks: list[int],
     site: str | None,
     styles: dict[str, ParagraphStyle],
+    *,
+    view: ClinicScheduleView = "residents",
+    schedule: Schedule | None = None,
 ) -> Table:
     first = week_monday(instance.calendar.first_week_start, weeks[0])
-    weekdays = clinic_weekdays(instance)
+    weekdays = clinic_weekdays(instance, view=view, schedule=schedule)
     last = week_monday(instance.calendar.first_week_start, weeks[-1]) + timedelta(
         days=list(Weekday).index(weekdays[-1])
     )
@@ -183,7 +202,11 @@ def _calendar_page_header(
         [
             [
                 Paragraph(_paragraph_text(_date_range_label(first, last)), styles["range"]),
-                Paragraph(_legend_markup(instance.clinic_policy, site), styles["legend"]),
+                Paragraph(
+                    "Work categories are labeled in each half-day."
+                    if view == "attendings" else _legend_markup(instance.clinic_policy, site),
+                    styles["legend"],
+                ),
             ]
         ],
         colWidths=[4.0 * inch, 12.3 * inch],
@@ -210,9 +233,15 @@ def _week_calendar(
     week: int,
     site: str | None,
     styles: dict[str, ParagraphStyle],
+    *,
+    attending_board: dict[tuple[int, Weekday, Session], list[AttendingOccupant]] | None = None,
+    schedule: Schedule | None = None,
 ) -> Table:
     monday = week_monday(instance.calendar.first_week_start, week)
-    weekdays = clinic_weekdays(instance)
+    weekdays = clinic_weekdays(
+        instance, view="attendings" if attending_board is not None else "residents",
+        schedule=schedule,
+    )
     column_width = CALENDAR_WIDTH / len(weekdays)
     card_width = column_width - 0.1 * inch
     cards = [
@@ -225,6 +254,7 @@ def _week_calendar(
             site,
             styles,
             card_width,
+            attending_board=attending_board,
         )
         for weekday in weekdays
     ]
@@ -257,6 +287,8 @@ def _day_card(
     site: str | None,
     styles: dict[str, ParagraphStyle],
     card_width: float,
+    *,
+    attending_board: dict[tuple[int, Weekday, Session], list[AttendingOccupant]] | None = None,
 ) -> Table:
     policy = instance.clinic_policy
     closure = clinic_closure_view(policy, calendar_day, site)
@@ -265,6 +297,15 @@ def _day_card(
     closure_rows = []
     event_rows = []
     for row_index, session in enumerate(Session, start=1):
+        if attending_board is not None:
+            people = attending_board[(week, weekday, session)]
+            lines = [person.label() for person in people]
+            if closure.is_closed:
+                lines.insert(0, closure.label())
+            session_cells.append(Paragraph(
+                _paragraph_text("\n".join(lines) or "-"), styles["cell"],
+            ))
+            continue
         special_events = special_events_for_slot(instance, calendar_day, session)
         event_labels = [_special_event_label(instance, event) for event in special_events]
         if special_events:
@@ -308,7 +349,11 @@ def _day_card(
     card = Table(
         [
             [
-                Paragraph(weekday.value.upper(), styles["day"]),
+                Paragraph(
+                    WEEKDAY_SHORT[weekday].upper()
+                    if attending_board is not None else weekday.value.upper(),
+                    styles["day"],
+                ),
                 Paragraph(_date_heading(calendar_day), styles["date"]),
             ],
             [Paragraph("AM", styles["session"]), session_cells[0]],
@@ -593,7 +638,9 @@ def _paragraph_text(value: object) -> str:
     return escape(text).replace("\n", "<br/>")
 
 
-def _page_footer(canvas, document, site_name: str) -> None:
+def _page_footer(
+    canvas, document, site_name: str, *, view: ClinicScheduleView = "residents",
+) -> None:
     canvas.saveState()
     page_width, _page_height = landscape(TABLOID)
     canvas.setStrokeColor(GRID_GREY)
@@ -601,6 +648,7 @@ def _page_footer(canvas, document, site_name: str) -> None:
     canvas.line(0.35 * inch, 0.25 * inch, page_width - 0.35 * inch, 0.25 * inch)
     canvas.setFont(PRINT_FONT_REGULAR, PRINT_CAPTION_SIZE)
     canvas.setFillColor(NEUTRAL)
-    canvas.drawString(0.35 * inch, 0.13 * inch, f"RBS clinic calendar | {site_name}")
+    calendar_name = "attending" if view == "attendings" else "clinic"
+    canvas.drawString(0.35 * inch, 0.13 * inch, f"RBS {calendar_name} calendar | {site_name}")
     canvas.drawRightString(page_width - 0.35 * inch, 0.13 * inch, f"Page {document.page}")
     canvas.restoreState()

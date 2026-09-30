@@ -544,3 +544,25 @@ def test_required_block_longer_than_consecutive_limit_is_reported() -> None:
     assert "required 4-week block" in issue.message
     assert "2-week maximum consecutive limit" in issue.message
     assert issue.pgy == 1
+
+
+def test_managed_clinic_nobody_can_precept_at_blocks_the_solve() -> None:
+    raw = sample_instance().model_dump(mode="json")
+    site = next(site for site in raw["clinic_policy"]["sites"] if site["id"] == "cedar")
+    site["staffing_mode"] = "attending_managed"
+    staffed = SchedulerInput.model_validate(raw)
+    raw["attendings"] = []
+    raw["attending_schedules"] = []
+    unstaffed = SchedulerInput.model_validate(raw)
+
+    # The solve can schedule the sample's attendings to precept at Cedar.
+    assert check_solve_readiness(SolverProblem.from_instance(staffed)).ready
+    result = check_solve_readiness(SolverProblem.from_instance(unstaffed))
+
+    assert not result.ready
+    issue = next(
+        issue for issue in result.issues if issue.code == "uncoverable_clinic_session"
+    )
+    assert "Inpatient Peds Metro" in issue.message
+    assert "no attending is available to precept at Cedar" in issue.message
+    assert any("can precept at Cedar" in item for item in issue.suggestions)

@@ -12,8 +12,9 @@ from collections import defaultdict
 
 from rbs.models.instance import SolverConfig, SolverProblem
 from rbs.models.resident import Resident
-from rbs.models.schedule import SolverDiagnostic
+from rbs.models.schedule import Schedule, SolverDiagnostic
 from rbs.models.special import SpecialRotation, SpecialRotationKind
+from rbs.solver.clinic_requirements import uncoverable_clinic_sessions
 from rbs.solver.core import constraints
 from rbs.solver.core.context import ModelBuildError, PlanningContext
 
@@ -21,11 +22,21 @@ from rbs.solver.core.context import ModelBuildError, PlanningContext
 def explain_infeasibility(
     problem: SolverProblem,
     options: SolverConfig,
+    reference_schedule: Schedule | None = None,
 ) -> list[SolverDiagnostic]:
     """Return conclusive explanations for isolated infeasible subproblems."""
     diagnostics: list[SolverDiagnostic] = []
     diagnostics.extend(_locked_capacity_conflicts(problem))
     diagnostics.extend(_locked_elective_repeats(problem))
+    # The probe leaves alone any resident-week a reference clinic lock could
+    # rescue with an extra session, so it stays conclusive on a re-solve.
+    diagnostics.extend(
+        uncoverable_clinic_sessions(
+            problem,
+            allow_boundary_spans=options.allow_blocks_to_span_four_week_boundaries,
+            reference_schedule=reference_schedule,
+        )
+    )
     for resident in problem.residents:
         feasible = _resident_curriculum_can_cover_year(problem, options, resident)
         if feasible is not False:

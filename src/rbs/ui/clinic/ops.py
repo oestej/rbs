@@ -6,6 +6,7 @@ the clinic policy rules they encode can be read and tested without a UI.
 
 from __future__ import annotations
 
+from rbs.models.attending import AttendingWorkType
 from rbs.models.clinic import (
     ALL_CLINIC_SITES,
     ClinicAllocationRule,
@@ -104,6 +105,28 @@ def remove_clinic(instance: SchedulerInput, clinic_id: str) -> SchedulerInput:
         raise ValueError(f"unknown clinic {clinic_id!r}")
     if len(instance.clinic_policy.sites) <= 1:
         raise ValueError("at least one clinic must remain configured")
+    assigned_attendings = [
+        attending.name
+        for attending in instance.attendings
+        if any(
+            assignment.work_type is AttendingWorkType.PRECEPTING_CLINIC
+            and assignment.clinic_id == clinic_id
+            for assignment in (
+                *attending.preferred_weekly_schedule_half_days,
+                *attending.schedule_template_half_days,
+                *(
+                    half_day
+                    for schedule in instance.attending_schedule_weeks(attending.id)
+                    for half_day in schedule.half_days
+                ),
+            )
+        )
+    ]
+    if assigned_attendings:
+        names = ", ".join(assigned_attendings)
+        raise ValueError(
+            "reassign Precepting Clinic work before removing this clinic: " + names
+        )
 
     raw = instance.model_dump(mode="json")
     policy = raw["clinic_policy"]
@@ -293,6 +316,8 @@ def replace_academic_half_day(
     instance: SchedulerInput,
     weekday: Weekday | None,
     session: Session | None,
+    *,
+    academic_half_day_is_attending_admin_time: bool | None = None,
 ) -> SchedulerInput:
     """Set the system-wide academic half-day, or clear it with ``None``.
 
@@ -307,6 +332,10 @@ def replace_academic_half_day(
         "session": session.value if session is not None else None,
         "sites": [],
     }
+    if academic_half_day_is_attending_admin_time is not None:
+        raw["clinic_policy"]["academic_half_day_is_attending_admin_time"] = bool(
+            academic_half_day_is_attending_admin_time
+        )
     return SchedulerInput.from_payload(raw)
 
 
@@ -377,6 +406,7 @@ def _new_clinic_draft(instance: SchedulerInput) -> Draft:
         "id": clinic_id,
         "name": f"Clinic {index}",
         "color": colors[(index - 1) % len(colors)],
+        "staffing_mode": "capacity_managed",
         "residents_per_attending": 4,
         "half_days": [],
         "capacity_overrides": [],

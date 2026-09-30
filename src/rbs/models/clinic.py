@@ -22,6 +22,7 @@ from rbs.models.clinic_site import (
     ClinicHalfDayCapacity,
     ClinicSiteClosure,
     ClinicSiteConfig,
+    ClinicStaffingMode,
     lighten_hex_color,
     normalize_clinic_site_ids,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "ClinicRule",
     "ClinicSiteClosure",
     "ClinicSiteConfig",
+    "ClinicStaffingMode",
     "ClinicSlot",
     "clinic_slot_date",
     "lighten_hex_color",

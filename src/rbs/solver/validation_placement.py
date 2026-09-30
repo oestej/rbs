@@ -78,7 +78,7 @@ def clinic_capacity_violations(
             week,
             weekday,
         )
-        maximum = policy.max_capacity_on(clinic_id, calendar_day, session)
+        maximum = instance.clinic_max_capacity_on(clinic_id, calendar_day, session)
         if maximum > 0 and count <= maximum:
             continue
         violations.append(
@@ -295,7 +295,7 @@ def _validate_clinics(
                     weekday,
                 )
                 for session in Session:
-                    minimum = policy.min_capacity_on(
+                    minimum = instance.clinic_min_capacity_on(
                         clinic.id,
                         calendar_day,
                         session,

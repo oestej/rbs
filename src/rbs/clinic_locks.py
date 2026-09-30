@@ -3,19 +3,32 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Protocol
 
 from rbs.models.clinic import clinic_slot_date
 from rbs.models.enums import Session, Weekday
 from rbs.models.instance import SchedulerInput, SchedulingCase, SolverProblem
-from rbs.models.schedule import AssignedClinic, Schedule
+from rbs.models.schedule import AssignedAttendingWork, AssignedClinic, Schedule
 
 ClinicOccurrenceKey = tuple[str, int, Weekday, Session]
 ClinicLockContext = SchedulerInput | SchedulingCase | SolverProblem
 
 
+class LockableHalfDay(Protocol):
+    """A scheduled half-day that can be locked by hand or by date.
+
+    Resident clinic sessions and attending work share one lock rule so that
+    locking through today protects both in the same way.
+    """
+
+    weekday: Weekday
+    locked: bool
+    automatic_lock_exempt: bool
+
+
 def clinic_slot_is_automatically_locked(
     instance: ClinicLockContext,
-    slot: AssignedClinic,
+    slot: LockableHalfDay,
     week: int,
     *,
     today: date | None = None,
@@ -34,7 +47,7 @@ def clinic_slot_is_automatically_locked(
 
 def clinic_slot_is_in_automatic_lock_window(
     instance: ClinicLockContext,
-    slot: AssignedClinic,
+    slot: LockableHalfDay,
     week: int,
     *,
     today: date | None = None,
@@ -55,7 +68,7 @@ def clinic_slot_is_in_automatic_lock_window(
 
 def clinic_slot_is_locked(
     instance: ClinicLockContext,
-    slot: AssignedClinic,
+    slot: LockableHalfDay,
     week: int,
     *,
     today: date | None = None,
@@ -141,3 +154,13 @@ def automatic_clinic_lock_count(
         clinic_slot_is_automatically_locked(instance, slot, key[1], today=today)
         for key, slot in reference_clinic_slot_map(instance, schedule).items()
     )
+
+
+def attending_work_is_locked(
+    instance: ClinicLockContext,
+    item: AssignedAttendingWork,
+    *,
+    today: date | None = None,
+) -> bool:
+    """Return the effective manual-or-automatic lock for one attending half-day."""
+    return clinic_slot_is_locked(instance, item, item.week, today=today)

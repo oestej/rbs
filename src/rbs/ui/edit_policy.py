@@ -20,6 +20,14 @@ def instance_edit_impact(
     """
     if _solver_semantics(previous) != _solver_semantics(replacement):
         return InstanceEditImpact.SOLVER_INPUT
+    # The solve schedules attendings, so their rules and hand-entered work are
+    # solver input above. What is left here (display names and the reusable
+    # template, which only copies work when applied) preserves the schedule.
+    if (
+        previous.attendings != replacement.attendings
+        or previous.attending_schedules != replacement.attending_schedules
+    ):
+        return InstanceEditImpact.COMPATIBLE_CONFIGURATION
     if previous.solver != replacement.solver:
         return InstanceEditImpact.APPLICATION_PREFERENCE
     return InstanceEditImpact.PRESENTATION
@@ -40,6 +48,9 @@ def _solver_semantics(instance: SchedulerInput) -> dict[str, Any]:
         curriculum.pop("label", None)
     for special in payload["special_rotations"]:
         special.pop("name", None)
+    for attending in payload["attendings"]:
+        attending.pop("name", None)
+    payload["attendings"].sort(key=lambda attending: attending["id"])
     payload["special_rotations"].sort(key=lambda special: special["id"])
     policy = payload["clinic_policy"]
     for site in policy["sites"]:

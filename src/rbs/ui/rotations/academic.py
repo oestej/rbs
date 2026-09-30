@@ -53,6 +53,14 @@ def _academic_configuration(
                 "Turn this off for a program with no protected teaching half-day. "
                 "Individual weeks can still schedule or cancel one below."
             ).classes("rbs-type-caption rbs-text-muted")
+            attending_admin_time = ui.switch(
+                "Reserve the academic half-day as Admin Time for attendings",
+                value=instance.clinic_policy.academic_half_day_is_attending_admin_time,
+            )
+            ui.label(
+                "When enabled, the effective academic half-day in each week is "
+                "reserved for active attendings. Schedule dates and vacation still apply."
+            ).classes("rbs-type-caption rbs-text-muted")
             with ui.row().classes("w-full items-end gap-3 flex-wrap"):
                 weekday = (
                     ui.select(
@@ -87,6 +95,9 @@ def _academic_configuration(
                             instance,
                             Weekday(str(weekday.value)) if enabled_draft["enabled"] else None,
                             Session(str(session.value)) if enabled_draft["enabled"] else None,
+                            academic_half_day_is_attending_admin_time=bool(
+                                attending_admin_time.value
+                            ),
                         )
                         ui.notify(
                             "Academic half-day saved"

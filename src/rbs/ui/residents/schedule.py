@@ -13,14 +13,21 @@ from pydantic import ValidationError
 
 from rbs.logging import get_logger
 from rbs.models.enums import RotationKind, Session, Weekday
-from rbs.models.instance import SchedulerInput
+from rbs.models.instance import SchedulerInput, SolverProblem
 from rbs.models.locks import LockedPlacement
 from rbs.models.resident import Resident, ResidentClinicHalfDay
 from rbs.models.rotation import rotation_display_sort_key
 from rbs.models.schedule import AssignedClinic, Schedule
+from rbs.solver.attending_availability import schedule_capacity_view
 from rbs.ui import master_detail
 from rbs.ui.clinic.projection import clinic_weekdays, occupancy
 from rbs.ui.editor_common import _default_block_duration
+from rbs.ui.half_day_schedule import (
+    bind_half_day_drop,
+    create_draggable_half_day_event,
+    create_half_day_cell,
+    render_half_day_grid,
+)
 from rbs.ui.locks import (
     THROUGH_TODAY_SOURCE,
     ScheduleBlock,
@@ -67,62 +74,6 @@ SaveResidentScheduleResult = Callable[[Schedule, str, bool], None]
 SaveResidentBlockSchedule = Callable[[SchedulerInput, Schedule, str], None]
 ChangeResidentScheduleEditing = Callable[[bool], None]
 OpenPdfExport = Callable[[bytes, str], None]
-
-_CLINIC_DRAG_START_JS = """
-(event) => {
-  if (event.currentTarget.getAttribute('draggable') !== 'true') {
-    event.preventDefault();
-    return;
-  }
-  const payload = JSON.stringify({
-    week: Number(event.currentTarget.dataset.week),
-    weekday: event.currentTarget.dataset.weekday,
-    session: event.currentTarget.dataset.session,
-  });
-  event.dataTransfer.effectAllowed = 'move';
-  event.dataTransfer.setData('application/x-rbs-clinic-slot', payload);
-  event.dataTransfer.setData('text/plain', payload);
-  event.currentTarget.classList.add('is-dragging');
-}
-"""
-_CLINIC_DRAG_END_JS = """
-(event) => {
-  event.currentTarget.classList.remove('is-dragging');
-  document.querySelectorAll('.rbs-resident-clinic-session-cell.is-drag-over')
-    .forEach((cell) => cell.classList.remove('is-drag-over'));
-}
-"""
-_CLINIC_DRAG_OVER_JS = """
-(event) => {
-  const types = Array.from(event.dataTransfer.types || []);
-  if (!types.includes('application/x-rbs-clinic-slot') && !types.includes('text/plain')) return;
-  event.preventDefault();
-  event.dataTransfer.dropEffect = 'move';
-  event.currentTarget.classList.add('is-drag-over');
-}
-"""
-_CLINIC_DRAG_LEAVE_JS = """
-(event) => {
-  if (!event.currentTarget.contains(event.relatedTarget)) {
-    event.currentTarget.classList.remove('is-drag-over');
-  }
-}
-"""
-_CLINIC_DROP_JS = """
-(event) => {
-  event.preventDefault();
-  event.currentTarget.classList.remove('is-drag-over');
-  const payload = event.dataTransfer.getData('application/x-rbs-clinic-slot')
-    || event.dataTransfer.getData('text/plain');
-  if (!payload) return;
-  try {
-    emit(JSON.parse(payload));
-  } catch (_error) {
-    // Ignore drops which did not originate from a resident clinic block.
-  }
-}
-"""
-
 
 def _resident_schedule_workspace(
     instance: SchedulerInput,
@@ -1539,6 +1490,11 @@ def _resident_clinic_schedule_report(
     current_clinic_occupancy = (
         occupancy(instance, current_schedule) if current_schedule is not None else {}
     )
+    current_capacity_view = (
+        schedule_capacity_view(instance, current_schedule)
+        if current_schedule is not None
+        else instance
+    )
     report_rows = resident_clinic_schedule_report_rows(
         instance,
         current_schedule,
@@ -1629,6 +1585,7 @@ def _resident_clinic_schedule_report(
                     editing=editing,
                     on_schedule_change=partial(save_week_change, week=week),
                     clinic_occupancy=current_clinic_occupancy,
+                    capacity_view=current_capacity_view,
                     schedule_state=schedule_state,
                     today=today,
                 )
@@ -1640,12 +1597,13 @@ def _resident_clinic_schedule_report(
             *,
             week: int,
         ) -> None:
-            nonlocal current_clinic_occupancy
+            nonlocal current_clinic_occupancy, current_capacity_view
             if on_schedule_change is None:
                 return
             on_schedule_change(updated, resident_id, False)
             schedule_state["value"] = updated
             current_clinic_occupancy = occupancy(instance, updated)
+            current_capacity_view = schedule_capacity_view(instance, updated)
             render_week(week)
 
         with ui.column().classes(calendar_classes):
@@ -1664,6 +1622,7 @@ def _resident_clinic_schedule_report(
                         editing=editing,
                         on_schedule_change=partial(save_week_change, week=week),
                         clinic_occupancy=current_clinic_occupancy,
+                        capacity_view=current_capacity_view,
                         schedule_state=schedule_state,
                         today=today,
                     )
@@ -1688,6 +1647,7 @@ class _ResidentClinicWeekContext:
     week: int
     has_rotation_assignment: bool
     client: Any
+    capacity_view: SolverProblem | None = None
 
     def notify(self, message: str, **options) -> None:
         from nicegui import ui
@@ -1999,6 +1959,7 @@ def _resident_clinic_week_calendar(
     editing: bool = False,
     on_schedule_change: SaveResidentScheduleResult | None = None,
     clinic_occupancy: ClinicOccupancy | None = None,
+    capacity_view: SolverProblem | None = None,
     schedule_state: dict[str, Schedule | None] | None = None,
     today: date | None = None,
 ) -> None:
@@ -2013,6 +1974,7 @@ def _resident_clinic_week_calendar(
         editing=editing,
         on_schedule_change=on_schedule_change,
         clinic_occupancy=clinic_occupancy,
+        capacity_view=capacity_view,
         schedule_state=schedule_state,
         today=today,
         week=week,
@@ -2071,30 +2033,13 @@ def _resident_clinic_week_grid(
     context: _ResidentClinicWeekContext,
     weekdays: tuple[Weekday, ...],
 ) -> None:
-    from nicegui import ui
-
-    with (
-        ui.element("div")
-        .classes("rbs-resident-clinic-week-grid w-full")
-        .style(f"--rbs-resident-clinic-days: {len(weekdays)}")
-    ):
-        ui.element("div").classes("rbs-resident-clinic-grid-corner")
-        for weekday in weekdays:
-            _resident_clinic_day_header(context.row, weekday)
-        for session in Session:
-            ui.label("AM" if session is Session.MORNING else "PM").classes(
-                "rbs-resident-clinic-session-label"
-            )
-            for weekday in weekdays:
-                _resident_clinic_session_cell(context, weekday, session)
-
-
-def _resident_clinic_day_header(row: dict[str, str], weekday: Weekday) -> None:
-    from nicegui import ui
-
-    with ui.element("div").classes("rbs-resident-clinic-day-header"):
-        ui.label(weekday.value[:3]).classes("rbs-resident-clinic-day-name")
-        ui.label(row[f"{weekday.value}_date"]).classes("rbs-resident-clinic-day-date")
+    render_half_day_grid(
+        weekdays,
+        day_details={
+            weekday: context.row[f"{weekday.value}_date"] for weekday in weekdays
+        },
+        render_cell=partial(_resident_clinic_session_cell, context),
+    )
 
 
 def _resident_clinic_cell_state(
@@ -2125,6 +2070,7 @@ def _resident_clinic_cell_state(
             weekday=weekday,
             session=session,
             clinic_occupancy=context.clinic_occupancy,
+            capacity_view=context.capacity_view,
         )
     academic = context.instance.is_academic_half_day(context.week, weekday, session)
     locked = bool(
@@ -2161,7 +2107,11 @@ def _resident_clinic_session_cell(
     from nicegui import ui
 
     state = _resident_clinic_cell_state(context, weekday, session)
-    cell = ui.element("div").classes(_resident_clinic_cell_classes(state))
+    cell = create_half_day_cell(
+        classes=_resident_clinic_cell_classes(state).removeprefix(
+            "rbs-resident-clinic-session-cell"
+        )
+    )
     marker_state = {
         "shown": bool(
             context.editing and state.conflicts and not state.academic and not state.manual_override
@@ -2208,10 +2158,8 @@ def _resident_clinic_bind_drop(
     cell: Any,
     marker_state: dict[str, bool],
 ) -> None:
-    cell.on("dragover", js_handler=_CLINIC_DRAG_OVER_JS)
-    cell.on("dragleave", js_handler=_CLINIC_DRAG_LEAVE_JS)
-    cell.on(
-        "drop",
+    bind_half_day_drop(
+        cell,
         partial(
             context.move_block,
             target_weekday=state.weekday,
@@ -2219,7 +2167,6 @@ def _resident_clinic_bind_drop(
             cell=cell,
             marker_state=marker_state,
         ),
-        js_handler=_CLINIC_DROP_JS,
     )
 
 
@@ -2259,6 +2206,11 @@ def _resident_clinic_context_menu(
                 if schedule is context.schedule
                 else occupancy(context.instance, schedule)
             ),
+            capacity_view=(
+                context.capacity_view
+                if schedule is context.schedule
+                else schedule_capacity_view(context.instance, schedule)
+            ),
         )
         current_state = _resident_clinic_cell_state(current, state.weekday, state.session)
         available_site_ids = resident_clinic_available_site_ids(
@@ -2269,6 +2221,7 @@ def _resident_clinic_context_menu(
             weekday=state.weekday,
             session=state.session,
             clinic_occupancy=current.clinic_occupancy,
+            capacity_view=current.capacity_view,
         )
         menu.clear()
         with menu:
@@ -2381,22 +2334,18 @@ def _resident_clinic_event(
         event_classes += " is-locked"
     if state.manual_override:
         event_classes += " manual-override"
-    event = (
-        ui.element("div")
-        .classes(event_classes)
-        .props(
-            f"draggable={'true' if context.editing and not state.locked else 'false'} "
-            f"data-week={context.week} data-weekday={state.weekday.value} "
-            f"data-session={state.session.value}"
-        )
+    event = create_draggable_half_day_event(
+        classes=event_classes.removeprefix("rbs-resident-clinic-event "),
+        draggable=context.editing and not state.locked,
+        week=context.week,
+        weekday=state.weekday,
+        session=state.session,
+        scope=f"resident-{context.resident.id}",
     )
     color = context.row[f"{state.key}_color"]
     tint = context.row[f"{state.key}_tint"]
     if color and tint:
         event.style(f"--rbs-clinic-site-color: {color}; --rbs-clinic-site-tint: {tint}")
-    if context.editing and not state.locked:
-        event.on("dragstart", js_handler=_CLINIC_DRAG_START_JS)
-        event.on("dragend", js_handler=_CLINIC_DRAG_END_JS)
     with event:
         ui.label(state.location).classes("rbs-resident-clinic-event-location")
         _resident_clinic_override_badge(context, state)
@@ -2421,6 +2370,7 @@ def _resident_clinic_override_badge(
         session=state.session,
         source_slot=state.visible_slot,
         clinic_occupancy=context.clinic_occupancy,
+        capacity_view=context.capacity_view,
     )
     with ui.badge("Manual override").classes("rbs-resident-clinic-override-badge"):
         ui.tooltip(" ".join(reasons) or "This clinic block was changed manually.")

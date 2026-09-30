@@ -1,6 +1,14 @@
 from datetime import date, timedelta
+from html.parser import HTMLParser
 
 from rbs.catalog import sample_instance
+from rbs.models.attending import (
+    Attending,
+    AttendingSchedule,
+    AttendingWeeklyWorkSchedule,
+    AttendingWorkHalfDay,
+    AttendingWorkType,
+)
 from rbs.models.enums import (
     RotationKind,
     Session,
@@ -10,7 +18,13 @@ from rbs.models.enums import (
 )
 from rbs.models.instance import SchedulerInput
 from rbs.models.rotation import ClinicPolicy
-from rbs.models.schedule import AssignedClinic, Assignment, Schedule, ScheduleMeta
+from rbs.models.schedule import (
+    AssignedAttendingWork,
+    AssignedClinic,
+    Assignment,
+    Schedule,
+    ScheduleMeta,
+)
 from rbs.solver.validation import validate_schedule
 from rbs.ui.clinic.board import (
     ACADEMIC_LABEL,
@@ -64,6 +78,36 @@ def _schedule(*assignments: Assignment) -> Schedule:
         ),
         assignments=list(assignments),
     )
+
+
+def test_repeated_placements_share_hover_details_without_losing_slot_dates():
+    class DetailsParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.references = []
+            self.templates = []
+            self.dates = []
+
+        def handle_starttag(self, tag, attrs):
+            attributes = dict(attrs)
+            key = attributes.get("data-clinic-detail")
+            if key is not None:
+                (self.templates if tag == "template" else self.references).append(key)
+            if tag == "time":
+                self.dates.append(attributes["datetime"])
+
+    instance = sample_instance()
+    resident = instance.residents[0]
+    schedule = _schedule(_clinic_assignment(resident.id, list(range(1, 53))))
+    parser = DetailsParser()
+    markup = render_clinic_html(instance, schedule)
+    parser.feed(markup)
+    assert len(parser.references) > 300
+    assert len(parser.templates) < 10
+    assert set(parser.references) == set(parser.templates)
+    assert len(set(parser.dates)) > 250
+    assert markup.count("<dl>") == len(parser.templates)
+    assert resident.name in markup
 
 
 def _secondary_site_id(instance: SchedulerInput) -> str:
@@ -225,6 +269,119 @@ def test_schedule_validation_uses_specific_date_capacity_override() -> None:
         "Maple clinic has no attending coverage: week 1 tuesday morning" in error
         for error in errors
     )
+
+
+def test_schedule_validation_uses_attending_managed_preceptor_capacity() -> None:
+    instance = sample_instance()
+    raw = instance.model_dump(mode="json")
+    maple = next(site for site in raw["clinic_policy"]["sites"] if site["id"] == "maple")
+    maple["staffing_mode"] = "attending_managed"
+    raw["attendings"] = [
+        Attending(
+            id="attending-001",
+            name="Ada Lovelace",
+            half_days_per_week=1,
+        ).model_dump(mode="json")
+    ]
+    raw["attending_schedules"] = [
+        AttendingSchedule(
+            attending_id="attending-001",
+            weeks=[
+                AttendingWeeklyWorkSchedule(
+                    week=1,
+                    half_days=[
+                        AttendingWorkHalfDay(
+                            weekday=Weekday.TUESDAY,
+                            session=Session.MORNING,
+                            work_type=AttendingWorkType.PRECEPTING_CLINIC,
+                            clinic_id="maple",
+                        )
+                    ],
+                )
+            ],
+        ).model_dump(mode="json")
+    ]
+    configured = SchedulerInput.model_validate(raw)
+    schedule = _schedule(
+        *[
+            Assignment(
+                resident_id=resident.id,
+                rotation_id="elective",
+                kind=RotationKind.ELECTIVE,
+                start_week=1,
+                end_week=1,
+                weeks=[1],
+                clinic_slots=[
+                    AssignedClinic(
+                        weekday=Weekday.TUESDAY,
+                        session=Session.MORNING,
+                        site="maple",
+                        week=1,
+                    )
+                ],
+            )
+            for resident in configured.residents[:5]
+        ]
+    )
+
+    errors = validate_schedule(configured, schedule).errors
+
+    assert any(
+        "Maple capacity exceeded: week 1 tuesday morning (5 capacity points; max 4)"
+        in error
+        for error in errors
+    )
+
+
+def test_clinic_board_and_hover_count_hand_entered_and_solver_placed_preceptors() -> None:
+    instance = sample_instance()
+    raw = instance.model_dump(mode="json")
+    maple = next(site for site in raw["clinic_policy"]["sites"] if site["id"] == "maple")
+    maple["staffing_mode"] = "attending_managed"
+    raw["attendings"] = [
+        Attending(id="attending-001", name="Ada Lovelace").model_dump(mode="json"),
+        Attending(id="attending-002", name="Grace Hopper").model_dump(mode="json"),
+    ]
+    work = AttendingWorkHalfDay(
+        weekday=Weekday.TUESDAY, session=Session.MORNING,
+        work_type=AttendingWorkType.PRECEPTING_CLINIC, clinic_id="maple",
+    )
+    raw["attending_schedules"] = [AttendingSchedule(
+        attending_id="attending-001",
+        weeks=[AttendingWeeklyWorkSchedule(week=1, half_days=[work])],
+    ).model_dump(mode="json")]
+    instance = SchedulerInput.model_validate(raw)
+    schedule = _schedule(*[
+        Assignment(
+            resident_id=resident.id, rotation_id="elective", kind=RotationKind.ELECTIVE,
+            start_week=1, end_week=1, weeks=[1],
+            clinic_slots=[AssignedClinic(
+                weekday=Weekday.TUESDAY, session=Session.MORNING, site="maple", week=1,
+            )],
+        )
+        for resident in instance.residents[:5]
+    ])
+
+    # Rendering the hand-entered coverage first must not cache it into a later solve's view.
+    before = render_clinic_html(instance, schedule, site="maple", show_legend=False)
+    assert ">1 Maple</span>" in before
+    assert "<dt>Clinic capacity</dt><dd>4 capacity points</dd>" in before
+    assert "<dt>Preceptors</dt><dd>1 scheduled at Maple</dd>" in before
+
+    # The repeated hand-entered placement contributes once; the second preceptor is generated.
+    staffed = schedule.revised(attending_work=[
+        AssignedAttendingWork(attending_id=attending.id, week=1, **work.model_dump())
+        for attending in instance.attendings
+    ])
+    markup = render_clinic_html(instance, staffed, site="maple", show_legend=False)
+    assert ">2 Maple</span>" in markup
+    assert "Maple: 2 preceptors scheduled · 8 capacity points · 2 needed" in markup
+    assert "<dt>Clinic capacity</dt><dd>8 capacity points</dd>" in markup
+    assert "<dt>Preceptors</dt><dd>2 scheduled at Maple</dd>" in markup
+    assert instance.clinic_attending_count_on(
+        "maple", instance.calendar.first_week_start + timedelta(days=1), Session.MORNING,
+    ) == 1
+    assert render_clinic_html(instance, schedule, site="maple", show_legend=False) == before
 
 
 def test_clinic_capacity_failure_is_reported_once_with_the_final_headcount() -> None:

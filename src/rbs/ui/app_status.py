@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from rbs.models.enums import SolverStatus
 from rbs.models.instance import SolverProblem
 from rbs.models.workspace import DownloadState, Workspace
@@ -22,13 +24,16 @@ from rbs.ui.workspaces.status import (
 )
 
 
-def solve_summary(workspace: Workspace) -> tuple[str, str] | None:
+def solve_summary(
+    workspace: Workspace,
+    readiness: ReadinessResult | None = None,
+) -> tuple[str, str] | None:
     """A compact read on whether the schedule reflects the current inputs.
 
     ``None`` where there is nothing worth saying - a solved, complete schedule
     needs no pill, and a header that is always full of badges stops being read.
     """
-    readiness = _workspace_readiness(workspace)
+    readiness = readiness if readiness is not None else _workspace_readiness(workspace)
     if not readiness.ready:
         if readiness.issues and all(
             issue.code == "unallocated_weeks" for issue in readiness.issues
@@ -59,7 +64,8 @@ def solve_summary(workspace: Workspace) -> tuple[str, str] | None:
 def _solve_chip(session: WorkspaceSession, workspace: Workspace) -> None:
     from nicegui import ui
 
-    summary = solve_summary(workspace)
+    readiness = session_readiness(session, workspace)
+    summary = solve_summary(workspace, readiness)
     if summary is None:
         session.solve_chip = None
         return
@@ -67,7 +73,7 @@ def _solve_chip(session: WorkspaceSession, workspace: Workspace) -> None:
     session.solve_chip = (
         ui.badge(label, color=None)
         .classes(f"{pill_classes(tone)} shrink-0")
-        .tooltip(_workspace_status(workspace))
+        .tooltip(_workspace_status(workspace, readiness))
     )
 
 
@@ -89,7 +95,7 @@ def _refresh_status_chips(session: WorkspaceSession) -> None:
     _refresh_download_chip(session, workspace)
     if session.solve_chip is None:
         return
-    summary = solve_summary(workspace)
+    summary = solve_summary(workspace, session_readiness(session, workspace))
     if summary is None:
         session.solve_chip.set_visibility(False)
         return
@@ -161,8 +167,11 @@ def _should_warn_before_leave(
     return file_is_out_of_date and current[1] != baseline[1]
 
 
-def _workspace_status(workspace: Workspace) -> str:
-    readiness = _workspace_readiness(workspace)
+def _workspace_status(
+    workspace: Workspace,
+    readiness: ReadinessResult | None = None,
+) -> str:
+    readiness = readiness if readiness is not None else _workspace_readiness(workspace)
     if not readiness.ready:
         return "Cannot solve · " + "; ".join(readiness.errors)
     if workspace.solution_is_out_of_date:
@@ -197,7 +206,27 @@ def _workspace_unallocated_weeks(workspace: Workspace) -> tuple[str, ...]:
 
 
 def _workspace_readiness(workspace: Workspace) -> ReadinessResult:
-    return check_solve_readiness(SolverProblem.from_instance(workspace.instance))
+    return check_solve_readiness(
+        SolverProblem.from_instance(workspace.instance),
+        reference_schedule=workspace.latest_schedule,
+    )
+
+
+def session_readiness(session: WorkspaceSession, workspace: Workspace) -> ReadinessResult:
+    """Readiness for one workspace snapshot, checked once per revision.
+
+    Status chrome refreshes after every accepted edit and asks more than once
+    per refresh, so the result is kept on this page's session. Every change
+    to the instance or schedule advances the workspace revision, and the date
+    is part of the key because automatic locking depends on it.
+    """
+    key = (workspace.id, workspace.workspace_revision, date.today())
+    cached = getattr(session, "_readiness", None)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    readiness = _workspace_readiness(workspace)
+    session._readiness = (key, readiness)
+    return readiness
 
 
 def _workspace_open_week_count(workspace: Workspace) -> int:

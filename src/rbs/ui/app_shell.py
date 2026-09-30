@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from contextlib import ExitStack
 from dataclasses import dataclass
+from datetime import date
 from functools import partial
 
 from rbs.logging import (
@@ -35,6 +37,8 @@ from rbs.ui.app_status import (
     _retention_banner,
     _solve_chip,
 )
+from rbs.ui.attendings.ops import attending_working_draft
+from rbs.ui.attendings.tab import render_attendings_tab
 from rbs.ui.block_schedule_pdf import (
     block_schedule_pdf_filename,
     build_block_schedule_pdf,
@@ -50,6 +54,8 @@ from rbs.ui.clinic.board import render_clinic_html, render_clinic_legend_html
 from rbs.ui.clinic.schedule_csv import build_clinic_schedule_csv, clinic_schedule_csv_filename
 from rbs.ui.clinic.schedule_pdf import build_clinic_schedule_pdf, clinic_schedule_pdf_filename
 from rbs.ui.clinic.tab import render_clinic_tab
+from rbs.ui.clinic.view_toggle import ClinicViewToggle
+from rbs.ui.deferred_sections import DeferredSections
 from rbs.ui.edit_policy import instance_edit_impact
 from rbs.ui.grid import render_grid_html
 from rbs.ui.pdf_export import present_pdf_export
@@ -72,6 +78,7 @@ class WorkspaceNavigation:
     block_schedule: object
     clinic_schedule: object
     residents: object
+    attendings: object
     rotations: object
     clinic: object
     settings: object
@@ -178,6 +185,7 @@ def _workspace_navigation(on_change=None) -> WorkspaceNavigation:
         block_schedule = ui.tab("block_schedule", label="Block Schedule")
         clinic_schedule = ui.tab("clinic_schedule", label="Clinic Schedule")
         residents = ui.tab("residents", label="Residents")
+        attendings = ui.tab("attendings", label="Attendings")
         rotations = ui.tab("rotations", label="Rotations")
         clinic = ui.tab("clinic", label="Clinic")
         settings = ui.tab("settings", label="Configuration")
@@ -186,6 +194,7 @@ def _workspace_navigation(on_change=None) -> WorkspaceNavigation:
         block_schedule=block_schedule,
         clinic_schedule=clinic_schedule,
         residents=residents,
+        attendings=attendings,
         rotations=rotations,
         clinic=clinic,
         settings=settings,
@@ -302,6 +311,14 @@ def _render_tab(session: WorkspaceSession, name: str) -> None:
                 draft_schedule=draft_schedule,
             )
 
+        def manage_attendings() -> None:
+            session.attending_id = None
+            session.active_tab = "attendings"
+            session.mark_stale("attendings")
+            if session.navigation is not None:
+                session.navigation.tabs.value = session.navigation.attendings
+            session.refresh_panel("attendings")
+
         render_clinic_tab(
             workspace.instance,
             on_save=persist_clinic,
@@ -310,9 +327,12 @@ def _render_tab(session: WorkspaceSession, name: str) -> None:
             on_section_change=lambda event: _remember_clinic_section(session, event.value),
             schedule=workspace.latest_schedule,
             on_block_schedule_save=persist_clinic_block_schedule,
+            on_manage_attendings=manage_attendings,
         )
     elif name == "residents":
         _render_residents(session, workspace)
+    elif name == "attendings":
+        _render_attendings(session, workspace)
     elif name == "settings":
 
         def persist_settings(
@@ -513,20 +533,76 @@ def _render_clinic_schedule(session: WorkspaceSession, workspace: Workspace) -> 
         session.clinic_site = "all"
         return None
 
-    def render_board() -> None:
-        clinic_schedule.clear()
-        with clinic_schedule:
-            with ui.element("div").classes("w-full min-w-0") as board:
-                _html(
-                    render_clinic_html(
+    loader: DeferredSections | None = None
+    board_filters: tuple[str | None, bool, date] | None = None
+    legends = {
+        view: render_clinic_legend_html(instance.clinic_policy, view=view)
+        for view in ("residents", "attendings")
+    }
+
+    def render_board(*, browser_selected: bool = False) -> None:
+        nonlocal loader, board_filters
+        view = session.clinic_schedule_view
+        filters = (selected_clinic_site(), bool(session.show_past_clinic_weeks), date.today())
+        already_shown = (
+            browser_selected and filters == board_filters
+            and bool(view_panels[view].default_slot.children)
+        )
+        if filters != board_filters:
+            if loader is not None:
+                loader.delete()
+            for panel in view_panels.values():
+                panel.clear()
+            site, show_past_weeks, today = filters
+
+            def build_board(name: str) -> None:
+                with ui.element("div").classes("w-full min-w-0") as board:
+                    _html(render_clinic_html(
                         instance,
                         schedule,
-                        show_past_weeks=bool(session.show_past_clinic_weeks),
-                        site=selected_clinic_site(),
+                        show_past_weeks=show_past_weeks,
+                        today=today,
+                        site=site,
                         show_legend=False,
-                    )
+                        view=name,
+                    ))
+                if name == "residents":
+                    _schedule_context_menu(board, session, instance, clinic=True)
+
+            with clinic_schedule:
+                loader = DeferredSections(
+                    view_panels,
+                    build_board,
+                    can_preload=lambda: (
+                        session.workspace_id == workspace.id
+                        and "clinic_schedule" not in session.stale_panels
+                    ),
+                    is_active=lambda: session.active_tab == "clinic_schedule",
                 )
-            _schedule_context_menu(board, session, instance, clinic=True)
+            board_filters = filters
+        assert loader is not None
+        loader.load(view)
+        with ExitStack() as updates:
+            if already_shown:
+                # Record browser state without sending an older selection back
+                # over a newer click while callbacks are queued on the server.
+                for panel in view_panels.values():
+                    updates.enter_context(panel.classes.suspend_updates())
+                    updates.enter_context(panel.props.suspend_updates())
+                updates.enter_context(legend.props.suspend_updates())
+            for name, panel in view_panels.items():
+                panel.classes(
+                    remove="is-inactive" if name == view else "",
+                    add="is-inactive" if name != view else "",
+                )
+                panel.props(
+                    remove="inert" if name == view else "", add="inert" if name != view else "",
+                )
+            legend.set_content(legends[view])
+
+    def change_clinic_view(event) -> None:
+        session.clinic_schedule_view = event.value
+        render_board(browser_selected=clinic_view.browser_selection)
 
     def toggle_clinic_past(event) -> None:
         session.show_past_clinic_weeks = bool(event.value)
@@ -557,10 +633,12 @@ def _render_clinic_schedule(session: WorkspaceSession, workspace: Workspace) -> 
                 schedule,
                 show_past_weeks=show_past_weeks,
                 site=site,
+                view=session.clinic_schedule_view,
             )
             filename = clinic_schedule_csv_filename(
                 instance.academic_year,
                 site=site,
+                view=session.clinic_schedule_view,
             )
             if not await _present_csv_export(session, content, filename):
                 get_logger("documents").info(
@@ -583,10 +661,12 @@ def _render_clinic_schedule(session: WorkspaceSession, workspace: Workspace) -> 
                 schedule,
                 show_past_weeks=show_past_weeks,
                 site=site,
+                view=session.clinic_schedule_view,
             )
             filename = clinic_schedule_pdf_filename(
                 instance.academic_year,
                 site=site,
+                view=session.clinic_schedule_view,
             )
             _open_exported_pdf(session, content, filename)
             get_logger("documents").info(
@@ -601,7 +681,7 @@ def _render_clinic_schedule(session: WorkspaceSession, workspace: Workspace) -> 
         subtitle="Review clinic staffing by week, site, and half-day.",
     ):
         with page_shells.toolbar(extra_classes="rbs-clinic-toolbar"):
-            _html(
+            legend = _html(
                 render_clinic_legend_html(instance.clinic_policy),
                 classes="rbs-clinic-toolbar-key min-w-0",
             )
@@ -610,6 +690,11 @@ def _render_clinic_schedule(session: WorkspaceSession, workspace: Workspace) -> 
                     "Show past weeks",
                     value=bool(session.show_past_clinic_weeks),
                 ).props("dense")
+                clinic_view = (
+                    ClinicViewToggle(value=session.clinic_schedule_view)
+                    .props("no-caps dense unelevated rounded aria-label='Clinic schedule view'")
+                    .classes("rbs-clinic-view-toggle shrink-0")
+                )
                 clinic_site = (
                     ui.select(
                         {
@@ -622,6 +707,9 @@ def _render_clinic_schedule(session: WorkspaceSession, workspace: Workspace) -> 
                     .props("dense outlined options-dense")
                     .classes("w-40")
                 )
+                clinic_site.tooltip(
+                    "In the attending view, shows Precepting Clinic work at the selected site"
+                )
                 ui.button(
                     "Export CSV",
                     icon="table_view",
@@ -633,8 +721,18 @@ def _render_clinic_schedule(session: WorkspaceSession, workspace: Workspace) -> 
                     on_click=export_clinic_pdf,
                 ).props(button_props(SECONDARY_BUTTON_PROPS, "dense"))
 
-        clinic_schedule = ui.column().classes("w-full min-w-0 gap-2")
+        clinic_schedule = ui.column().classes("rbs-clinic-views w-full min-w-0 gap-2")
+        with clinic_schedule:
+            view_panels = {
+                name: ui.column().classes("rbs-clinic-view-panel w-full min-w-0 gap-0")
+                for name in ("residents", "attendings")
+            }
+            for name, panel in view_panels.items():
+                if name != session.clinic_schedule_view:
+                    panel.classes("is-inactive").props("inert")
+        clinic_view.attach_views(view_panels, legend, legends)
         clinic_past.on_value_change(toggle_clinic_past)
+        clinic_view.on_value_change(change_clinic_view)
         clinic_site.on_value_change(filter_clinic_site)
         render_board()
 
@@ -882,6 +980,77 @@ def _render_residents(
             panel,
             partial(_refresh_resident_detail, session, panel),
         )
+
+
+def _render_attendings(session: WorkspaceSession, workspace: Workspace) -> None:
+    def select_attending(attending_id: str | None) -> None:
+        if attending_id != session.attending_id:
+            session.attending_schedule_editing = False
+        session.attending_id = attending_id
+        session.active_tab = "attendings"
+        session.refresh_panel("attendings")
+
+    def persist_attending(
+        updated: SchedulerInput,
+        attending_id: str | None,
+    ) -> None:
+        session.attending_schedule_editing = False
+        session.attending_id = attending_id
+        session.active_tab = "attendings"
+        session.persist_instance(
+            workspace,
+            updated,
+            impact=instance_edit_impact(workspace.instance, updated),
+        )
+
+    def persist_attending_schedule(updated: SchedulerInput, attending_id: str) -> None:
+        nonlocal workspace
+        if attending_id != session.attending_id or not session.attending_schedule_editing:
+            raise WorkspaceConflictError("Reopen this attending's schedule before editing it.")
+        workspace = session.persist_instance(
+            workspace,
+            updated,
+            impact=instance_edit_impact(workspace.instance, updated),
+            refresh=False,
+        )
+        session.stale_panels.discard("attendings")
+
+    def persist_attending_work(
+        updated: SchedulerInput,
+        updated_schedule: Schedule | None,
+        attending_id: str,
+    ) -> tuple[SchedulerInput, Schedule | None]:
+        nonlocal workspace
+        if attending_id != session.attending_id or not session.attending_schedule_editing:
+            raise WorkspaceConflictError("Reopen this attending's schedule before editing it.")
+        if workspace.solution_is_out_of_date and updated_schedule is not None:
+            updated_schedule = attending_working_draft(updated, updated_schedule)
+        if updated != workspace.instance:
+            workspace = session.persist_instance(
+                workspace,
+                updated,
+                impact=InstanceEditImpact.SOLVER_INPUT,
+                draft_schedule=updated_schedule,
+                refresh=False,
+            )
+        elif updated_schedule is not None:
+            workspace = session.persist_schedule(workspace, updated_schedule, refresh=False)
+        session.stale_panels.discard("attendings")
+        return workspace.instance, workspace.latest_schedule
+
+    render_attendings_tab(
+        workspace.instance,
+        selected_attending_id=session.attending_id,
+        on_select=select_attending,
+        on_save=persist_attending,
+        on_schedule_save=persist_attending_schedule,
+        schedule=workspace.latest_schedule,
+        on_work_save=persist_attending_work,
+        schedule_editing=session.attending_schedule_editing,
+        on_schedule_editing_change=lambda editing: setattr(
+            session, "attending_schedule_editing", editing,
+        ),
+    )
 
 
 def _remember_active_tab(state, value) -> None:

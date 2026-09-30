@@ -11,13 +11,19 @@ from rbs.academic_year import (
     week_start_choices,
 )
 from rbs.catalog import sample_instance
+from rbs.models.attending import (
+    AttendingSchedule,
+    AttendingWeeklyWorkSchedule,
+    AttendingWorkHalfDay,
+    AttendingWorkType,
+)
 from rbs.models.case_blocks import (
     ManualClinicBlock,
     ResidentRotationOverride,
     ResidentRotationWaiver,
 )
 from rbs.models.clinic_site import ClinicCapacityOverride
-from rbs.models.enums import Session
+from rbs.models.enums import Session, Weekday
 
 
 def test_week_start_choices_center_on_the_july_anchor() -> None:
@@ -69,6 +75,21 @@ def test_rebase_week_start_rejects_a_non_monday() -> None:
 def test_start_new_academic_year_clears_year_specific_work() -> None:
     instance = sample_instance()
     resident = instance.residents[2]
+    pattern = AttendingWorkHalfDay(
+        weekday=Weekday.MONDAY,
+        session=Session.MORNING,
+        work_type=AttendingWorkType.ADMIN_TIME,
+    )
+    reusable_attending = next(
+        attending for attending in instance.attendings if attending.half_days_per_week > 0
+    )
+    first_attending = reusable_attending.revised(
+        schedule_template_half_days=[pattern],
+    )
+    attending_schedule = AttendingSchedule(
+        attending_id=first_attending.id,
+        weeks=[AttendingWeeklyWorkSchedule(week=1, half_days=[pattern])],
+    )
     maple = instance.clinic_policy.site("maple").revised(
         capacity_overrides=[
             ClinicCapacityOverride(
@@ -85,6 +106,16 @@ def test_start_new_academic_year_clears_year_specific_work() -> None:
         ]
     )
     configured = instance.revised(
+        attendings=[
+            first_attending if attending.id == first_attending.id else attending
+            for attending in instance.attendings
+        ],
+        attending_schedules=[
+            schedule
+            for schedule in instance.attending_schedules
+            if schedule.attending_id != first_attending.id
+        ]
+        + [attending_schedule],
         clinic_policy=policy,
         manual_clinic_blocks=[
             ManualClinicBlock(
@@ -118,6 +149,34 @@ def test_start_new_academic_year_clears_year_specific_work() -> None:
     assert moved.calendar.first_week_start == date(2027, 6, 28)
     assert all(not item.vacation_weeks for item in moved.residents)
     assert all(not item.days_off for item in moved.residents)
+    assert [item.id for item in moved.attendings] == [
+        item.id for item in configured.attendings
+    ]
+    assert all(item.schedule_start_date is None for item in moved.attendings)
+    assert all(item.schedule_end_date is None for item in moved.attendings)
+    assert all(not item.vacation_ranges for item in moved.attendings)
+    assert not moved.attending_schedules
+    assert next(
+        item
+        for item in moved.attendings
+        if item.id == first_attending.id
+    ).schedule_template_half_days == [pattern]
+    preferred_attending = next(
+        item
+        for item in configured.attendings
+        if item.preferred_weekly_schedule_half_days
+    )
+    moved_preferred_attending = next(
+        item for item in moved.attendings if item.id == preferred_attending.id
+    )
+    assert (
+        moved_preferred_attending.preferred_weekly_schedule_half_days
+        == preferred_attending.preferred_weekly_schedule_half_days
+    )
+    assert (
+        moved_preferred_attending.minimum_attending_clinic_days_per_week
+        == preferred_attending.minimum_attending_clinic_days_per_week
+    )
     assert not moved.academic_half_day_overrides
     assert not moved.locks
     assert not moved.manual_clinic_blocks
@@ -134,6 +193,10 @@ def test_start_new_academic_year_clears_year_specific_work() -> None:
     assert moved.rotations == configured.rotations
     assert moved.requirements == configured.requirements
     assert moved.clinic_policy.academic == configured.clinic_policy.academic
+    assert (
+        moved.clinic_policy.academic_half_day_is_attending_admin_time
+        == configured.clinic_policy.academic_half_day_is_attending_admin_time
+    )
     assert moved.clinic_policy.allocation_rules == configured.clinic_policy.allocation_rules
 
 

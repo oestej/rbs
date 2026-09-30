@@ -33,6 +33,7 @@ def test_workspace_navigation_uses_requested_order_and_labels() -> None:
         "Block Schedule",
         "Clinic Schedule",
         "Residents",
+        "Attendings",
         "Rotations",
         "Clinic",
         "Configuration",
@@ -81,7 +82,9 @@ def test_schedule_pages_share_the_canvas_header_and_toolbar_order() -> None:
 
     before = set(ui.context.client.elements)
     _render_clinic_schedule(
-        SimpleNamespace(show_past_clinic_weeks=False, clinic_site="all"),
+        SimpleNamespace(
+            show_past_clinic_weeks=False, clinic_site="all", clinic_schedule_view="residents",
+        ),
         workspace,
     )
     clinic_elements = _created_elements(before)
@@ -93,9 +96,11 @@ def test_schedule_pages_share_the_canvas_header_and_toolbar_order() -> None:
         for element in clinic_elements
         if "rbs-page-toolbar-actions" in getattr(element, "_classes", [])
     )
-    control_kinds = [child.__class__.__name__ for child in controls.default_slot.children]
-    assert control_kinds[:2] == ["Checkbox", "Select"]
-    assert control_kinds[2:] == ["Button", "Button"]
+    control_kinds = [
+        child.__class__.__name__ for child in controls.default_slot.children
+        if child.__class__.__name__ != "Tooltip"
+    ]
+    assert control_kinds == ["Checkbox", "ClinicViewToggle", "Select", "Button", "Button"]
 
 
 def test_csv_export_uses_native_document_file_picker(monkeypatch, tmp_path) -> None:
@@ -532,7 +537,7 @@ def test_solve_does_not_start_search_when_configuration_is_provably_blocked(
     # Deliberately omit workspace_host: reaching search would fail this test.
     session = SimpleNamespace(
         solving=False,
-        workspace=lambda: SimpleNamespace(instance=blocked),
+        workspace=lambda: SimpleNamespace(instance=blocked, latest_schedule=None),
     )
     opened: list = []
     notifications: list[str] = []
@@ -600,6 +605,19 @@ def test_readiness_action_opens_the_exact_configuration_surface() -> None:
 
     assert session.active_tab == "clinic"
     assert session.clinic_section == "clinic_block_rules"
+    assert session.rotation_id is None
+
+    _navigate_to_readiness_issue(
+        session,
+        ReadinessIssue(
+            code="uncoverable_clinic_session",
+            message="Cedar has no attending coverage scheduled.",
+        ),
+        dialog,
+    )
+
+    assert session.active_tab == "clinic"
+    assert session.clinic_section == "clinic_sites"
     assert session.rotation_id is None
 
 
@@ -788,7 +806,10 @@ def test_settings_keeps_scheduling_behaviour_and_gives_up_the_workspace(tmp_path
     assert "Academic year" not in selects
     assert not {"Save workspace", "New workspace", "Close workspace"} & buttons
     # What shapes the schedule stays here.
-    assert "Automatically lock blocks and clinic sessions through today" in checkbox_labels
+    assert (
+        "Automatically lock blocks, clinic sessions, and attending work through today"
+        in checkbox_labels
+    )
     assert "Institutional color scheme" not in labels
     assert not {"Save settings", "Load settings"} & buttons
     assert not any(

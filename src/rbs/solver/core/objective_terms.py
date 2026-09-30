@@ -37,8 +37,12 @@ def _add_week_objective_terms(
     policy = context.instance.clinic_policy
     weights = context.options.weights
     # Weekly staffing evenness shares these counts with the attending-total
-    # goal, so either enabled goal needs them.
-    needs_attendings = weights.attending_sessions or weights.primary_site_week_evenness
+    # goal, so either enabled goal needs them. An attending-managed primary
+    # clinic counts its scheduled preceptors directly instead of estimating.
+    envelope = getattr(context, "attending_envelope", None)
+    needs_attendings = (
+        weights.attending_sessions or weights.primary_site_week_evenness
+    ) and not (envelope is not None and policy.primary_site_id in envelope.managed)
     ratio = policy.site(policy.primary_site_id).residents_per_attending
     n_residents = len(context.instance.residents)
     week_slot_load = []

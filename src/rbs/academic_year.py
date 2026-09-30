@@ -139,6 +139,32 @@ def rebase_academic_year(instance: SchedulerInput, value: str) -> SchedulerInput
         )
         for resident in instance.residents
     ]
+    attendings = [
+        attending.model_copy(
+            update={
+                "schedule_start_date": (
+                    _shift_year(attending.schedule_start_date, year_delta)
+                    if attending.schedule_start_date is not None
+                    else None
+                ),
+                "schedule_end_date": (
+                    _shift_year(attending.schedule_end_date, year_delta)
+                    if attending.schedule_end_date is not None
+                    else None
+                ),
+                "vacation_ranges": [
+                    vacation.model_copy(
+                        update={
+                            "start_date": _shift_year(vacation.start_date, year_delta),
+                            "end_date": _shift_year(vacation.end_date, year_delta),
+                        }
+                    )
+                    for vacation in attending.vacation_ranges
+                ],
+            }
+        )
+        for attending in instance.attendings
+    ]
     sites = [
         site.model_copy(
             update={
@@ -187,6 +213,7 @@ def rebase_academic_year(instance: SchedulerInput, value: str) -> SchedulerInput
         academic_year=normalized,
         calendar=calendar,
         residents=residents,
+        attendings=attendings,
         clinic_policy=clinic_policy,
         special_rotations=special_rotations,
         # These pins came from the previous year's solved schedule. Manual
@@ -211,6 +238,14 @@ def start_new_academic_year(instance: SchedulerInput, value: str) -> SchedulerIn
         resident.revised(vacation_weeks=[], days_off=[])
         for resident in instance.residents
     ]
+    attendings = [
+        attending.revised(
+            schedule_start_date=None,
+            schedule_end_date=None,
+            vacation_ranges=[],
+        )
+        for attending in instance.attendings
+    ]
     sites = [
         site.revised(capacity_overrides=[], closure_days=[])
         for site in instance.clinic_policy.sites
@@ -226,6 +261,8 @@ def start_new_academic_year(instance: SchedulerInput, value: str) -> SchedulerIn
         academic_year=normalized,
         calendar=calendar,
         residents=residents,
+        attendings=attendings,
+        attending_schedules=[],
         clinic_policy=clinic_policy,
         academic_half_day_overrides=[],
         locks=[],

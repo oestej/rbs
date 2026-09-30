@@ -272,6 +272,59 @@ def test_infeasible_vacation_coverage_reports_actions() -> None:
     assert any("dates or assigned residents" in item for item in diagnostic.suggestions)
 
 
+def _cedar_managed_instance() -> SchedulerInput:
+    from rbs.models.clinic_site import ClinicStaffingMode
+
+    instance = unconfigured_sample_instance()
+    sites = [
+        site.model_copy(update={"staffing_mode": ClinicStaffingMode.ATTENDING_MANAGED})
+        if site.id == "cedar"
+        else site
+        for site in instance.clinic_policy.sites
+    ]
+    # Without attendings nobody could be scheduled to precept at Cedar.
+    return instance.revised(
+        clinic_policy=instance.clinic_policy.model_copy(update={"sites": sites}),
+        attendings=[],
+        attending_schedules=[],
+    )
+
+
+def test_managed_clinic_without_coverage_fails_fast_with_its_reason() -> None:
+    # The readiness gate inside compilation rejects the solve before any
+    # search starts, so this needs no solve marker.
+    instance = _cedar_managed_instance()
+    options = instance.solver.model_copy(update={"solve_attempts": 1})
+
+    schedule = get_engine("cp_sat").solve(instance, options=options)
+
+    assert schedule.meta.status is SolverStatus.INFEASIBLE
+    assert [diagnostic.code for diagnostic in schedule.meta.diagnostics] == [
+        "uncoverable_clinic_session"
+    ]
+    (diagnostic,) = schedule.meta.diagnostics
+    assert "Inpatient Peds Metro" in diagnostic.message
+    assert "no attending is available to precept at Cedar" in diagnostic.message
+    assert any("can precept at Cedar" in item for item in diagnostic.suggestions)
+    assert "CP-SAT returned" not in schedule.meta.notes
+
+
+@pytest.mark.solve
+def test_post_solve_probes_name_the_dead_managed_site() -> None:
+    from rbs.models.instance import SolverProblem
+    from rbs.solver.core.diagnostics import explain_infeasibility
+
+    instance = _cedar_managed_instance()
+    problem = SolverProblem.from_instance(instance)
+
+    diagnostics = explain_infeasibility(problem, instance.solver, None)
+
+    assert [diagnostic.code for diagnostic in diagnostics] == [
+        "uncoverable_clinic_session"
+    ]
+    assert "Inpatient Peds Metro" in diagnostics[0].message
+
+
 @pytest.mark.solve
 def test_preferred_clinic_slot_is_a_soft_objective_choice() -> None:
     from ortools.sat.python import cp_model

@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Attendings:** A new Attendings tab brings together schedules, weekly targets,
+  preferences, and vacation. Edit and lock work directly in the full-year calendar.
+- **Scheduling:** Solves now schedule attendings while preserving hand-entered
+  and locked work. Clinics can base resident capacity on the attendings scheduled
+  to precept.
+- **Clinic schedule:** Switch between resident and attending calendars, with
+  filters and CSV/PDF exports for each.
+- **Scheduling:** Failed solves explain blocking conflicts and suggest next steps
+  in the workspace and `rbs schedule`.
+
+### Changed
+
+- Faster clinic site assignment and switching between resident and attending calendars.
+- **Data compatibility:** Older `.rbsc` files (schemas 9–11) and catalogs (schemas
+  8–9) migrate automatically. Newly saved files use `.rbsc` schema 12 and catalog
+  schema 10; older builds cannot open them. Solver protocol 7 requires matching
+  solver binaries.
+
 ## [0.1.14] - 2026-09-29
 
 ### Changed

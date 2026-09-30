@@ -12,10 +12,11 @@ from rbs.clinic_locks import (
 from rbs.models.clinic import clinic_slot_date
 from rbs.models.color_scheme import contrasting_text_color
 from rbs.models.enums import RotationKind, Session, Weekday
-from rbs.models.instance import SchedulerInput
+from rbs.models.instance import SchedulerInput, SolverProblem
 from rbs.models.resident import Resident
 from rbs.models.schedule import AssignedClinic, Assignment, Schedule
 from rbs.models.special import SpecialRotationKind
+from rbs.solver.attending_availability import schedule_capacity_view
 from rbs.solver.validation import validate_schedule_or_raise
 from rbs.ui.clinic.projection import (
     ClinicOccupant,
@@ -631,10 +632,13 @@ def resident_clinic_available_site_ids(
     weekday: Weekday,
     session: Session,
     clinic_occupancy: ClinicOccupancy | None = None,
+    capacity_view: SolverProblem | None = None,
 ) -> tuple[str, ...]:
     """Return sites with preceptor capacity for an added or reassigned block."""
     if instance.is_academic_half_day(week, weekday, session):
         return ()
+    if capacity_view is None:
+        capacity_view = schedule_capacity_view(instance, schedule)
     available: list[str] = []
     for site in instance.clinic_policy.sites:
         candidate = AssignedClinic(
@@ -652,6 +656,7 @@ def resident_clinic_available_site_ids(
             session=session,
             source_slot=candidate,
             clinic_occupancy=clinic_occupancy,
+            capacity_view=capacity_view,
         ):
             available.append(site.id)
     return tuple(available)
@@ -710,6 +715,7 @@ def resident_clinic_target_conflicts(
     session: Session,
     source_slot: AssignedClinic | None = None,
     clinic_occupancy: ClinicOccupancy | None = None,
+    capacity_view: SolverProblem | None = None,
 ) -> tuple[str, ...]:
     """Explain hard and rule-based conflicts for a clinic drop target."""
     resident = instance.residents_by_id.get(resident_id)
@@ -761,6 +767,7 @@ def resident_clinic_target_conflicts(
                 session=session,
                 source_slot=source_slot,
                 clinic_occupancy=clinic_occupancy,
+                capacity_view=capacity_view,
             )
         )
 
@@ -817,6 +824,7 @@ def _resident_clinic_preceptor_conflicts(
     session: Session,
     source_slot: AssignedClinic,
     clinic_occupancy: ClinicOccupancy | None = None,
+    capacity_view: SolverProblem | None = None,
 ) -> tuple[str, ...]:
     """Return site closure and staffing conflicts that cannot be overridden."""
     if source_slot.admin:
@@ -831,7 +839,15 @@ def _resident_clinic_preceptor_conflicts(
         closure = policy.closure_on(calendar_day)
         suffix = f" ({closure.name})" if closure is not None and closure.name else ""
         return (f"{site_name} is closed on {calendar_day:%B} {calendar_day.day}{suffix}.",)
-    maximum = policy.max_capacity_on(site_id, calendar_day, session)
+    # An attending-managed clinic seats whoever the schedule's own attending
+    # work precepts there, including preceptors the solve placed.
+    if capacity_view is None:
+        capacity_view = schedule_capacity_view(instance, schedule)
+    maximum = capacity_view.clinic_max_capacity_on(
+        site_id,
+        calendar_day,
+        session,
+    )
     if maximum <= 0:
         return (
             f"{site_name} has no attending coverage for {weekday.value.title()} "
@@ -861,6 +877,7 @@ def _resident_clinic_hard_target_conflicts(
     session: Session,
     source_slot: AssignedClinic,
     clinic_occupancy: ClinicOccupancy | None = None,
+    capacity_view: SolverProblem | None = None,
 ) -> tuple[str, ...]:
     """Return immutable or staffing conflicts that a manual edit cannot waive."""
     reasons: list[str] = []
@@ -892,6 +909,7 @@ def _resident_clinic_hard_target_conflicts(
             session=session,
             source_slot=source_slot,
             clinic_occupancy=clinic_occupancy,
+            capacity_view=capacity_view,
         )
     )
     return tuple(dict.fromkeys(reasons))
@@ -969,6 +987,7 @@ def move_resident_clinic_slot(
         raise ValueError("The destination block is locked. Unlock it before swapping.")
 
     clinic_occupancy = occupancy(instance, schedule)
+    capacity_view = schedule_capacity_view(instance, schedule)
     target_conflicts = resident_clinic_target_conflicts(
         instance,
         schedule,
@@ -978,6 +997,7 @@ def move_resident_clinic_slot(
         session=target_session,
         source_slot=source_slot,
         clinic_occupancy=clinic_occupancy,
+        capacity_view=capacity_view,
     )
     target_hard_conflicts = _resident_clinic_hard_target_conflicts(
         instance,
@@ -988,6 +1008,7 @@ def move_resident_clinic_slot(
         session=target_session,
         source_slot=source_slot,
         clinic_occupancy=clinic_occupancy,
+        capacity_view=capacity_view,
     )
     source_conflicts: tuple[str, ...] = ()
     source_hard_conflicts: tuple[str, ...] = ()
@@ -1001,6 +1022,7 @@ def move_resident_clinic_slot(
             session=source_session,
             source_slot=target_slot,
             clinic_occupancy=clinic_occupancy,
+            capacity_view=capacity_view,
         )
         source_hard_conflicts = _resident_clinic_hard_target_conflicts(
             instance,
@@ -1011,6 +1033,7 @@ def move_resident_clinic_slot(
             session=source_session,
             source_slot=target_slot,
             clinic_occupancy=clinic_occupancy,
+            capacity_view=capacity_view,
         )
     hard_conflicts = target_hard_conflicts + source_hard_conflicts
     if hard_conflicts:
@@ -1082,6 +1105,7 @@ def add_resident_clinic_slot(
         week=week,
     )
     clinic_occupancy = occupancy(instance, schedule)
+    capacity_view = schedule_capacity_view(instance, schedule)
     hard_conflicts = _resident_clinic_hard_target_conflicts(
         instance,
         schedule,
@@ -1091,6 +1115,7 @@ def add_resident_clinic_slot(
         session=session,
         source_slot=candidate,
         clinic_occupancy=clinic_occupancy,
+        capacity_view=capacity_view,
     )
     if hard_conflicts:
         raise ValueError(" ".join(hard_conflicts))
@@ -1181,6 +1206,7 @@ def change_resident_clinic_slot_site(
         }
     )
     clinic_occupancy = occupancy(instance, schedule)
+    capacity_view = schedule_capacity_view(instance, schedule)
     hard_conflicts = _resident_clinic_hard_target_conflicts(
         instance,
         schedule,
@@ -1190,6 +1216,7 @@ def change_resident_clinic_slot_site(
         session=session,
         source_slot=candidate,
         clinic_occupancy=clinic_occupancy,
+        capacity_view=capacity_view,
     )
     if hard_conflicts:
         raise ValueError(" ".join(hard_conflicts))
@@ -1202,6 +1229,7 @@ def change_resident_clinic_slot_site(
         session=session,
         source_slot=candidate,
         clinic_occupancy=clinic_occupancy,
+        capacity_view=capacity_view,
     )
     override_reasons = tuple(reason for reason in all_conflicts if reason not in hard_conflicts)
     candidate = candidate.model_copy(

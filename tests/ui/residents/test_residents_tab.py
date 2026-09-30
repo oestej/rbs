@@ -458,6 +458,17 @@ def test_resident_directory_owns_the_new_resident_action() -> None:
     master_split = next(
         element for element in created if "rbs-master-split" in getattr(element, "_classes", [])
     )
+    person_items = [
+        element
+        for element in created
+        if element.__class__.__name__ == "Item"
+        and "rbs-person-directory-item" in getattr(element, "_classes", [])
+    ]
+    person_summaries = [
+        element
+        for element in created
+        if "rbs-person-directory-summary" in getattr(element, "_classes", [])
+    ]
 
     assert "Residents" in labels
     assert any("rbs-master-page" in getattr(element, "_classes", []) for element in created)
@@ -467,6 +478,8 @@ def test_resident_directory_owns_the_new_resident_action() -> None:
     assert "items-stretch" in master_split._classes
     assert "items-start" not in master_split._classes
     assert "rbs-master-no-selection" in master_split._classes
+    assert len(person_items) == len(instance.residents)
+    assert len(person_summaries) == len(instance.residents)
 
 
 def test_new_resident_form_autofocuses_full_name_and_hides_time_off_and_clinic(
@@ -3065,3 +3078,64 @@ def test_individual_days_off_are_sorted_and_unique() -> None:
             pgy=1,
             days_off=[date(2026, 9, 15), date(2026, 9, 15)],
         )
+
+
+def test_clinic_editors_reuse_one_capacity_view_instead_of_rebuilding_it(monkeypatch) -> None:
+    from rbs.models.enums import RotationKind, Session, SolverEngineName, SolverStatus, Weekday
+    from rbs.models.schedule import AssignedClinic, Assignment, Schedule, ScheduleMeta
+    from rbs.solver import attending_availability
+    from rbs.ui.residents import ops
+
+    assert not hasattr(attending_availability, "_VIEW_CACHE")
+    instance = sample_instance()
+    resident = instance.residents[0]
+    schedule = Schedule(
+        meta=ScheduleMeta(
+            academic_year=instance.academic_year,
+            engine=SolverEngineName.STUB,
+            status=SolverStatus.UNKNOWN,
+            solver_status=SolverStatus.UNKNOWN,
+        ),
+        assignments=[
+            Assignment(
+                resident_id=resident.id,
+                rotation_id="fmed",
+                kind=RotationKind.FMED,
+                start_week=1,
+                end_week=1,
+                weeks=[1],
+                clinic_slots=[
+                    AssignedClinic(
+                        weekday=Weekday.TUESDAY,
+                        session=Session.AFTERNOON,
+                        site="cedar",
+                        week=1,
+                    )
+                ],
+            )
+        ],
+    )
+    views: list[object] = []
+    build = ops.schedule_capacity_view
+    monkeypatch.setattr(
+        ops,
+        "schedule_capacity_view",
+        lambda *args: views.append(args) or build(*args),
+    )
+    target = dict(
+        resident_id=resident.id, week=1, weekday=Weekday.THURSDAY, session=Session.MORNING,
+    )
+
+    available = ops.resident_clinic_available_site_ids(instance, schedule, **target)
+    assert {"maple", "cedar"} <= set(available)
+    assert len(views) == 1  # once for every site, not once per site
+
+    view = build(instance, schedule)
+    assert ops.resident_clinic_available_site_ids(
+        instance, schedule, capacity_view=view, **target,
+    ) == available
+    ops.resident_clinic_target_conflicts(
+        instance, schedule, source_slot=schedule.assignments[0].clinic_slots[0],
+        capacity_view=view, **target,
+    )
+    assert len(views) == 1

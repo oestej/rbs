@@ -14,6 +14,7 @@ from rbs.logging import (
 from rbs.models.enums import RotationKind, SolverStatus
 from rbs.models.instance import SolverProblem
 from rbs.models.schedule import Schedule, SolverDiagnostic
+from rbs.solver.clinic_requirements import CODE as UNCOVERABLE_CLINIC_SESSION
 from rbs.solver.readiness import (
     ReadinessIssue,
     ReadinessResult,
@@ -58,7 +59,10 @@ async def _solve(session: WorkspaceSession) -> None:
     workspace = session.workspace()
     if workspace is None:
         return
-    readiness = check_solve_readiness(SolverProblem.from_instance(workspace.instance))
+    readiness = check_solve_readiness(
+        SolverProblem.from_instance(workspace.instance),
+        reference_schedule=workspace.latest_schedule,
+    )
     if not readiness.ready:
         _open_readiness_diagnostics(session, readiness)
         ui.notify(
@@ -422,6 +426,8 @@ def _readiness_destination(
 ) -> tuple[str, str]:
     if issue.code == "missing_elective_fallback":
         return "clinic", "clinic_block_rules"
+    if issue.code == UNCOVERABLE_CLINIC_SESSION:
+        return "clinic", "clinic_sites"
     workspace = session.workspace()
     if issue.rotation_id is None or workspace is None:
         return "rotations", "rotation_summary"
@@ -490,83 +496,19 @@ def _open_rotation_section(
 
 def _solver_outcome(schedule: Schedule) -> SolverOutcomePresentation:
     """Separate model infeasibility, time limits, and post-solve invalidity."""
-    raw_status = schedule.meta.solver_status or schedule.meta.status
-    diagnostics = tuple(schedule.meta.diagnostics) or _fallback_diagnostics(schedule)
-    has_clinic_failure = any(
-        diagnostic.code == "clinic_allocation_capacity" for diagnostic in diagnostics
-    )
-    solved_model = raw_status in {SolverStatus.OPTIMAL, SolverStatus.FEASIBLE}
+    from rbs.solver.failure_report import describe_solver_failure
 
-    if solved_model and schedule.meta.validation_errors:
-        if has_clinic_failure:
-            return SolverOutcomePresentation(
-                title="Block schedule found, but clinic placement failed",
-                detail=(
-                    "The block model was feasible, but clinic-site assignment exceeded "
-                    "configured capacity. The generated schedule was not accepted."
-                ),
-                notification="Clinic placement failed",
-                diagnostics=diagnostics,
-            )
+    report = describe_solver_failure(schedule)
+    if report is None:  # pragma: no cover - callers only ask about failed solves
         return SolverOutcomePresentation(
-            title="Schedule found, but validation failed",
-            detail=(
-                "The solver found a block schedule, but the completed result violated "
-                "one or more schedule rules and was not accepted."
-            ),
-            notification="Schedule validation failed",
-            diagnostics=diagnostics,
+            title="Solver did not produce a schedule",
+            detail="Review the explanation below before trying Solve again.",
+            notification=f"Solver {schedule.meta.status.value}",
+            diagnostics=tuple(schedule.meta.diagnostics),
         )
-
-    if any(diagnostic.code == "model_build_error" for diagnostic in diagnostics):
-        return SolverOutcomePresentation(
-            title="Cannot build schedule model",
-            detail="The configured rules could not be converted into a solver model.",
-            notification="Schedule model could not be built",
-            diagnostics=diagnostics,
-        )
-
-    timed_out = raw_status is SolverStatus.UNKNOWN and any(
-        "within" in note and "no feasible schedule" in note.casefold()
-        for note in schedule.meta.notes
-    )
-    if timed_out:
-        return SolverOutcomePresentation(
-            title="No schedule found in time",
-            detail=(
-                "The search reached its time limit without finding a feasible schedule. "
-                "That does not prove the configuration is impossible."
-            ),
-            notification="Solve reached its time limit",
-            diagnostics=diagnostics,
-        )
-
-    if raw_status is SolverStatus.INFEASIBLE:
-        return SolverOutcomePresentation(
-            title="No feasible block schedule",
-            detail=(
-                "The block-scheduling rules contradict one another. Resolve one of the "
-                "conflicts below and solve again."
-            ),
-            notification="Block schedule is infeasible",
-            diagnostics=diagnostics,
-        )
-
     return SolverOutcomePresentation(
-        title="Solver did not produce a schedule",
-        detail="Review the explanation below before trying Solve again.",
-        notification=f"Solver {schedule.meta.status.value}",
-        diagnostics=diagnostics,
-    )
-
-
-def _fallback_diagnostics(schedule: Schedule) -> tuple[SolverDiagnostic, ...]:
-    messages = list(dict.fromkeys(schedule.meta.validation_errors))
-    if not messages:
-        messages = list(dict.fromkeys(schedule.meta.notes))
-    if not messages:
-        messages = [f"The solver returned {schedule.meta.status.value} without a schedule."]
-    return tuple(
-        SolverDiagnostic(code="solver_outcome", message=message)
-        for message in messages
+        title=report.title,
+        detail=report.detail,
+        notification=report.notification,
+        diagnostics=report.diagnostics,
     )

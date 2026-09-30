@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import date
+from typing import Literal
 
+from rbs.attending_schedule import effective_attending_schedule_week
+from rbs.models.attending import ATTENDING_WORK_TYPE_LABELS, AttendingWorkType
 from rbs.models.clinic import ClinicPolicy, clinic_slot_date
 from rbs.models.curriculum import default_training_level_code
 from rbs.models.enums import WEEKDAYS_MF, RotationKind, Session, Weekday
@@ -14,6 +17,74 @@ from rbs.models.schedule import Assignment, Schedule
 from rbs.models.special import SpecialRotation, SpecialRotationKind
 
 ACADEMIC_LABEL = "Academic Half Day"
+ClinicScheduleView = Literal["residents", "attendings"]
+
+
+@dataclass(frozen=True)
+class AttendingOccupant:
+    attending_id: str
+    name: str
+    work_type: AttendingWorkType
+    site: str | None = None
+    site_name: str | None = None
+    description: str | None = None
+
+    def work_label(self) -> str:
+        label = ATTENDING_WORK_TYPE_LABELS[self.work_type]
+        return f"{label} · {self.site_name}" if self.site_name else label
+
+    def label(self) -> str:
+        label = f"{self.name} · {self.work_label()}"
+        return f"{label} · {self.description}" if self.description else label
+
+
+def attending_occupancy(
+    instance: SchedulerInput,
+    schedule: Schedule | None = None,
+    *,
+    site: str | None = None,
+) -> dict[tuple[int, Weekday, Session], list[AttendingOccupant]]:
+    """Project accepted attending work, including dates, vacation and Admin Time."""
+    board: dict[tuple[int, Weekday, Session], list[AttendingOccupant]] = {
+        (week, day, session): []
+        for week in range(1, instance.calendar.weeks + 1)
+        for day in Weekday
+        for session in Session
+    }
+    attendings = {attending.id: attending for attending in instance.attendings}
+    work_by_week = instance.scheduled_attending_work(schedule)
+    effective_weeks = (
+        effective_attending_schedule_week(
+            instance, attending, week, work_by_week=work_by_week,
+        )
+        for attending in instance.attendings
+        for week in range(1, instance.calendar.weeks + 1)
+    )
+    for effective in effective_weeks:
+        for assignment in effective.assignments:
+            clinic_id = assignment.clinic_id
+            if site is not None and clinic_id != site:
+                continue
+            calendar_day = clinic_slot_date(
+                instance.calendar.first_week_start, effective.week, assignment.weekday,
+            )
+            if clinic_id and instance.clinic_policy.is_site_closed(clinic_id, calendar_day):
+                continue
+            board[(effective.week, assignment.weekday, assignment.session)].append(
+                AttendingOccupant(
+                    attending_id=effective.attending_id,
+                    name=attendings[effective.attending_id].name,
+                    work_type=assignment.work_type,
+                    site=clinic_id,
+                    site_name=instance.clinic_policy.site_name(clinic_id) if clinic_id else None,
+                    description=assignment.description,
+                )
+            )
+    for people in board.values():
+        people.sort(key=lambda person: (
+            person.name.rsplit(" ", 1)[-1].casefold(), person.name.casefold(), person.attending_id,
+        ))
+    return board
 
 WEEKDAY_SHORT = {
     Weekday.MONDAY: "Mon",
@@ -84,7 +155,12 @@ class ClinicClosureView:
         return f"{self.name} · {status}" if self.name else status
 
 
-def clinic_weekdays(instance: SchedulerInput | None = None) -> tuple[Weekday, ...]:
+def clinic_weekdays(
+    instance: SchedulerInput | None = None,
+    *,
+    view: ClinicScheduleView = "residents",
+    schedule: Schedule | None = None,
+) -> tuple[Weekday, ...]:
     """Return the weekdays needed by the clinic calendar projection."""
     days = set(WEEKDAYS_MF)
     if instance is not None:
@@ -108,13 +184,45 @@ def clinic_weekdays(instance: SchedulerInput | None = None) -> tuple[Weekday, ..
             for special in instance.special_rotations
             if special.kind is SpecialRotationKind.EVENT
         )
+        if view == "attendings":
+            days.update(
+                assignment.weekday
+                for schedule in instance.attending_schedules
+                for week in schedule.weeks
+                for assignment in week.half_days
+            )
+            days.update(
+                item.weekday
+                for items in instance.scheduled_attending_work(schedule).values()
+                for item in items
+            )
+            if (
+                instance.attendings
+                and instance.clinic_policy.academic_half_day_is_attending_admin_time
+            ):
+                # A program may run no recurring academic half-day, and a
+                # one-week override may cancel its week instead of moving it.
+                recurring = instance.clinic_policy.recurring_academic_half_day
+                if recurring is not None:
+                    days.add(recurring[0])
+                days.update(
+                    override.weekday
+                    for override in instance.academic_half_day_overrides
+                    if override.weekday is not None
+                )
     return tuple(day for day in Weekday if day in days)
 
 
 def half_days(
     instance: SchedulerInput | None = None,
+    *,
+    view: ClinicScheduleView = "residents",
+    schedule: Schedule | None = None,
 ) -> list[tuple[Weekday, Session]]:
-    return [(day, session) for day in clinic_weekdays(instance) for session in Session]
+    return [
+        (day, session)
+        for day in clinic_weekdays(instance, view=view, schedule=schedule) for session in Session
+    ]
 
 
 def is_academic(policy: ClinicPolicy, weekday: Weekday, session: Session) -> bool:

@@ -22,6 +22,7 @@ def summarize(instance: SchedulerInput) -> str:
             for curriculum in instance.requirements
         )
         + f" (total {len(instance.residents)})",
+        f"attendings: {len(instance.attendings)}",
         f"rotations: {len(instance.rotations)}",
     ]
     for curriculum in instance.requirements:

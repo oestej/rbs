@@ -153,6 +153,16 @@ def _dispatch(args: argparse.Namespace) -> int:
         for error in schedule.meta.validation_errors:
             print(f"error: {error}", file=sys.stderr)
         if schedule.meta.status in {SolverStatus.INFEASIBLE, SolverStatus.UNKNOWN}:
+            from rbs.solver.failure_report import describe_solver_failure
+
+            report = describe_solver_failure(schedule)
+            if report is not None:
+                print(f"failure: {report.title}", file=sys.stderr)
+                print(f"detail: {report.detail}", file=sys.stderr)
+                for diagnostic in report.diagnostics:
+                    print(f"conflict: {diagnostic.message}", file=sys.stderr)
+                    for suggestion in diagnostic.suggestions:
+                        print(f"suggestion: {suggestion}", file=sys.stderr)
             return 2
         return 0
 

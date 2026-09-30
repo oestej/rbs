@@ -3,6 +3,9 @@
 CLINIC_HOVER_SCRIPT = """
 (() => {
   let active = null, card = null, timer = null, titled = null, title = '';
+  const dateFormatter = new Intl.DateTimeFormat('en-US', {
+    month: 'long', day: 'numeric', year: 'numeric',
+  });
   function close() {
     clearTimeout(timer);
     if (active) active.removeAttribute('aria-describedby');
@@ -14,7 +17,10 @@ CLINIC_HOVER_SCRIPT = """
     clearTimeout(timer);
     if (active === target) return;
     close();
-    const source = target.querySelector('.rbs-clinic-detail-source');
+    const detailKey = target.dataset.clinicDetail;
+    const template = detailKey === undefined ? null : target.closest('.rbs-clinic-wrap')
+      ?.querySelector(`template[data-clinic-detail="${detailKey}"]`);
+    const source = template?.content || target.querySelector('.rbs-clinic-detail-source');
     if (!source) return;
     active = target;
     titled = target.closest('[title]');
@@ -28,6 +34,15 @@ CLINIC_HOVER_SCRIPT = """
     if (target.classList.contains('admin')) card.classList.add('is-admin');
     card.id = 'rbs-clinic-active-detail';
     card.setAttribute('role', 'tooltip');
+    if (template) {
+      const date = target.closest('.rbs-clinic-day').querySelector('time').dateTime;
+      const session = target.closest('.rbs-clinic-session')
+        .querySelector('.rbs-clinic-session-label').textContent;
+      const heading = document.createElement('div');
+      heading.className = 'rbs-clinic-detail-date';
+      heading.textContent = dateFormatter.format(new Date(date + 'T12:00:00')) + ' · ' + session;
+      card.append(heading);
+    }
     for (const child of source.childNodes) card.append(child.cloneNode(true));
     document.body.append(card);
     target.setAttribute('aria-describedby', card.id);
@@ -65,7 +80,11 @@ CLINIC_HOVER_SCRIPT = """
     if (card && !card.contains(event.target)) close();
   }, true);
   window.addEventListener('resize', close);
-  new MutationObserver(() => { if (active && !active.isConnected) close(); })
-    .observe(document.documentElement, {childList: true, subtree: true});
+  new MutationObserver(() => {
+    if (active && (!active.isConnected || active.closest('.is-inactive')
+        || !active.getClientRects().length)) close();
+  }).observe(document.documentElement, {
+    childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'],
+  });
 })();
 """

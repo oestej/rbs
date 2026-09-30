@@ -20,7 +20,11 @@ class ObjectiveWeights(StrictModel):
     attending_sessions: int = Field(
         default=300,
         ge=0,
-        description="Attending half-day shifts the primary clinic must staff across the year.",
+        description=(
+            "Attending half-day shifts to staff across the year: estimated at the "
+            "primary clinic, and the precepting the solve schedules at "
+            "attending-managed clinics."
+        ),
     )
     preferred_clinic_slots: int = Field(
         default=100,

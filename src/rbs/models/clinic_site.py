@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
+from enum import StrEnum
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
@@ -30,6 +31,13 @@ _WEEKDAY_OFFSETS = {
     Weekday.SATURDAY: 5,
     Weekday.SUNDAY: 6,
 }
+
+
+class ClinicStaffingMode(StrEnum):
+    """How a clinic's resident capacity is supplied."""
+
+    CAPACITY_MANAGED = "capacity_managed"
+    ATTENDING_MANAGED = "attending_managed"
 
 
 def lighten_hex_color(color: str, *, white_mix: float = 0.9) -> str:
@@ -103,6 +111,7 @@ class ClinicSiteConfig(StrictModel):
     id: str
     name: str = Field(min_length=1)
     color: str
+    staffing_mode: ClinicStaffingMode = ClinicStaffingMode.CAPACITY_MANAGED
     residents_per_attending: int = Field(
         default=4, ge=1,
         description="Capacity points per attending (legacy serialized key retained).",
@@ -193,20 +202,21 @@ class ClinicSiteConfig(StrictModel):
 
     @model_validator(mode="after")
     def minimums_fit_derived_capacity(self) -> ClinicSiteConfig:
-        for half_day in self.half_days:
-            maximum = half_day.max_residents(self.residents_per_attending)
-            if half_day.min_residents > maximum:
-                raise ValueError(
-                    f"{self.name} {half_day.weekday.value} {half_day.session.value}: "
-                    "minimum residents cannot exceed derived maximum capacity"
-                )
-        for override in self.capacity_overrides:
-            maximum = override.max_residents(self.residents_per_attending)
-            if override.min_residents > maximum:
-                raise ValueError(
-                    f"{self.name} {override.date} {override.session.value} override: "
-                    "minimum residents cannot exceed derived maximum capacity"
-                )
+        if self.staffing_mode is ClinicStaffingMode.CAPACITY_MANAGED:
+            for half_day in self.half_days:
+                maximum = half_day.max_residents(self.residents_per_attending)
+                if half_day.min_residents > maximum:
+                    raise ValueError(
+                        f"{self.name} {half_day.weekday.value} {half_day.session.value}: "
+                        "minimum residents cannot exceed derived maximum capacity"
+                    )
+            for override in self.capacity_overrides:
+                maximum = override.max_residents(self.residents_per_attending)
+                if override.min_residents > maximum:
+                    raise ValueError(
+                        f"{self.name} {override.date} {override.session.value} override: "
+                        "minimum residents cannot exceed derived maximum capacity"
+                    )
         scopes = [rule.scope_key for rule in self.allocation_rules]
         if len(scopes) != len(set(scopes)):
             raise ValueError(f"{self.name} allocation overrides must use unique scopes")
@@ -259,14 +269,30 @@ class ClinicSiteConfig(StrictModel):
         return self._override_by_date_session.get((calendar_day, session))
 
     def max_capacity_on(self, calendar_day: date, session: Session) -> int:
-        """Return effective capacity after closures and date-specific overrides."""
+        """Return staffed capacity after closures and date-specific overrides.
+
+        This is the capacity of a capacity-managed clinic, whose grid names
+        the attendings staffing it. An attending-managed clinic seats only
+        whoever is scheduled to precept; ask the solver problem instead.
+        """
+        return self.max_attendings_on(calendar_day, session) * self.residents_per_attending
+
+    def max_attendings_on(self, calendar_day: date, session: Session) -> int:
+        """Most attendings who may precept here on one date and session.
+
+        The weekly half-day grid and dated overrides mean the same thing in
+        both staffing modes: a capacity-managed clinic is staffed by exactly
+        this many attendings, while an attending-managed clinic may have up
+        to this many scheduled to precept. Zero means nobody precepts then.
+        """
         if self.is_closed(calendar_day):
             return 0
         override = self.capacity_override(calendar_day, session)
         if override is not None:
-            return override.max_residents(self.residents_per_attending)
+            return override.attendings
         weekday = tuple(Weekday)[calendar_day.weekday()]
-        return self.max_capacity(weekday, session)
+        half_day = self.half_day(weekday, session)
+        return half_day.attendings if half_day is not None else 0
 
     def min_capacity_on(self, calendar_day: date, session: Session) -> int:
         """Return the effective minimum after closures and overrides."""

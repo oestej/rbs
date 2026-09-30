@@ -5,18 +5,23 @@ from __future__ import annotations
 import html
 from datetime import date, timedelta
 
-from rbs.models.clinic import ClinicPolicy
+from rbs.models.attending import ATTENDING_WORK_TYPE_LABELS, AttendingWorkType
+from rbs.models.clinic import ClinicPolicy, ClinicStaffingMode
 from rbs.models.curriculum import default_training_level_code
 from rbs.models.enums import Session, Weekday
-from rbs.models.instance import SchedulerInput
+from rbs.models.instance import SchedulerInput, SolverProblem
 from rbs.models.schedule import Assignment, Schedule
 from rbs.models.special import SpecialRotation
+from rbs.solver.attending_availability import schedule_capacity_view
 from rbs.ui.clinic.details import clinic_details
 from rbs.ui.clinic.projection import (
     ACADEMIC_LABEL,
     SESSION_SHORT,
+    AttendingOccupant,
     ClinicClosureView,
     ClinicOccupant,
+    ClinicScheduleView,
+    attending_occupancy,
     calendar_occupants,
     clinic_closure_view,
     clinic_weekdays,
@@ -30,6 +35,8 @@ from rbs.ui.schedule_projection import visible_week_numbers, week_monday
 
 __all__ = ["render_clinic_html", "render_clinic_legend_html"]
 
+DetailTemplates = dict[tuple[tuple[str, str], ...], int]
+
 
 def render_clinic_html(
     instance: SchedulerInput,
@@ -39,8 +46,12 @@ def render_clinic_html(
     today: date | None = None,
     site: str | None = None,
     show_legend: bool = True,
+    view: ClinicScheduleView = "residents",
 ) -> str:
-    board = occupancy(instance, schedule)
+    board = occupancy(instance, schedule) if view == "residents" else {}
+    attending_board = (
+        attending_occupancy(instance, schedule, site=site) if view == "attendings" else None
+    )
     assignments = {
         (assignment.resident_id, week): assignment
         for assignment in (schedule.assignments if schedule else [])
@@ -48,22 +59,45 @@ def render_clinic_html(
     }
     start = instance.calendar.first_week_start
     policy = instance.clinic_policy
-    weekdays = clinic_weekdays(instance)
+    weekdays = clinic_weekdays(instance, view=view, schedule=schedule)
     weeks = visible_week_numbers(
         start,
         instance.calendar.weeks,
         show_past_weeks=show_past_weeks,
         today=today,
     )
+    detail_templates: DetailTemplates = {}
+    capacity_view = schedule_capacity_view(instance, schedule)
     calendar = "".join(
-        _calendar_week_html(instance, board, week, site, assignments) for week in weeks
+        _calendar_week_html(
+            instance, board, week, site, assignments, attending_board, weekdays, detail_templates,
+            capacity_view,
+        )
+        for week in weeks
     )
-    legend = render_clinic_legend_html(policy) if show_legend else ""
+    shared_details = "".join(
+        '<template class="rbs-clinic-detail-source" hidden '
+        f'data-clinic-detail="{key}"><dl>'
+        + "".join(_detail_row_html(label, value) for label, value in details)
+        + "</dl></template>"
+        for details, key in detail_templates.items()
+    )
+    legend = render_clinic_legend_html(policy, view=view) if show_legend else ""
+    empty = ""
+    if attending_board is not None and not any(
+        people for (week, _day, _session), people in attending_board.items() if week in weeks
+    ):
+        empty = '<p class="rbs-type-secondary rbs-text-muted">' + (
+            "No attendings yet. Add attendings and configure their week-by-week schedules "
+            "in Attendings."
+            if not instance.attendings
+            else "No attending work is scheduled for the selected sites and dates."
+        ) + "</p>"
     return (
-        f"{legend}"
+        f"{legend}{empty}"
         '<div class="rbs-clinic-wrap rbs-clinic-calendar-wrap">'
         f'<div class="rbs-clinic-calendar" role="grid" '
-        f'style="--rbs-clinic-days:{len(weekdays)}">{calendar}</div></div>'
+        f'style="--rbs-clinic-days:{len(weekdays)}">{calendar}</div>{shared_details}</div>'
     )
 
 
@@ -73,9 +107,12 @@ def _calendar_week_html(
     week: int,
     site: str | None,
     assignments: dict[tuple[str, int], Assignment],
+    attending_board: dict[tuple[int, Weekday, Session], list[AttendingOccupant]] | None,
+    weekdays: tuple[Weekday, ...],
+    detail_templates: DetailTemplates,
+    capacity_view: SolverProblem,
 ) -> str:
     monday = week_monday(instance.calendar.first_week_start, week)
-    weekdays = clinic_weekdays(instance)
     days = "".join(
         _calendar_day_html(
             instance,
@@ -85,6 +122,9 @@ def _calendar_week_html(
             monday + timedelta(days=list(Weekday).index(weekday)),
             site,
             assignments,
+            attending_board,
+            detail_templates,
+            capacity_view,
         )
         for weekday in weekdays
     )
@@ -104,9 +144,20 @@ def _calendar_day_html(
     calendar_day: date,
     site: str | None,
     assignments: dict[tuple[str, int], Assignment],
+    attending_board: dict[tuple[int, Weekday, Session], list[AttendingOccupant]] | None,
+    detail_templates: DetailTemplates,
+    capacity_view: SolverProblem,
 ) -> str:
     closure = clinic_closure_view(instance.clinic_policy, calendar_day, site)
-    if closure.all_selected_sites_closed:
+    if attending_board is not None:
+        sessions = "".join(
+            _attending_session_html(
+                instance, attending_board[(week, weekday, session)], calendar_day, session, closure,
+                detail_templates,
+            )
+            for session in Session
+        )
+    elif closure.all_selected_sites_closed:
         sessions = "".join(
             _closed_session_html(instance, calendar_day, session, closure) for session in Session
         )
@@ -121,6 +172,8 @@ def _calendar_day_html(
                 calendar_day,
                 site,
                 assignments,
+                detail_templates,
+                capacity_view,
             )
             for session in Session
         )
@@ -156,6 +209,57 @@ def _calendar_day_html(
     )
 
 
+def _attending_session_html(
+    instance: SchedulerInput,
+    people: list[AttendingOccupant],
+    calendar_day: date,
+    session: Session,
+    closure: ClinicClosureView,
+    detail_templates: DetailTemplates,
+) -> str:
+    session_label = SESSION_SHORT[session]
+    title = html.escape(" · ".join(
+        [f"{calendar_day:%b} {calendar_day.day} · {session_label}",
+         *[person.label() for person in people]],
+    ))
+    names = "".join(_attending_html(instance, person, detail_templates) for person in people)
+    if not names and closure.all_selected_sites_closed:
+        names = "Closed"
+    return (
+        f'<section class="rbs-clinic-session" title="{title}">'
+        '<div class="rbs-clinic-session-heading">'
+        f'<span class="rbs-clinic-session-label">{session_label}</span></div>'
+        f'<div class="rbs-clinic-session-body">{names}</div></section>'
+    )
+
+
+def _attending_html(
+    instance: SchedulerInput,
+    person: AttendingOccupant,
+    detail_templates: DetailTemplates,
+) -> str:
+    classes = "rbs-clinic-person rbs-clinic-attending"
+    style = ""
+    if person.site:
+        site = instance.clinic_policy.site(person.site)
+        classes += " site"
+        style = f' style="{_site_style(site.color, site.light_color)}"'
+    elif person.work_type is AttendingWorkType.ADMIN_TIME:
+        classes += " admin"
+    details = [("Attending", person.name), ("Scheduled", person.work_label())]
+    if person.description:
+        details.append(("Description", person.description))
+    detail_key = detail_templates.setdefault(tuple(details), len(detail_templates))
+    return (
+        f'<div class="{classes}"{style} tabindex="0" '
+        f'data-clinic-detail="{detail_key}" '
+        f'aria-label="{html.escape(person.label(), quote=True)}; attending details">'
+        f"{_name_html(person.name)}"
+        f'<span class="rbs-clinic-attending-work">{html.escape(person.work_label())}</span>'
+        '</div>'
+    )
+
+
 def _closed_session_html(
     instance: SchedulerInput,
     calendar_day: date,
@@ -185,6 +289,8 @@ def _calendar_session_html(
     calendar_day: date,
     site: str | None,
     assignments: dict[tuple[str, int], Assignment],
+    detail_templates: DetailTemplates,
+    capacity_view: SolverProblem,
 ) -> str:
     policy = instance.clinic_policy
     session_label = SESSION_SHORT[session]
@@ -227,8 +333,9 @@ def _calendar_session_html(
                 week,
                 weekday,
                 session,
+                capacity_view=capacity_view,
             ),
-            f"{calendar_day:%B} {calendar_day.day}, {calendar_day.year} · {session_label}",
+            detail_templates,
             week=week,
         )
         for person in people
@@ -237,19 +344,31 @@ def _calendar_session_html(
     attending_markers = []
     sites = (site,) if site is not None else policy.site_ids
     for clinic_site in sites:
+        site_config = policy.site(clinic_site)
         needed = policy.attendings_needed(
             site_capacity_points(people, clinic_site),
             clinic_site,
         )
-        if needed:
-            site_config = policy.site(clinic_site)
-            attending_details.append(
+        count = needed
+        if site_config.staffing_mode is ClinicStaffingMode.ATTENDING_MANAGED:
+            count = capacity_view.clinic_attending_count_on(clinic_site, calendar_day, session)
+            maximum = capacity_view.clinic_max_capacity_on(clinic_site, calendar_day, session)
+            detail = (
+                f"{site_config.name}: {count} preceptor{'s' if count != 1 else ''} scheduled"
+                f" · {maximum} capacity points · {needed} needed"
+            )
+        else:
+            detail = (
                 f"{needed} attending{'s' if needed != 1 else ''} at {site_config.name}"
             )
+        if count or needed:
+            attending_details.append(detail)
             attending_markers.append(
                 '<span class="rbs-clinic-session-att" '
+                f'title="{html.escape(detail, quote=True)}" '
+                f'aria-label="{html.escape(detail, quote=True)}" '
                 f'style="--rbs-clinic-att-color:{site_config.color}">'
-                f"{needed} {html.escape(site_config.name)}</span>"
+                f"{count} {html.escape(site_config.name)}</span>"
             )
     title_bits = [title_prefix]
     if people:
@@ -297,15 +416,25 @@ def _special_event_html(
     )
 
 
-def render_clinic_legend_html(policy: ClinicPolicy) -> str:
+def render_clinic_legend_html(
+    policy: ClinicPolicy, *, view: ClinicScheduleView = "residents",
+) -> str:
     swatches = "".join(
         '<span class="rbs-clinic-swatch site" '
         f'style="{_site_style(site.color, site.light_color)}">'
         f"{html.escape(site.name)}</span>"
         for site in policy.sites
     )
-    swatches += '<span class="rbs-clinic-swatch admin">Admin</span>'
-    swatches += '<span class="rbs-clinic-swatch special-event">Special event</span>'
+    if view == "attendings":
+        swatches += "".join(
+            '<span class="rbs-clinic-swatch'
+            f'{" admin" if kind is AttendingWorkType.ADMIN_TIME else ""}">'
+            f"{html.escape(label)}</span>"
+            for kind, label in ATTENDING_WORK_TYPE_LABELS.items()
+        )
+    else:
+        swatches += '<span class="rbs-clinic-swatch admin">Admin</span>'
+        swatches += '<span class="rbs-clinic-swatch special-event">Special event</span>'
     return (
         '<div class="rbs-clinic-legend">'
         f'<span class="rbs-clinic-key-label">Key</span>{swatches}</div>'
@@ -315,7 +444,7 @@ def render_clinic_legend_html(policy: ClinicPolicy) -> str:
 def _person_html(
     person: ClinicOccupant,
     details: list[tuple[str, str]],
-    when: str,
+    detail_templates: DetailTemplates,
     *,
     week: int,
 ) -> str:
@@ -327,16 +456,15 @@ def _person_html(
     style = ""
     if person.site_color and person.site_light_color:
         style = f' style="{_site_style(person.site_color, person.site_light_color)}"'
-    rows = "".join(_detail_row_html(label, value) for label, value in details)
+    detail_key = detail_templates.setdefault(tuple(details), len(detail_templates))
     return (
         f'<div class="{classes}"{style} tabindex="0" '
         f'data-resident-id="{html.escape(person.resident_id, quote=True)}" '
         f'data-start-week="{week}" '
+        f'data-clinic-detail="{detail_key}" '
         f'aria-label="{html.escape(person.label())}; clinic details">'
         f"{_display_label_html(person)}"
-        '<div class="rbs-clinic-detail-source" hidden>'
-        f'<div class="rbs-clinic-detail-date">{html.escape(when)}</div>'
-        f"<dl>{rows}</dl></div></div>"
+        '</div>'
     )
 
 
@@ -359,16 +487,23 @@ def _site_style(color: str, light_color: str) -> str:
 
 
 def _display_label_html(person: ClinicOccupant) -> str:
-    name_parts = person.name.rsplit(" ", 1)
+    training_level = html.escape(
+        person.training_level_code or default_training_level_code(person.pgy)
+    )
+    return (
+        f'<span class="rbs-clinic-training-level">{training_level}</span> '
+        f'{_name_html(person.name)}'
+    )
+
+
+def _name_html(name: str) -> str:
+    name_parts = name.rsplit(" ", 1)
     if len(name_parts) == 1:
-        name_html = f'<strong class="rbs-clinic-last-name">{html.escape(person.name)}</strong>'
+        name_html = f'<strong class="rbs-clinic-last-name">{html.escape(name)}</strong>'
     else:
         given_names, last_name = name_parts
         name_html = (
             f"{html.escape(given_names)} "
             f'<strong class="rbs-clinic-last-name">{html.escape(last_name)}</strong>'
         )
-    training_level = html.escape(
-        person.training_level_code or default_training_level_code(person.pgy)
-    )
-    return f'<span class="rbs-clinic-training-level">{training_level}</span> {name_html}'
+    return name_html
