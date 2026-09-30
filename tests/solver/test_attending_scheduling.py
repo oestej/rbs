@@ -537,6 +537,65 @@ def test_validation_rejects_precepting_beyond_a_clinics_maximum() -> None:
     assert any("2 attendings precept, but at most 1 may" in error for error in errors)
 
 
+def test_work_kept_by_hand_may_exceed_a_maximum_the_solve_still_respects() -> None:
+    attendings = [
+        _one_week(
+            f"attending-00{index}",
+            f"Attending {index}",
+            half_days_per_week=1,
+            preferred_weekly_schedule_half_days=[_work(TUE, AM, PC, CLINIC)],
+        )
+        for index in range(1, 4)
+    ]
+    # Attending 1 precepts on Tuesday by hand and attending 2 by a lock, so
+    # the clinic's maximum of one is already overridden.
+    problem = _problem(
+        attendings,
+        grid=[(TUE, AM, 1)],
+        schedules=[
+            AttendingSchedule(
+                attending_id="attending-001",
+                weeks=[AttendingWeeklyWorkSchedule(week=1, half_days=[_work(TUE, AM, PC, CLINIC)])],
+            )
+        ],
+    )
+    locked = AssignedAttendingWork(
+        attending_id="attending-002", week=1, weekday=TUE, session=AM,
+        work_type=PC, clinic_id=CLINIC, locked=True, manual_override=True,
+    )
+    demand = _demand(problem, {(1, TUE, AM): 1})
+
+    result = schedule_attending_work(
+        problem, demand, attending_week_facts(problem, _schedule(problem, [locked])), cp_model,
+    )
+
+    # The solve keeps the override and adds no third preceptor beside it.
+    assert [
+        item for item in result.work
+        if item.work_type is PC and (item.weekday, item.session) == (TUE, AM)
+    ] == [locked]
+    # Validate the attending work alone; the demand's residents are placeholders.
+    solved = _schedule(problem, result.work)
+
+    def maximum_errors(schedule: Schedule) -> list[str]:
+        errors = validate_schedule(problem, schedule).errors
+        return [error for error in errors if "at most" in error]
+
+    assert maximum_errors(solved) == []
+    # A solve that placed one more there would still be rejected.
+    extra = AssignedAttendingWork(
+        attending_id="attending-003", week=1, weekday=TUE, session=AM,
+        work_type=PC, clinic_id=CLINIC,
+    )
+    over = solved.revised(attending_work=[*solved.attending_work, extra])
+    assert any("3 attendings precept, but at most 1 may" in error for error in maximum_errors(over))
+    # A working draft may hold hand edits over the maximum until the next solve.
+    draft = over.revised(meta=over.meta.revised(
+        status=SolverStatus.UNKNOWN, solver_status=SolverStatus.UNKNOWN,
+    ))
+    assert maximum_errors(draft) == []
+
+
 # Output validation ---------------------------------------------------------
 
 

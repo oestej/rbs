@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter, defaultdict
 from datetime import date, timedelta
 
 from rbs.attending_schedule import effective_attending_schedule_week
@@ -17,6 +18,7 @@ from rbs.models.attending import (
     AttendingWorkHalfDay,
     AttendingWorkType,
 )
+from rbs.models.clinic import clinic_slot_date
 from rbs.models.enums import Session, SolverStatus, Weekday
 from rbs.models.instance import SchedulerInput
 from rbs.models.schedule import AssignedAttendingWork, Schedule, ScheduleMeta, ScheduleMetrics
@@ -737,6 +739,148 @@ def move_attending_schedule_half_day(
     return updated, draft.revised(attending_work=[
         *(item for item in draft.attending_work if item.key not in keys), *replacements,
     ])
+
+
+PreceptingHalfDay = tuple[str, Weekday, Session]
+
+
+def precepting_over_maximum(
+    instance: SchedulerInput,
+    schedule: Schedule | None,
+    week: int,
+) -> dict[PreceptingHalfDay, tuple[int, int]]:
+    """Clinic half-days in one week where more attendings precept than allowed.
+
+    Every attending's work counts the way the calendar shows it: hand-entered
+    work, the schedule's work around it, dates, and vacation. Values are the
+    number of attendings precepting and the clinic's maximum for that date.
+    """
+    scheduled: dict[str, list[AssignedAttendingWork]] = defaultdict(list)
+    if schedule is not None and schedule.meta.academic_year == instance.academic_year:
+        for item in schedule.attending_work:
+            if item.week == week:
+                scheduled[item.attending_id].append(item)
+    site_ids = set(instance.clinic_policy.site_ids)
+    counts: Counter[PreceptingHalfDay] = Counter()
+    for attending in instance.attendings:
+        effective = instance.effective_attending_week(
+            attending,
+            week,
+            scheduled_work=scheduled.get(attending.id, ()),
+        )
+        for assignment in effective.assignments:
+            if (
+                assignment.work_type is AttendingWorkType.PRECEPTING_CLINIC
+                and assignment.clinic_id in site_ids
+            ):
+                counts[assignment.clinic_id, assignment.weekday, assignment.session] += 1
+    over: dict[PreceptingHalfDay, tuple[int, int]] = {}
+    for (clinic_id, weekday, session), count in counts.items():
+        maximum = instance.clinic_max_attendings_on(
+            clinic_id,
+            clinic_slot_date(instance.calendar.first_week_start, week, weekday),
+            session,
+        )
+        if count > maximum:
+            over[clinic_id, weekday, session] = (count, maximum)
+    return over
+
+
+def _precepting_over_maximum_text(
+    instance: SchedulerInput,
+    clinic_id: str,
+    calendar_day: date,
+    count: int,
+    maximum: int,
+    *,
+    when: str,
+) -> str:
+    site = instance.clinic_policy.site(clinic_id)
+    precepting = "1 attending precepts" if count == 1 else f"{count} attendings precept"
+    if site.is_closed(calendar_day):
+        return f"{site.name} is closed {when}, but {precepting} there."
+    if maximum == 0:
+        return f"{site.name} allows no precepting {when}, but {precepting} there."
+    allowed = "1 attending" if maximum == 1 else f"{maximum} attendings"
+    return f"{site.name} allows at most {allowed} to precept {when}, but {precepting} there."
+
+
+def precepting_maximum_warning(
+    instance: SchedulerInput,
+    schedule: Schedule | None,
+    attending_id: str,
+    *,
+    week: int,
+    weekday: Weekday,
+    session: Session,
+) -> str | None:
+    """Explain an accepted edit that puts a clinic over its maximum attendings.
+
+    Edits may override a clinic's maximum; the solve never does. The message
+    says what is over and how to keep or allow the override.
+    """
+    item = attending_schedule_work_on(
+        instance, schedule, attending_id, week=week, weekday=weekday, session=session,
+    )
+    if (
+        item is None
+        or item.work_type is not AttendingWorkType.PRECEPTING_CLINIC
+        or item.clinic_id is None
+    ):
+        return None
+    over = precepting_over_maximum(instance, schedule, week).get(
+        (item.clinic_id, weekday, session)
+    )
+    if over is None:
+        return None
+    site = instance.clinic_policy.site(item.clinic_id)
+    calendar_day = clinic_slot_date(instance.calendar.first_week_start, week, weekday)
+    when = (
+        f"on {calendar_day:%a}, {calendar_day:%b} {calendar_day.day} "
+        f"{'AM' if session is Session.MORNING else 'PM'}"
+    )
+    message = (
+        _precepting_over_maximum_text(instance, item.clinic_id, calendar_day, *over, when=when)
+        + " Saved as a manual override."
+    )
+    coverage = (
+        "Max attendings"
+        if item.clinic_id in instance.attending_managed_clinic_ids
+        else "attending coverage"
+    )
+    # A closed clinic has no maximum to raise.
+    allow = None if site.is_closed(calendar_day) else (
+        f"raise {site.name}'s {coverage} for that date with an exception in the Clinic tab"
+    )
+    in_schedule = schedule is not None and any(
+        existing.key == item.key for existing in schedule.attending_work
+    )
+    if in_schedule and not attending_work_is_locked(instance, item):
+        # Unlocked schedule work only guides the next solve, which keeps
+        # every clinic within its maximum.
+        keep = "Lock this work half-day to keep it through the next solve"
+        return f"{message} {keep}, or {allow} to allow it." if allow else f"{message} {keep}."
+    return f"{message} To allow it, {allow}." if allow else message
+
+
+def precepting_maximum_marker(
+    instance: SchedulerInput,
+    over: dict[PreceptingHalfDay, tuple[int, int]],
+    clinic_id: str | None,
+    calendar_day: date,
+    session: Session,
+) -> str | None:
+    """Calendar explanation for work at a clinic half-day over its maximum."""
+    weekday = tuple(Weekday)[calendar_day.weekday()]
+    if clinic_id is None or (clinic_id, weekday, session) not in over:
+        return None
+    return _precepting_over_maximum_text(
+        instance,
+        clinic_id,
+        calendar_day,
+        *over[clinic_id, weekday, session],
+        when="on this half-day",
+    )
 
 
 def add_vacation_range(

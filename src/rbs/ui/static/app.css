@@ -1111,6 +1111,12 @@
   padding-right: var(--rbs-space-8);
 }
 
+.rbs-attending-schedule-calendar
+  .rbs-resident-clinic-session-cell:has(> .rbs-resident-clinic-conflict-icon)
+  .rbs-resident-clinic-event {
+  padding-left: var(--rbs-space-6);
+}
+
 .rbs-attending-work-content {
   align-items: center;
   overflow-wrap: anywhere;

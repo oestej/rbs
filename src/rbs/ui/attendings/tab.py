@@ -48,6 +48,9 @@ from rbs.ui.attendings.ops import (
     next_attending_id,
     override_weekly_half_day_total,
     parse_attending_date,
+    precepting_maximum_marker,
+    precepting_maximum_warning,
+    precepting_over_maximum,
     remove_attending,
     replace_attending_schedule,
     replace_attending_with_schedule,
@@ -623,13 +626,14 @@ def _attending_schedule_calendar(
         snapshot: tuple[SchedulerInput, Schedule | None],
         updated: tuple[SchedulerInput, Schedule | None],
         week: int | None,
-    ) -> None:
+    ) -> bool:
+        """Save an edit made from ``snapshot``; return whether anything changed."""
         nonlocal instance, schedule
         if (calendar.is_deleted or not editing
                 or snapshot[0] is not instance or snapshot[1] is not schedule):
             raise ValueError("This attending schedule changed. Reopen the half-day and try again.")
         if updated == (instance, schedule):
-            return
+            return False
         if on_work_save is not None:
             on_work_save(*updated, attending.id)
         elif on_save is not None and updated[1] == schedule:
@@ -638,11 +642,12 @@ def _attending_schedule_calendar(
             raise ValueError("Reopen this attending's schedule before editing it.")
         instance, schedule = updated
         if calendar.is_deleted:
-            return
+            return True
         if on_change is not None:
             on_change(*updated)
         for changed_week in week_containers if week is None else (week,):
             render_week(changed_week)
+        return True
 
     def open_slot(week: int, weekday: Weekday, session: Session) -> None:
         snapshot = instance, schedule
@@ -656,7 +661,8 @@ def _attending_schedule_calendar(
                 *snapshot, attending.id, week=week, weekday=weekday, session=session,
                 assignment=value,
             )
-            commit(snapshot, updated, week)
+            if commit(snapshot, updated, week):
+                warn_over_maximum(week, [(weekday, session)])
 
         _work_half_day_dialog(
             instance,
@@ -680,6 +686,22 @@ def _attending_schedule_calendar(
         except (ValidationError, ValueError) as exc:
             ui.notify(_validation_message(exc), type="negative", multi_line=True)
 
+    def warn_over_maximum(week: int, half_days: list[tuple[Weekday, Session]]) -> bool:
+        """Explain an edit that put a clinic over its daily maximum, if one did."""
+        messages = [
+            message
+            for weekday, session in half_days
+            if (
+                message := precepting_maximum_warning(
+                    instance, schedule, attending.id,
+                    week=week, weekday=weekday, session=session,
+                )
+            )
+        ]
+        for message in dict.fromkeys(messages):
+            ui.notify(message, type="warning", multi_line=True)
+        return bool(messages)
+
     def drop_on(event, *, week: int, weekday: Weekday, session: Session) -> None:
         payload = event.args if isinstance(event.args, dict) else {}
         if str(payload.get("scope", "")) != scope:
@@ -687,14 +709,21 @@ def _attending_schedule_calendar(
         try:
             if int(payload.get("week")) != week:
                 raise ValueError("Work half-days can only be moved within the same week.")
+            source_weekday = Weekday(str(payload.get("weekday")))
+            source_session = Session(str(payload.get("session")))
             updated = move_attending_schedule_half_day(
                 instance, schedule, attending.id, week=week,
-                source_weekday=Weekday(str(payload.get("weekday"))),
-                source_session=Session(str(payload.get("session"))),
+                source_weekday=source_weekday,
+                source_session=source_session,
                 target_weekday=weekday, target_session=session,
             )
-            commit((instance, schedule), updated, week)
-            ui.notify("Work half-day moved", type="positive")
+            if not commit((instance, schedule), updated, week):
+                return
+            # A swap moves work into both half-days, so either can go over.
+            if not warn_over_maximum(
+                week, [(weekday, session), (source_weekday, source_session)],
+            ):
+                ui.notify("Work half-day moved", type="positive")
         except (TypeError, ValidationError, ValueError) as exc:
             ui.notify(
                 f"Work half-day not moved: {_validation_message(exc)}",
@@ -805,10 +834,19 @@ def _attending_schedule_calendar(
         dates = _short_week_range_label(
             effective.week_start, effective.week_start + timedelta(days=6),
         )
+        over_maximum = (
+            precepting_over_maximum(instance, schedule, week)
+            if any(
+                assignment.work_type is AttendingWorkType.PRECEPTING_CLINIC
+                for assignment in effective.assignments
+            )
+            else {}
+        )
 
         def render_cell(weekday: Weekday, session: Session) -> None:
             _attending_schedule_cell(
                 instance, attending, effective, weekday, session,
+                over_maximum=over_maximum,
                 editing=editing,
                 on_edit=partial(open_slot, week, weekday, session),
                 on_remove=partial(remove_slot, week, weekday, session),
@@ -890,6 +928,7 @@ def _attending_schedule_cell(
     on_drop: Callable | None = None,
     work: AssignedAttendingWork | None = None,
     on_lock_change: Callable[[bool], None] | None = None,
+    over_maximum: dict[tuple[str, Weekday, Session], tuple[int, int]] | None = None,
 ) -> None:
     from nicegui import ui
 
@@ -916,6 +955,17 @@ def _attending_schedule_cell(
             else _work_assignment_label(instance, assignment)
         )
         classes = "is-occupied"
+    maximum_marker = (
+        precepting_maximum_marker(
+            instance, over_maximum, assignment.clinic_id, calendar_day, session,
+        )
+        if assignment is not None
+        and assignment.work_type is AttendingWorkType.PRECEPTING_CLINIC
+        and over_maximum
+        else None
+    )
+    if maximum_marker is not None:
+        classes += " has-manual-override"
 
     locked = work is not None and attending_work_is_locked(instance, work)
     manageable = editing and not outside_schedule and not vacation and not automatic_admin
@@ -931,10 +981,13 @@ def _attending_schedule_cell(
         accessible_name=accessible_name,
     )
     if not editable or assignment is not None:
-        cell._props["aria-label"] = (
-            f"{calendar_day:%A, %B %d, %Y} · {_work_session_label(session)} · {label}"
-        )
+        cell._props["aria-label"] = " · ".join(filter(None, (
+            f"{calendar_day:%A, %B %d, %Y}", _work_session_label(session), label, maximum_marker,
+        )))
     with cell:
+        if maximum_marker is not None:
+            with ui.icon("warning_amber").classes("rbs-resident-clinic-conflict-icon"):
+                ui.tooltip(maximum_marker)
         if manageable:
             with ui.context_menu().classes("rbs-resident-clinic-context-menu"):
                 ui.label(

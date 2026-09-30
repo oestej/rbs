@@ -20,6 +20,7 @@ descriptions.
 | Explanation of Special/Other attending work | Description | weekly target; generic note |
 | Attending schedule diagnostics | Schedule checks; error; warning | solver error; infeasible |
 | Source of resident clinic capacity | Capacity-managed; Attending-managed | automatic capacity; manual capacity |
+| Most attendings who may precept at a clinic half-day | Max attendings; Override max attendings | preceptor cap; room limit |
 | Ranked elective choices | elective preferences | Elective Preference |
 | Dates when a clinic is closed | closure days; Add closure day | Holidays/Closure Days; Add closure |
 | Weekly half-day frequency | half-day(s) per week | half-day/week; half-day/wk |

@@ -106,7 +106,7 @@ def validate_schedule(instance: SolverProblem, schedule: Schedule) -> ScheduleVa
         errors,
         successful=successful,
     )
-    _validate_attending_work(instance, schedule, errors)
+    _validate_attending_work(instance, schedule, errors, maximums=successful)
     return ScheduleValidationResult(tuple(errors), tuple(warnings))
 
 
@@ -158,7 +158,7 @@ def _validate_working_draft_integrity(
         errors,
         successful=False,
     )
-    _validate_attending_work(instance, schedule, errors)
+    _validate_attending_work(instance, schedule, errors, maximums=False)
     return ScheduleValidationResult(tuple(errors), tuple(warnings))
 
 

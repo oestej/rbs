@@ -336,14 +336,20 @@ def test_locked_manual_preceptor_still_counts_toward_generated_preceptor_limit()
         weekday=Weekday.MONDAY, session=Session.MORNING, locked=True,
     )
     assert not validate_schedule(updated, locked).errors
-    overflow = locked.revised(attending_work=[
-        *locked.attending_work,
-        AssignedAttendingWork(
-            attending_id="attending-002", week=2,
-            weekday=Weekday.MONDAY, session=Session.MORNING,
-            work_type=AttendingWorkType.PRECEPTING_CLINIC, clinic_id=clinic_id,
+    # A solve that placed a second preceptor beside the locked one is invalid.
+    overflow = locked.revised(
+        attending_work=[
+            *locked.attending_work,
+            AssignedAttendingWork(
+                attending_id="attending-002", week=2,
+                weekday=Weekday.MONDAY, session=Session.MORNING,
+                work_type=AttendingWorkType.PRECEPTING_CLINIC, clinic_id=clinic_id,
+            ),
+        ],
+        meta=locked.meta.revised(
+            status=SolverStatus.FEASIBLE, solver_status=SolverStatus.FEASIBLE,
         ),
-    ])
+    )
     assert any("2 attendings precept, but at most 1 may" in error
                for error in validate_schedule(updated, overflow).errors)
 

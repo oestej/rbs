@@ -42,14 +42,25 @@
   placements as warnings; vacation and partial boundary weeks may fall below
   their usual minimums.
 - **Clinic staffing:** Each clinic can remain Capacity-managed or switch to
-  Attending-managed staffing. Attending-managed resident capacity now follows
-  effective week-by-week Precepting Clinic assignments, including weekly
-  half-day overrides, schedule dates, vacation, clinic closures, and the
-  clinic's capacity-per-attending ratio. Switching modes preserves the
-  clinic's inactive numeric capacity setup.
+  Attending-managed staffing. An attending-managed clinic's resident capacity
+  follows the attendings precepting there, after schedule dates, vacation, and
+  closures, times its capacity per attending. Its weekly schedule sets Max
+  attendings for each half-day, and exceptions can change that maximum or stop
+  precepting on specific dates. The solve never schedules more preceptors than
+  a clinic's maximum, and scheduled precepting at a capacity-managed clinic
+  stays within that half-day's attendings.
+- **Attendings:** Schedule edits can put more attendings at a clinic half-day
+  than the clinic allows. The edit is saved as a manual override with a message
+  explaining the limit, whether the next solve will keep the work, and how to
+  allow it with a clinic exception, and the half-day stays marked in the
+  calendar. Solving keeps hand-entered and locked overrides and adds no
+  preceptors beside them.
 
 ### Changed
 
+- **Sample data:** The sample workspace has eight attendings, each precepting
+  three half-days a week when the sample clinics run, so solving it shows
+  attending scheduling.
 - **Attendings:** The full-year schedule and manual editor now match the
   resident schedule's spacing and controls, with clearer work labels and locks,
   a tidier edit toolbar, and dated half-day dialogs that work at narrow widths.

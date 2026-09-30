@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections import Counter
 
+from rbs.clinic_locks import attending_work_is_locked
 from rbs.models.attending import AttendingWorkType, EffectiveAttendingWeek
 from rbs.models.clinic import clinic_slot_date
 from rbs.models.enums import Session, Weekday
@@ -25,14 +26,22 @@ def _validate_attending_work(
     instance: SolverProblem,
     schedule: Schedule,
     errors: list[str],
+    *,
+    maximums: bool = True,
 ) -> None:
+    """Check attending work, and with ``maximums`` each clinic's preceptor limit.
+
+    Only a solved schedule is held to the limit. Hand edits may override it
+    in a working draft until the next solve, as block edits may exceed
+    rotation capacity.
+    """
     if not schedule.attending_work:
         return
     attendings = {attending.id: attending for attending in instance.attendings}
     site_ids = set(instance.clinic_policy.site_ids)
     weeks: dict[tuple[str, int], EffectiveAttendingWeek] = {}
-    scheduled_precepting: Counter[tuple[str, int, Weekday, Session]] = Counter()
-    manual_precepting: Counter[tuple[str, int, Weekday, Session]] = Counter()
+    placed_precepting: Counter[tuple[str, int, Weekday, Session]] = Counter()
+    locked_precepting: Counter[tuple[str, int, Weekday, Session]] = Counter()
     for item in schedule.attending_work:
         attending = attendings.get(item.attending_id)
         if attending is None:
@@ -76,27 +85,31 @@ def _validate_attending_work(
             )
         elif item.work_type is AttendingWorkType.PRECEPTING_CLINIC:
             assert item.clinic_id is not None
-            counts = manual_precepting if item.manual_override else scheduled_precepting
+            counts = (
+                locked_precepting if attending_work_is_locked(instance, item)
+                else placed_precepting
+            )
             counts[item.clinic_id, item.week, item.weekday, item.session] += 1
-    _validate_precepting_maximums(instance, scheduled_precepting, manual_precepting, errors)
+    if maximums:
+        _validate_precepting_maximums(instance, placed_precepting, locked_precepting, errors)
 
 
 def _validate_precepting_maximums(
     instance: SolverProblem,
-    scheduled: Counter[tuple[str, int, Weekday, Session]],
-    manual: Counter[tuple[str, int, Weekday, Session]],
+    placed: Counter[tuple[str, int, Weekday, Session]],
+    locked: Counter[tuple[str, int, Weekday, Session]],
     errors: list[str],
 ) -> None:
-    """Reject scheduled precepting beyond a clinic's maximum for a half-day.
+    """Reject placed precepting beyond a clinic's maximum for a half-day.
 
-    Hand-entered precepting, including work moved into the schedule to preserve
-    its lock, counts toward the maximum. Only generated work can break it here:
-    a solve cannot change what was entered by hand.
+    Hand-entered and locked precepting count toward the maximum, but they are
+    solve inputs and may exceed it by themselves as an override. Only unlocked
+    work, which the solve placed, can break the maximum here.
     """
-    if not scheduled:
+    if not placed:
         return
     hand_entered: Counter[tuple[str, int, Weekday, Session]] = Counter()
-    for week in sorted({key[1] for key in scheduled}):
+    for week in sorted({key[1] for key in placed}):
         for attending in instance.attendings:
             for assignment in instance.effective_attending_week(attending, week).assignments:
                 if assignment.work_type is AttendingWorkType.PRECEPTING_CLINIC:
@@ -105,13 +118,13 @@ def _validate_precepting_maximums(
                         assignment.clinic_id, week, assignment.weekday, assignment.session
                     ] += 1
     for key, count in sorted(
-        scheduled.items(),
+        placed.items(),
         key=lambda item: (item[0][1], _WEEKDAY_ORDER[item[0][2]], item[0][3].value, item[0][0]),
     ):
         clinic_id, week, weekday, session = key
         calendar_day = clinic_slot_date(instance.calendar.first_week_start, week, weekday)
         maximum = instance.clinic_max_attendings_on(clinic_id, calendar_day, session)
-        total = count + hand_entered[key] + manual[key]
+        total = count + hand_entered[key] + locked[key]
         if total > maximum:
             half_day = "AM" if session is Session.MORNING else "PM"
             errors.append(
