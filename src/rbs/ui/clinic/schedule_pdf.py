@@ -34,7 +34,7 @@ from rbs.ui.clinic.projection import (
     occupancy,
     occupant_site,
     occupants_for_site,
-    site_headcount,
+    site_capacity_points,
     special_events_for_slot,
 )
 from rbs.ui.pdf_pages import with_export_timestamp
@@ -362,7 +362,7 @@ def _session_cell(
     attending_parts = []
     visible_sites = (selected_site,) if selected_site is not None else policy.site_ids
     for clinic_site in visible_sites:
-        count = site_headcount(people, clinic_site)
+        count = site_capacity_points(people, clinic_site)
         needed = policy.attendings_needed(count, clinic_site)
         if needed:
             config = policy.site(clinic_site)

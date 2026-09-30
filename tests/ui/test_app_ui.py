@@ -1769,6 +1769,136 @@ def test_instance_save_refreshes_the_visible_tab_only(tmp_path) -> None:
     assert "rotations" not in session.stale_panels
 
 
+def test_save_shares_snapshot_only_until_the_render_finishes(tmp_path, monkeypatch) -> None:
+    from rbs.catalog import sample_instance
+    from rbs.store import Store
+    from rbs.ui.session import WorkspaceSession
+    from rbs.workspaces import WorkspaceController
+
+    store = Store(tmp_path / "rbs.sqlite")
+    store.init()
+    workspace = store.create("Original", sample_instance())
+    session = WorkspaceSession(store=store, workspace_id=workspace.id)
+    session.panels = {"block_schedule": _DummyPanel()}
+    reads = []
+    observed = []
+    get = store.get
+
+    def read(workspace_id):
+        reads.append(workspace_id)
+        return get(workspace_id)
+
+    monkeypatch.setattr(store, "get", read)
+    session._refresh_status = lambda current: observed.append(current.workspace())
+    session._render_tab = lambda current, _name: observed.append(current.workspace())
+    saved = session.persist_instance(workspace, workspace.instance)
+
+    assert reads == [workspace.id]  # The repository returns the committed snapshot once.
+    assert all(snapshot is saved for snapshot in observed)
+    newer = WorkspaceController(store).rename(saved, "Changed elsewhere")
+    assert session.workspace().workspace_revision == newer.workspace_revision
+    assert session.workspace().name == "Changed elsewhere"
+
+    with pytest.raises(RuntimeError), session.render_snapshot(saved):
+        raise RuntimeError("render failed")
+    assert session.workspace().name == "Changed elsewhere"
+
+
+def test_selecting_resident_preserves_directory_search(tmp_path) -> None:
+    from nicegui import ui
+
+    from rbs.catalog import sample_instance
+    from rbs.store import Store
+    from rbs.ui.app_shell import _render_tab
+    from rbs.ui.session import WorkspaceSession
+
+    store = Store(tmp_path / "rbs.sqlite")
+    store.init()
+    workspace = store.create("Residents", sample_instance())
+    session = WorkspaceSession(store=store, workspace_id=workspace.id, active_tab="residents")
+    session.panels["residents"] = ui.column()
+    session._render_tab = _render_tab
+    before = set(ui.context.client.elements)
+    session.refresh_visible()
+    created = [e for key, e in ui.context.client.elements.items() if key not in before]
+    search = next(e for e in created if e._props.get("label") == "Search residents")
+    resident = workspace.instance.residents[0]
+    search.set_value(resident.name)
+    item = next(
+        e for key, e in ui.context.client.elements.items()
+        if key not in before
+        and e.__class__.__name__ == "ItemLabel"
+        and getattr(e, "_text", None) == resident.name
+    ).parent_slot.parent.parent_slot.parent
+    for listener in item._event_listeners.values():
+        if listener.type == "click":
+            listener.handler(None)
+    assert session.resident_id == resident.id
+    assert not search.is_deleted
+    assert search.value == resident.name
+    assert "rbs-master-selected" in item._classes
+
+    from rbs.ui.residents.ops import replace_resident
+    from rbs.workspaces import InstanceEditImpact, WorkspaceController
+
+    WorkspaceController(store).save_instance(
+        workspace,
+        replace_resident(
+            workspace.instance, resident.id, resident.revised(name="Updated elsewhere"),
+        ),
+        impact=InstanceEditImpact.PRESENTATION,
+    )
+    for listener in list(item._event_listeners.values()):
+        if listener.type == "click":
+            listener.handler(None)
+    assert search.is_deleted  # External directory edits require a full refresh.
+    assert any(
+        getattr(e, "_text", None) == "Updated elsewhere"
+        for e in session.panels["residents"].descendants()
+    )
+
+
+def test_in_place_schedule_edits_advance_their_own_snapshot(tmp_path, monkeypatch) -> None:
+    from rbs.catalog import sample_instance
+    from rbs.models.enums import SolverEngineName, SolverStatus
+    from rbs.models.schedule import Schedule, ScheduleMeta
+    from rbs.models.workspace import WorkspaceConflictError
+    from rbs.store import Store
+    from rbs.ui import app_shell
+    from rbs.ui.session import WorkspaceSession
+    from rbs.workspaces import WorkspaceController
+
+    store = Store(tmp_path / "rbs.sqlite")
+    store.init()
+    instance = sample_instance()
+    schedule = Schedule(meta=ScheduleMeta(
+        academic_year=instance.academic_year,
+        engine=SolverEngineName.STUB,
+        status=SolverStatus.UNKNOWN,
+        solver_status=SolverStatus.UNKNOWN,
+    ))
+    workspace = store.create("Clinic edits", instance, schedule)
+    session = WorkspaceSession(store=store, workspace_id=workspace.id)
+    callbacks = {}
+
+    def render(*_args, **kwargs):
+        callbacks.update(kwargs)
+        return _DummyPanel()
+
+    monkeypatch.setattr(app_shell, "render_residents_tab", render)
+    app_shell._render_residents(session, workspace)
+    save = callbacks["on_schedule_change"]
+    for label in ("First edit", "Second edit"):
+        schedule = schedule.revised(meta=schedule.meta.revised(notes=[label]))
+        save(schedule, instance.residents[0].id, False)
+    current = store.get(workspace.id)
+    assert current.workspace_revision == workspace.workspace_revision + 2
+    assert current.schedule.meta.notes == ["Second edit"]
+    WorkspaceController(store).rename(current, "Edited elsewhere")
+    with pytest.raises(WorkspaceConflictError):
+        save(schedule, instance.residents[0].id, False)
+
+
 def test_schedule_save_can_defer_the_visible_tab_refresh(tmp_path) -> None:
     from rbs.catalog import sample_instance
     from rbs.models.enums import SolverEngineName, SolverStatus
@@ -1995,3 +2125,191 @@ def test_first_tab_visit_renders_a_stale_panel(tmp_path) -> None:
     assert session.active_tab == "clinic"
     assert rendered == ["clinic"]
     assert "clinic" not in session.stale_panels
+
+
+def test_ranking_electives_redraws_one_resident_not_the_whole_directory(tmp_path) -> None:
+    from nicegui import ui
+    from nicegui.events import ValueChangeEventArguments
+
+    from rbs.catalog import sample_instance
+    from rbs.store import Store
+    from rbs.ui import app_shell
+    from rbs.ui.residents.electives import elective_preference_options
+    from rbs.ui.session import WorkspaceSession
+
+    store = Store(tmp_path / "residents.sqlite")
+    store.init()
+    instance = sample_instance()
+    resident_id = "resident-001"
+    instance = instance.revised(
+        residents=[
+            item.model_copy(update={"elective_preferences": []})
+            if item.id == resident_id
+            else item
+            for item in instance.residents
+        ]
+    )
+    workspace = store.create("Residents", instance)
+    session = WorkspaceSession(store=store, workspace_id=workspace.id)
+    session.resident_id = resident_id
+    session.active_tab = "residents"
+    session.resident_schedule_section = "resident_elective_preference"
+    session._render_tab = app_shell._render_tab
+    session.panels["residents"] = ui.column()
+    session.refresh_panel("residents")
+
+    def live(predicate):
+        return [
+            element
+            for element in ui.context.client.elements.values()
+            if not element.is_deleted and predicate(element)
+        ]
+
+    def directory_items():
+        return live(
+            lambda element: "rbs-master-directory-item" in getattr(element, "_classes", [])
+            or element.__class__.__name__ == "Item"
+        )
+
+    def choose(value: str) -> None:
+        select = live(lambda element: element.__class__.__name__ == "Select")[-1]
+        select.value = value
+        for listener in select._event_listeners.values():
+            if listener.type == "update:model-value":
+                listener.handler(
+                    ValueChangeEventArguments(sender=select, client=select.client, value=value)
+                )
+
+    options = list(elective_preference_options(instance, instance.residents_by_id[resident_id]))
+    directory_before = {id(element) for element in directory_items()}
+    detail_before = {id(element) for element in live(lambda e: e.__class__.__name__ == "Select")}
+    assert directory_before
+
+    choose(options[0])
+
+    # The directory keeps its elements; only the open resident is redrawn.
+    assert {id(element) for element in directory_items()} == directory_before
+    assert {id(element) for element in live(lambda e: e.__class__.__name__ == "Select")} != (
+        detail_before
+    )
+
+    # The redrawn detail saves against the current revision, not the stale one.
+    choose(options[1])
+
+    ranked = store.get(workspace.id).instance.residents_by_id[resident_id].elective_preferences
+    assert [f"{item.rotation_id}|{item.duration_weeks}" for item in ranked] == options[:2]
+
+
+def test_block_context_menu_navigates_to_selected_resident_and_rotation() -> None:
+    from nicegui import ui
+
+    from rbs.catalog import sample_instance
+    from rbs.ui.app_shell import _schedule_context_menu
+
+    instance = sample_instance()
+    resident = instance.residents[0]
+    refreshed = []
+    selected_tabs = []
+    session = SimpleNamespace(
+        workspace=lambda: SimpleNamespace(instance=instance),
+        refresh_panel=refreshed.append,
+        navigation=SimpleNamespace(
+            tabs=SimpleNamespace(set_value=selected_tabs.append),
+            residents="residents", rotations="rotations", clinic="clinic",
+        ),
+    )
+    before = set(ui.context.client.elements)
+    board = ui.element("div")
+    _schedule_context_menu(board, session, instance)
+    created = _created_elements(before)
+    items = [element for element in created if element.__class__.__name__ == "MenuItem"]
+    assert [item.default_slot.children[0]._text for item in items] == [
+        "Go to Resident", "Go to Rotation",
+    ]
+    select = next(iter(board._event_listeners.values())).handler
+    select(SimpleNamespace(args={"resident_id": resident.id, "rotation_id": "clinic", "week": 9}))
+    next(iter(items[0]._event_listeners.values())).handler(None)
+    assert session.resident_id == resident.id
+    assert session.resident_focus_week == 9
+    assert session.resident_schedule_section == "resident_block_schedule"
+    assert not session.resident_block_schedule_editing
+    assert selected_tabs == ["residents"]
+    next(iter(items[1]._event_listeners.values())).handler(None)
+    assert session.rotation_id == "clinic"
+    assert session.clinic_section == "clinic_block_rules"
+    assert refreshed == ["residents", "clinic"]
+    select(SimpleNamespace(args={"resident_id": resident.id, "rotation_id": "", "week": 10}))
+    assert not items[1].visible
+    next(iter(items[1]._event_listeners.values())).handler(None)
+    assert refreshed == ["residents", "clinic"]
+    next(iter(items[0]._event_listeners.values())).handler(None)
+    assert session.resident_focus_week == 10
+    select(SimpleNamespace(args={"resident_id": resident.id, "rotation_id": "clinic", "week": 11}))
+    assert items[1].visible
+
+    for kind, section in (
+        ("standard", "standard_rotations"),
+        ("fmed", "fmed_configuration"),
+        ("elective", "elective_configuration"),
+    ):
+        rotation = next(item for item in instance.rotations if item.kind.value == kind)
+        select(SimpleNamespace(args={
+            "resident_id": resident.id, "rotation_id": rotation.id, "week": 11,
+        }))
+        next(iter(items[1]._event_listeners.values())).handler(None)
+        assert session.rotation_id == rotation.id
+        assert session.rotation_section == section
+        assert selected_tabs[-1] == "rotations"
+        assert refreshed[-1] == "rotations"
+
+
+def test_resident_block_navigation_reveals_completed_block(monkeypatch) -> None:
+    from rbs.catalog import sample_instance
+    from rbs.models.enums import SolverEngineName, SolverStatus
+    from rbs.models.schedule import Assignment, Schedule, ScheduleMeta
+    from rbs.ui.residents import schedule as view
+
+    instance = sample_instance()
+    resident = instance.residents[0]
+    schedule = Schedule(
+        meta=ScheduleMeta(academic_year=instance.academic_year,
+                          engine=SolverEngineName.STUB, status=SolverStatus.FEASIBLE),
+        assignments=[Assignment(resident_id=resident.id, rotation_id="clinic",
+                                start_week=1, end_week=4, weeks=[1, 2, 3, 4])],
+    )
+    lanes = []
+    monkeypatch.setattr(view, "_resident_block_schedule_lane",
+                        lambda row, *, focused=False: lanes.append((row, focused)))
+    view._resident_schedule_workspace(instance, schedule, resident,
+                                      today=date(2027, 7, 1), focus_week=2)
+    assert any(focused and row["rotation_name"] == "Clinic" for row, focused in lanes)
+
+
+def test_clinic_context_menu_opens_resident_clinic_schedule() -> None:
+    from nicegui import ui
+
+    from rbs.catalog import sample_instance
+    from rbs.ui.app_shell import _schedule_context_menu
+
+    instance = sample_instance()
+    resident = instance.residents[0]
+    destinations = []
+    session = SimpleNamespace(
+        workspace=lambda: SimpleNamespace(instance=instance),
+        refresh_panel=destinations.append,
+        navigation=None,
+    )
+    before = set(ui.context.client.elements)
+    board = ui.element("div")
+    _schedule_context_menu(board, session, instance, clinic=True)
+    items = [item for item in _created_elements(before) if item.__class__.__name__ == "MenuItem"]
+    assert len(items) == 1
+    assert items[0].default_slot.children[0]._text == "Go to resident"
+    select = next(iter(board._event_listeners.values())).handler
+    select(SimpleNamespace(args={"resident_id": resident.id, "week": 7}))
+    next(iter(items[0]._event_listeners.values())).handler(None)
+    assert session.resident_id == resident.id
+    assert session.resident_focus_week == 7
+    assert session.resident_schedule_section == "resident_clinic_schedule"
+    assert not session.resident_schedule_editing
+    assert destinations == ["residents"]

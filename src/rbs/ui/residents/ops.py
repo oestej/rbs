@@ -147,6 +147,7 @@ def resident_schedule_report_rows(
     *,
     show_completed: bool = True,
     today: date | None = None,
+    focus_week: int | None = None,
 ) -> list[dict[str, str]]:
     """Return chronological rotation and vacation line items for one resident."""
     resident = next(
@@ -325,6 +326,10 @@ def resident_schedule_report_rows(
     )
     rows = _coalesce_adjacent_vacation_rows(rows)
     for row in rows:
+        if focus_week is not None:
+            first_week = int(row["_start_week"])
+            last_week = int(row["_end_week"])
+            row["focused"] = "true" if first_week <= focus_week <= last_week else "false"
         row.pop("_sort_date", None)
         row.pop("_sort_end", None)
         row.pop("_sort_order", None)

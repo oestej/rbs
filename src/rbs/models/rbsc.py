@@ -16,12 +16,11 @@ from rbs.models.rotation import DEFAULT_ROTATION_COLOR, default_rotation_color
 from rbs.models.schedule import Schedule
 
 RBSC_FORMAT = "rbsc"
-# The current schema and its unambiguous immediate predecessor load; older
-# documents fail validation instead of being guessed forward. Portable
-# documents omit application-owned presentation (colors, solver tuning,
-# automatic-locking state) by design; import restores neutral defaults. A Save
-# As deliberately clears the bundled-sample flag before producing the user's
-# document.
+# Schemas 9 through 11 migrate on import; older documents fail validation
+# instead of being guessed forward. Portable documents omit
+# application-owned presentation (colors, solver tuning, automatic-locking
+# state) by design; import restores neutral defaults. A Save As deliberately
+# clears the bundled-sample flag before producing the user's document.
 RBSC_SCHEMA_VERSION = 12
 _AUTOMATIC_LOCK_SOURCE = "through_today"
 _WEEKDAYS = (
@@ -117,12 +116,26 @@ def _migrate_portable_state(value: object) -> object:
     allows descriptions on Special/Other work. Accepted attending schedules
     move out of roster configuration into their own case-level collection.
     Each migrated week uses its resulting assignment count as its half-day
-    override. Older shapes remain unsupported.
+    override. Versions 9 and 10 predate attending configuration; they upgrade
+    to an empty attending directory while nested catalogs migrate
+    independently (missing resident capacity defaults to one). Older shapes
+    remain unsupported.
     """
-    if not isinstance(value, dict) or value.get("schema_version") != 11:
+    if not isinstance(value, dict) or value.get("schema_version") not in (9, 10, 11):
         return value
+    source_version = value.get("schema_version")
     migrated = deepcopy(value)
     migrated["schema_version"] = RBSC_SCHEMA_VERSION
+    if source_version in (9, 10):
+        for workspace in migrated.get("workspaces", []):
+            if not isinstance(workspace, dict):
+                continue
+            case = workspace.get("case")
+            if not isinstance(case, dict):
+                continue
+            case.setdefault("attendings", [])
+            case.setdefault("attending_schedules", [])
+        return migrated
     for workspace in migrated.get("workspaces", []):
         if not isinstance(workspace, dict):
             continue

@@ -26,11 +26,11 @@ from rbs.ui.rotations.forms import (
 from rbs.ui.rotations.ops import (
     replace_fmed_pgy_rules,
     replace_rotation_color,
+    resident_override_managed_by_rotation,
     rotation_editor_state,
     rotation_from_editor_state,
 )
 from rbs.ui.rotations.overrides import (
-    _editor_manages_resident_override,
     _resident_rotation_overrides_editor,
 )
 from rbs.ui.rotations.summary import _rotation_identity
@@ -55,7 +55,9 @@ def _dedicated_rotation_cards(
 
     rotations = sorted(
         (rotation for rotation in instance.rotations if rotation.kind is kind),
-        key=rotation_display_sort_key,
+        key=lambda rotation: (
+            rotation.id != selected_rotation_id, rotation_display_sort_key(rotation),
+        ),
     )
     if not rotations:
         master_detail.empty_detail(
@@ -105,7 +107,7 @@ def _open_fmed_pgy_rules_dialog(
     resident_override_drafts = [
         override.model_dump(mode="json")
         for override in instance.resident_rotation_overrides
-        if _editor_manages_resident_override(instance, override, rotation.id)
+        if resident_override_managed_by_rotation(instance, override, rotation.id)
     ]
     resident_waiver_drafts = [
         waiver.model_dump(mode="json")

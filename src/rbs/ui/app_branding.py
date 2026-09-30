@@ -201,6 +201,12 @@ DISMISS_LOADING_SCREEN_SCRIPT = """
 BLOCK_LABEL_FIT_SCRIPT = """
 (() => {
   let frame = 0;
+  const labels = new Set();
+  const pendingLabels = new Set();
+  const widths = new WeakMap();
+  const arrowSelector = '.rbs-empty-workspace-arrow, .rbs-empty-workspace-copy, '
+    + '.rbs-empty-workspace-controls';
+  let arrowNeedsLayout = false;
   const layoutEmptyWorkspaceArrow = () => {
     const arrow = document.querySelector('.rbs-empty-workspace-arrow');
     const copy = document.querySelector('.rbs-empty-workspace-copy');
@@ -238,23 +244,85 @@ BLOCK_LABEL_FIT_SCRIPT = """
     arrow.classList.add('is-laid-out');
   };
   const fitLabels = () => {
-    document.querySelectorAll('.rbs-block-name').forEach((label) => {
-      label.classList.remove('is-code');
-      label.classList.toggle('is-code', label.scrollWidth > label.clientWidth + 1);
-    });
-    layoutEmptyWorkspaceArrow();
+    frame = 0;
+    const visible = [...pendingLabels].filter(
+      (label) => label.isConnected && label.clientWidth > 0,
+    );
+    pendingLabels.clear();
+    // Finish each write/read phase for the whole batch before starting the next.
+    // Interleaving these operations forces a new layout for every abbreviated label.
+    visible.forEach((label) => label.classList.remove('is-code'));
+    const overflow = visible.map((label) => label.scrollWidth > label.clientWidth + 1);
+    visible.forEach((label, index) => label.classList.toggle('is-code', overflow[index]));
+    if (arrowNeedsLayout) {
+      arrowNeedsLayout = false;
+      layoutEmptyWorkspaceArrow();
+    }
   };
   const scheduleFit = () => {
-    window.cancelAnimationFrame(frame);
-    frame = window.requestAnimationFrame(fitLabels);
+    if (!frame && (pendingLabels.size || arrowNeedsLayout)) {
+      frame = window.requestAnimationFrame(fitLabels);
+    }
+  };
+  const resizeObserver = new ResizeObserver((entries) => {
+    entries.forEach(({target, contentRect}) => {
+      if (widths.get(target) === contentRect.width) return;
+      widths.set(target, contentRect.width);
+      if (contentRect.width > 0) pendingLabels.add(target);
+    });
+    scheduleFit();
+  });
+  const discover = (node) => {
+    if (!(node instanceof Element)) return;
+    const added = node.matches('.rbs-block-name') ? [node] : [];
+    added.push(...node.querySelectorAll('.rbs-block-name'));
+    added.forEach((label) => {
+      if (!labels.has(label)) {
+        labels.add(label);
+        resizeObserver.observe(label);
+      }
+      pendingLabels.add(label);
+    });
+    if (node.matches(arrowSelector) || node.querySelector(arrowSelector)) {
+      arrowNeedsLayout = true;
+    }
+  };
+  const refreshLayout = () => {
+    labels.forEach((label) => pendingLabels.add(label));
+    arrowNeedsLayout = true;
+    scheduleFit();
   };
   const start = () => {
-    new MutationObserver(scheduleFit).observe(document.body, {
+    new MutationObserver((records) => {
+      records.forEach((record) => {
+        const target = record.target instanceof Element
+          ? record.target : record.target.parentElement;
+        const label = target?.closest('.rbs-block-name');
+        if (label) pendingLabels.add(label);
+        if (target?.closest(arrowSelector)) arrowNeedsLayout = true;
+        record.addedNodes.forEach(discover);
+      });
+      if (records.some((record) => record.removedNodes.length)) {
+        labels.forEach((label) => {
+          if (label.isConnected) return;
+          resizeObserver.unobserve(label);
+          labels.delete(label);
+          pendingLabels.delete(label);
+          widths.delete(label);
+        });
+      }
+      scheduleFit();
+    }).observe(document.body, {
       childList: true,
+      characterData: true,
       subtree: true,
     });
-    window.addEventListener('resize', scheduleFit);
-    if (document.fonts) document.fonts.ready.then(scheduleFit);
+    discover(document.body);
+    window.addEventListener('resize', refreshLayout);
+    if (document.fonts) {
+      document.fonts.ready.then(refreshLayout);
+      document.fonts.addEventListener('loadingdone', refreshLayout);
+    }
     scheduleFit();
   };
   if (document.readyState === 'loading') {

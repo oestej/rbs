@@ -13,6 +13,7 @@ from rbs.models.instance import SchedulerInput
 from rbs.models.resident import resident_display_sort_key
 from rbs.models.special import SpecialRotation, SpecialRotationKind
 from rbs.ui import master_detail
+from rbs.ui.buttons import DESTRUCTIVE_ICON_BUTTON_PROPS, ICON_BUTTON_PROPS
 from rbs.ui.editor_common import (
     _validation_message,
 )
@@ -159,7 +160,7 @@ def _special_rotation_row(
             )
             ui.label(names).classes("rbs-type-body")
 
-        ui.button(
+        edit = ui.button(
             icon="edit",
             on_click=partial(
                 _open_special_rotation_dialog,
@@ -169,7 +170,8 @@ def _special_rotation_row(
                 on_save=on_save,
                 initial=special,
             ),
-        ).props(f"flat round dense aria-label='Edit special rotation {special.name}'")
+        ).props(ICON_BUTTON_PROPS)
+        edit.props["aria-label"] = f"Edit special rotation {special.name}"
 
         def delete_special() -> None:
             try:
@@ -179,9 +181,10 @@ def _special_rotation_row(
             except (ValidationError, ValueError) as exc:
                 ui.notify(_validation_message(exc), type="negative", multi_line=True)
 
-        ui.button(icon="delete_outline", on_click=delete_special).props(
-            f"flat round dense color=negative aria-label='Delete special rotation {special.name}'"
+        delete = ui.button(icon="delete_outline", on_click=delete_special).props(
+            DESTRUCTIVE_ICON_BUTTON_PROPS
         )
+        delete.props["aria-label"] = f"Delete special rotation {special.name}"
 
 
 def _special_rotation_period_label(special: SpecialRotation) -> str:

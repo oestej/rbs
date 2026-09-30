@@ -6,13 +6,13 @@ import hashlib
 import json
 import os
 import stat
-import tempfile
 import threading
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_validator
 
+from rbs.desktop.atomic_files import atomic_write_text
 from rbs.models.color_scheme import ColorScheme, normalize_hex_color
 from rbs.models.common import StrictModel
 from rbs.models.instance import SchedulerInput, SolverConfig
@@ -298,22 +298,9 @@ def _atomic_write_text(destination: Path, payload: str) -> None:
     except FileNotFoundError:
         pass
 
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=parent,
-        prefix=f".{destination.name}.",
-        suffix=".tmp",
+    atomic_write_text(
+        destination, payload, mode=existing_mode or (stat.S_IRUSR | stat.S_IWUSR),
     )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.chmod(temporary, existing_mode or (stat.S_IRUSR | stat.S_IWUSR))
-        os.replace(temporary, destination)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
 
 
 __all__ = [

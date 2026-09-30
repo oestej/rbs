@@ -18,6 +18,7 @@ from rbs.ui.editor_common import (
     _default_block_duration,
     _weeks_label,
 )
+from rbs.ui.rotations.ops import resident_override_managed_by_rotation
 from rbs.ui.rotations.summary import _rotation_overview_row
 
 
@@ -82,7 +83,7 @@ def _resident_override_elective_options(
             used[manual.replaces_rotation_id] = used.get(manual.replaces_rotation_id, 0) + 1
     for override in instance.resident_rotation_overrides:
         if (
-            not _editor_manages_resident_override(instance, override, rotation.id)
+            not resident_override_managed_by_rotation(instance, override, rotation.id)
             and override.resident_id == resident_id
             and override.duration_weeks == duration_weeks
             and override.replaces_rotation_id is not None
@@ -144,7 +145,7 @@ def _resident_override_unallocated_remaining(
         for override in instance.resident_rotation_overrides
         if override.resident_id == resident_id
         and override.replaces_rotation_id is None
-        and _editor_manages_resident_override(instance, override, rotation.id)
+        and resident_override_managed_by_rotation(instance, override, rotation.id)
     )
     remaining -= sum(
         int(draft["duration_weeks"])
@@ -202,26 +203,6 @@ def _resident_override_funding_options(
         ).items()
     )
     return options
-
-
-def _editor_manages_resident_override(
-    instance: SchedulerInput,
-    override,
-    rotation_id: str,
-) -> bool:
-    if override.rotation_id == rotation_id:
-        return True
-    if override.group_instance_id is None:
-        return False
-    resident = instance.residents_by_id.get(override.resident_id)
-    if resident is None:
-        return False
-    group = instance.rotation_group_for(resident.pgy, rotation_id)
-    return (
-        group is not None
-        and group.anchor_rotation_id is None
-        and override.rotation_id in group.rotation_ids
-    )
 
 
 def _resident_override_group_bundle(

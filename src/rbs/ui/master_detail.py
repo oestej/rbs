@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Any
 
 from rbs.ui.buttons import PRIMARY_BUTTON_PROPS
 
@@ -51,7 +52,7 @@ def page() -> Iterator[None]:
 
 
 @contextmanager
-def split(*, detail_selected: bool | None = None) -> Iterator[None]:
+def split(*, detail_selected: bool | None = None) -> Iterator[Any]:
     from nicegui import ui
 
     state_class = (
@@ -61,8 +62,8 @@ def split(*, detail_selected: bool | None = None) -> Iterator[None]:
         if detail_selected
         else " rbs-master-no-selection"
     )
-    with ui.row().classes(f"rbs-master-split{state_class} w-full items-stretch gap-5"):
-        yield
+    with ui.row().classes(f"rbs-master-split{state_class} w-full items-stretch gap-5") as row:
+        yield row
 
 
 def directory(
@@ -131,12 +132,12 @@ def person_directory_item(
     selected: bool,
     on_click: Callable[[], None],
     render_avatar: Callable[[], None],
-) -> None:
+) -> Any:
     """Render the shared resident/attending directory row."""
     from nicegui import ui
 
     item_classes = f"rbs-person-directory-item {selected_class(selected)}".strip()
-    with ui.item(on_click=on_click).props("clickable v-ripple").classes(item_classes):
+    with ui.item(on_click=on_click).props("clickable v-ripple").classes(item_classes) as item:
         with ui.item_section().props("avatar"):
             render_avatar()
         with ui.item_section().classes("min-w-0"):
@@ -146,6 +147,7 @@ def person_directory_item(
             )
         with ui.item_section().props("side"):
             ui.icon("chevron_right").props("size=20px").classes("rbs-text-subtle")
+    return item
 
 
 def detail_panel():

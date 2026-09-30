@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 
+from rbs.models.elective import PLACEHOLDER_ELECTIVE_ID
 from rbs.models.enums import RotationKind
 from rbs.models.instance import Calendar, SolverConfig, SolverProblem
 from rbs.models.resident import Resident
@@ -138,6 +139,10 @@ def expand_occurrences(
                     rule = candidate.pgy_rule(resident.pgy)
                     elective = direct_elective
                     elective_fallback = elective and candidate.kind is RotationKind.CLINIC
+                    # Placeholder takes are required blocks, not ranked
+                    # preferences: every slot takes one and none consumes a
+                    # preference rank.
+                    placeholder = candidate.id == PLACEHOLDER_ELECTIVE_ID
                     elective_option = (
                         instance.electives.option_for(candidate.id) if elective else None
                     )
@@ -169,7 +174,7 @@ def expand_occurrences(
                             group_id=base_key if len(candidates) > 1 else key,
                             elective=elective,
                             elective_fallback=elective_fallback,
-                            preference_managed=elective,
+                            preference_managed=elective and not placeholder,
                             prerequisite_rotation_ids=tuple(rule.prerequisite_rotation_ids),
                             earliest_start_week=rule.earliest_start_week,
                             rotation_group_key=(
@@ -289,9 +294,14 @@ def _resident_preference_candidates(
     Resident requests are the complete candidate set. An otherwise unranked
     eligible service is admitted only when an Elective lock needs it, and
     Clinic is always appended as the explicit last-resort fallback.
+
+    Placeholder mode replaces every slot with the generic placeholder, so no
+    preference, lock, or Clinic fallback candidate is admitted.
     """
     if not require_configured_electives:
         return ()
+    if getattr(instance, "use_placeholder_electives", False):
+        return (instance.rotation(PLACEHOLDER_ELECTIVE_ID),)
 
     candidate_ids = {
         request.rotation_id

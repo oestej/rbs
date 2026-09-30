@@ -476,3 +476,56 @@ def test_a_whole_database_file_can_be_opened_rather_than_restored(tmp_path) -> N
 
     assert [item.name for item in imported] == ["One", "Two"]
     assert {w.name for w in target.list()} == {"Already here", "One", "Two"}
+
+
+def test_v9_documents_migrate_resident_capacity_and_roundtrip(tmp_path) -> None:
+    source = _store(tmp_path / "source")
+    payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
+    payload["schema_version"] = 9
+    for catalog in payload["catalogs"]:
+        catalog["catalog"]["schema_version"] = 8
+        for rotation in catalog["catalog"]["rotations"]:
+            for rule in rotation["pgy_rules"]:
+                rule.pop("capacity_per_resident", None)
+    # Version 9 documents predate attending configuration entirely.
+    for workspace in payload["workspaces"]:
+        workspace["case"].pop("attendings", None)
+        workspace["case"].pop("attending_schedules", None)
+    from rbs.models.rbsc import RBSCState
+
+    migrated = RBSCState.model_validate(payload)
+    assert migrated.schema_version == 12
+    assert all(
+        rule.capacity_per_resident == 1
+        for catalog in migrated.catalogs
+        for rotation in catalog.catalog.rotations
+        for rule in rotation.pgy_rules
+    )
+    assert all(
+        catalog.catalog.schema_version == 10 for catalog in migrated.catalogs
+    )
+    assert all(
+        workspace.case.attendings == []
+        and workspace.case.attending_schedules == []
+        for workspace in migrated.workspaces
+    )
+    assert RBSCState.model_validate_json(migrated.model_dump_json()) == migrated
+
+
+def test_v10_documents_migrate_attending_defaults_and_roundtrip(tmp_path) -> None:
+    source = _store(tmp_path / "source")
+    payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
+    payload["schema_version"] = 10
+    for workspace in payload["workspaces"]:
+        workspace["case"].pop("attendings", None)
+        workspace["case"].pop("attending_schedules", None)
+    from rbs.models.rbsc import RBSCState
+
+    migrated = RBSCState.model_validate(payload)
+    assert migrated.schema_version == 12
+    assert all(
+        workspace.case.attendings == []
+        and workspace.case.attending_schedules == []
+        for workspace in migrated.workspaces
+    )
+    assert RBSCState.model_validate_json(migrated.model_dump_json()) == migrated

@@ -64,6 +64,18 @@ def week_domain(
     return list(by_time.values())
 
 
+def cached_week_domain(
+    context: PlanningContext,
+    week: int,
+    rotation: Rotation | None = None,
+) -> tuple[ClinicSlot, ...]:
+    """Reuse read-only Clinic templates within this model build."""
+    key = week, rotation.id if rotation is not None else None
+    if key not in context.clinic_week_domains:
+        context.clinic_week_domains[key] = tuple(week_domain(context.instance, week, rotation))
+    return context.clinic_week_domains[key]
+
+
 def constraints(context: PlanningContext) -> dict[str, ClinicDecision]:
     """Select each Clinic block's configured number of Admin sessions."""
     chosen: dict[str, ClinicDecision] = {}

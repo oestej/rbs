@@ -37,15 +37,21 @@ class ConstraintCatalog(StrictModel):
         """Upgrade path for catalogs written by older schema versions.
 
         Version 10 makes the attending Admin Time behavior for the academic
-        half-day explicit. Version 9 programs receive the enabled default.
+        half-day explicit and the clinic staffing source explicit. Version 9
+        programs receive the enabled Admin Time default, and programs without
+        an explicit staffing source remain capacity-managed. Version 8 has
+        implicit capacity of one point per resident.
         """
-        if not isinstance(value, dict) or value.get("schema_version") != 9:
+        if not isinstance(value, dict) or value.get("schema_version") not in (8, 9):
             return value
         migrated = deepcopy(value)
         migrated["schema_version"] = 10
         policy = migrated.get("clinic_policy")
         if isinstance(policy, dict):
             policy.setdefault("academic_half_day_is_attending_admin_time", True)
+            for site in policy.get("sites", []):
+                if isinstance(site, dict):
+                    site.setdefault("staffing_mode", "capacity_managed")
         return migrated
 
     @model_validator(mode="after")

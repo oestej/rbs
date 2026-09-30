@@ -100,10 +100,17 @@ already exist in `rbs.cloud` and surface in the UI behind `rbs ui --cloud`.
 
 ## File formats
 
-- `.rbsc` workspaces use a versioned, strictly validated schema. An immediately
-  preceding shape is upgraded only when its meaning is unambiguous.
-- Constraint catalogs (rotations, curricula, clinic policy) are independently
-  versioned; `data/catalog.json` is the bundled default.
+- `.rbsc` workspaces use schema v12; v9 through v11 documents migrate
+  (versions 9 and 10 gain an empty attending directory, version 11 migrates
+  attending work into week-specific schedules). Earlier versions are rejected.
+- Constraint catalogs (rotations, curricula, clinic policy) are schema v10
+  (v8 and v9 migrate automatically); `data/catalog.json` is the bundled default.
+- Clinic block training-level rules set `capacity_per_resident` (positive integer,
+  default 1), applied whenever that training level attends clinic on any rotation.
+  Staffing maxima count these points; allocation percentages and
+  minimum resident requirements still count sessions and residents. The stored
+  `residents_per_attending` field now represents capacity points per attending.
+  New documents and catalogs require a current build.
 - `schedule.json` carries the result plus `meta` describing validation status,
   raw solver status, and attending-count metrics.
 

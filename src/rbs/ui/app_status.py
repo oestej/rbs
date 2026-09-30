@@ -74,37 +74,20 @@ def _solve_chip(session: WorkspaceSession, workspace: Workspace) -> None:
 def _download_chip(session: WorkspaceSession, workspace: Workspace) -> None:
     from nicegui import ui
 
+    session.download_chip = ui.badge(color=None)
+    _refresh_download_chip(session, workspace)
     documents = _document_io(session)
-    if workspace.is_sample:
-        label, tone = "Sample Data", PILL_ALERT
-        file_is_out_of_date = False
-    elif documents is None:
-        label, tone = download_summary(workspace)
-        file_is_out_of_date = workspace.download_state is not DownloadState.CURRENT
-    else:
-        label, tone = document_summary(documents)
-        file_is_out_of_date = documents.dirty
-        _notify_recovery_error(session, documents)
-    session.download_chip = ui.badge(label, color=None).classes(f"{pill_classes(tone)} shrink-0")
-    if (
-        not workspace.is_sample
-        and documents is None
-        and workspace.download_state is DownloadState.NEVER
-    ):
-        session.download_chip.set_visibility(False)
     if documents is not None and documents.path is not None:
         session.download_chip.tooltip(str(documents.path))
-    file_handle.set_unsaved(
-        ui,
-        _should_warn_before_leave(session, workspace, file_is_out_of_date),
-    )
 
 
 def _refresh_status_chips(session: WorkspaceSession) -> None:
     """Update the header pills in place, without remounting the page."""
-    _refresh_download_chip(session)
     workspace = session.workspace()
-    if workspace is None or session.solve_chip is None:
+    if workspace is None:
+        return
+    _refresh_download_chip(session, workspace)
+    if session.solve_chip is None:
         return
     summary = solve_summary(workspace)
     if summary is None:
@@ -116,10 +99,12 @@ def _refresh_status_chips(session: WorkspaceSession) -> None:
     session.solve_chip.classes(replace=f"{pill_classes(tone)} shrink-0")
 
 
-def _refresh_download_chip(session: WorkspaceSession) -> None:
+def _refresh_download_chip(
+    session: WorkspaceSession, workspace: Workspace | None = None,
+) -> None:
     from nicegui import ui
 
-    workspace = session.workspace()
+    workspace = workspace if workspace is not None else session.workspace()
     if workspace is None or session.download_chip is None:
         return
     documents = _document_io(session)
@@ -130,8 +115,8 @@ def _refresh_download_chip(session: WorkspaceSession) -> None:
         label, tone = download_summary(workspace)
         file_is_out_of_date = workspace.download_state is not DownloadState.CURRENT
     else:
-        label, tone = document_summary(documents)
-        file_is_out_of_date = documents.dirty
+        file_is_out_of_date = _document_dirty(documents, workspace)
+        label, tone = document_summary(documents, dirty=file_is_out_of_date)
         _notify_recovery_error(session, documents)
     show_chip = (
         workspace.is_sample
@@ -147,6 +132,12 @@ def _refresh_download_chip(session: WorkspaceSession) -> None:
         ui,
         _should_warn_before_leave(session, workspace, file_is_out_of_date),
     )
+
+
+def _document_dirty(documents, workspace: Workspace) -> bool:
+    # Packaging adapters may support checking the snapshot already on screen.
+    check = getattr(documents, "is_dirty", None)
+    return check(workspace) if check is not None else documents.dirty
 
 
 def _should_warn_before_leave(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from functools import partial
 from typing import Any
@@ -89,17 +89,18 @@ def _resident_schedule_workspace(
     schedule_editing: bool = False,
     on_schedule_editing_change: ChangeResidentScheduleEditing | None = None,
     active_section: str = "resident_block_schedule",
+    focus_week: int | None = None,
     on_section_change=None,
     on_pdf_open: OpenPdfExport | None = None,
 ):
     from nicegui import ui
 
     block_report_state = {
-        "show_completed": False,
+        "show_completed": focus_week is not None,
         "editing": bool(block_schedule_editing),
     }
     clinic_report_state = {
-        "show_completed": False,
+        "show_completed": focus_week is not None,
         "editing": bool(schedule_editing and not block_schedule_editing),
     }
     schedule_state: dict[str, Schedule | None] = {"value": schedule}
@@ -146,10 +147,34 @@ def _resident_schedule_workspace(
             )
             ui.notify(f"Unable to export schedule PDF: {exc}", type="negative")
 
+    section_renderers: dict[str, Callable[[], None]] = {}
+    rendered_sections: set[str] = set()
+
+    def ensure_section_rendered(name: str) -> None:
+        """Build a schedule section the first time its tab is shown.
+
+        The block and clinic reports are the expensive part of this card, and any
+        accepted edit rebuilds the whole workspace. Deferring them keeps an edit in
+        one section from redrawing schedules the user is not looking at.
+        """
+        if name in rendered_sections:
+            return
+        render = section_renderers.get(name)
+        if render is not None:
+            render()
+
+    def handle_section_change(event) -> None:
+        value = getattr(event, "value", event)
+        name = getattr(value, "name", value)
+        if isinstance(name, str):
+            ensure_section_rendered(name)
+        if on_section_change is not None:
+            on_section_change(event)
+
     with master_detail.detail_card():
         with ui.row().classes("rbs-resident-schedule-header w-full items-center gap-4 px-4"):
             with (
-                ui.tabs(on_change=on_section_change)
+                ui.tabs(on_change=handle_section_change)
                 .props("dense no-caps inline-label align=left")
                 .classes("rbs-resident-schedule-tabs min-w-0 flex-1") as tabs
             ):
@@ -179,13 +204,16 @@ def _resident_schedule_workspace(
             "resident_clinic_schedule": clinic_tab,
             "resident_elective_preference": elective_tab,
         }
-        initial_schedule_tab = (
-            clinic_tab
+        initial_section = (
+            "resident_clinic_schedule"
             if clinic_report_state["editing"]
-            else block_tab
+            else "resident_block_schedule"
             if block_report_state["editing"]
-            else section_tabs.get(active_section, block_tab)
+            else active_section
+            if active_section in section_tabs
+            else "resident_block_schedule"
         )
+        initial_schedule_tab = section_tabs[initial_section]
         with ui.tab_panels(tabs, value=initial_schedule_tab).classes(
             "rbs-resident-schedule-panels w-full min-w-0"
         ):
@@ -193,6 +221,7 @@ def _resident_schedule_workspace(
                 block_report = ui.column().classes("w-full min-w-0 gap-0")
 
                 def render_block_report() -> None:
+                    rendered_sections.add("resident_block_schedule")
                     block_report.clear()
                     with block_report:
                         _resident_block_schedule_report(
@@ -200,6 +229,7 @@ def _resident_schedule_workspace(
                             schedule_state["value"],
                             resident,
                             show_completed=bool(block_report_state["show_completed"]),
+                            focus_week=focus_week,
                             on_show_completed_change=toggle_completed,
                             editing=bool(block_report_state["editing"]),
                             on_editing_change=toggle_block_editing,
@@ -228,11 +258,12 @@ def _resident_schedule_workspace(
                     if clinic_was_editing:
                         render_clinic_report()
 
-                render_block_report()
+                section_renderers["resident_block_schedule"] = render_block_report
             with ui.tab_panel(clinic_tab).classes("rbs-resident-schedule-panel p-0"):
                 clinic_report = ui.column().classes("w-full min-w-0 gap-0")
 
                 def render_clinic_report() -> None:
+                    rendered_sections.add("resident_clinic_schedule")
                     clinic_report.clear()
                     with clinic_report:
                         _resident_clinic_schedule_report(
@@ -240,6 +271,7 @@ def _resident_schedule_workspace(
                             schedule_state,
                             resident,
                             show_completed=bool(clinic_report_state["show_completed"]),
+                            focus_week=focus_week,
                             on_show_completed_change=toggle_clinic_completed,
                             editing=bool(clinic_report_state["editing"]),
                             on_editing_change=toggle_clinic_editing,
@@ -269,7 +301,7 @@ def _resident_schedule_workspace(
                     if block_was_editing:
                         render_block_report()
 
-                render_clinic_report()
+                section_renderers["resident_clinic_schedule"] = render_clinic_report
             with ui.tab_panel(elective_tab).classes("rbs-resident-schedule-panel p-0"):
                 render_elective_preferences(
                     instance,
@@ -278,6 +310,7 @@ def _resident_schedule_workspace(
                     on_schedule_save=on_schedule_save,
                     schedule_is_current=schedule_is_current,
                 )
+        ensure_section_rendered(initial_section)
 
 
 def _resident_block_schedule_manager(
@@ -1295,6 +1328,7 @@ def _resident_block_schedule_report(
     on_schedule_change: SaveResidentScheduleResult | None = None,
     schedule_is_current: bool = True,
     today: date | None = None,
+    focus_week: int | None = None,
 ) -> None:
     from nicegui import ui
 
@@ -1305,6 +1339,7 @@ def _resident_block_schedule_report(
         schedule,
         resident.id,
         show_completed=show_completed,
+        focus_week=focus_week,
         today=today,
     )
     with ui.column().classes("rbs-resident-schedule-content w-full min-w-0 gap-3 p-5"):
@@ -1357,17 +1392,43 @@ def _resident_block_schedule_report(
             .classes("rbs-resident-block-timeline w-full")
             .props('role="list" aria-label="Block schedule"')
         ):
+            focus_pending = True
             for row in report_rows:
-                _resident_block_schedule_lane(row)
+                focused = focus_pending and row.get("focused") == "true"
+                _resident_block_schedule_lane(row, focused=focused)
+                if focused:
+                    focus_pending = False
 
 
-def _resident_block_schedule_lane(row: dict[str, str]) -> None:
+def _reveal_schedule_target(lane) -> None:
+    from nicegui import ui
+
+    lane.classes("rbs-schedule-navigation-target").props('tabindex="-1"')
+    ui.run_javascript(f"""(() => {{
+        let attempts = 0;
+        const reveal = () => {{
+            const lane = document.getElementById('c{lane.id}');
+            if (lane && lane.getClientRects().length) {{
+                lane.scrollIntoView({{block: 'center'}});
+                lane.focus({{preventScroll: true}});
+            }} else if (++attempts < 120) {{
+                requestAnimationFrame(reveal);
+            }}
+        }};
+        requestAnimationFrame(reveal);
+    }})();""")
+
+
+def _resident_block_schedule_lane(row: dict[str, str], *, focused: bool = False) -> None:
     """Render one calm, uninterrupted lane in the resident block timeline."""
     from nicegui import ui
 
     kind = row["kind"]
     week_label = "Week" if "–" not in row["weeks"] else "Weeks"
-    with ui.element("div").classes(f"rbs-resident-block-lane is-{kind}").props('role="listitem"'):
+    lane = ui.element("div").classes(f"rbs-resident-block-lane is-{kind}").props('role="listitem"')
+    if focused:
+        _reveal_schedule_target(lane)
+    with lane:
         with ui.element("div").classes("rbs-resident-block-period"):
             ui.label(f"{week_label} {row['weeks']}").classes("rbs-resident-block-week-range")
             ui.label(row["dates"]).classes("rbs-resident-block-date-range")
@@ -1420,6 +1481,7 @@ def _resident_clinic_schedule_report(
     on_editing_change: Callable[[], None] | None = None,
     on_schedule_change: SaveResidentScheduleResult | None = None,
     today: date | None = None,
+    focus_week: int | None = None,
 ) -> None:
     from nicegui import ui
 
@@ -1541,6 +1603,8 @@ def _resident_clinic_schedule_report(
                 assert current_schedule is not None
                 week = int(row["week"])
                 week_containers[week] = ui.column().classes("w-full gap-0")
+                if week == focus_week:
+                    _reveal_schedule_target(week_containers[week])
                 with week_containers[week]:
                     _resident_clinic_week_calendar(
                         instance,
@@ -2117,20 +2181,37 @@ def _resident_clinic_context_menu(
 ) -> None:
     from nicegui import ui
 
-    available_site_ids = resident_clinic_available_site_ids(
-        context.instance,
-        context.schedule,
-        resident_id=context.resident.id,
-        week=context.week,
-        weekday=state.weekday,
-        session=state.session,
-        clinic_occupancy=context.clinic_occupancy,
-    )
-    with ui.context_menu().classes("rbs-resident-clinic-context-menu"):
-        if state.visible_slot is None:
-            _resident_clinic_add_menu(context, state, available_site_ids)
-        else:
-            _resident_clinic_existing_menu(context, state, available_site_ids)
+    menu = ui.context_menu().classes("rbs-resident-clinic-context-menu")
+
+    def populate() -> None:
+        schedule = context.active_schedule()
+        current = replace(
+            context,
+            schedule=schedule,
+            clinic_occupancy=(
+                context.clinic_occupancy
+                if schedule is context.schedule
+                else occupancy(context.instance, schedule)
+            ),
+        )
+        current_state = _resident_clinic_cell_state(current, state.weekday, state.session)
+        available_site_ids = resident_clinic_available_site_ids(
+            current.instance,
+            schedule,
+            resident_id=current.resident.id,
+            week=current.week,
+            weekday=state.weekday,
+            session=state.session,
+            clinic_occupancy=current.clinic_occupancy,
+        )
+        menu.clear()
+        with menu:
+            if current_state.visible_slot is None:
+                _resident_clinic_add_menu(current, current_state, available_site_ids)
+            else:
+                _resident_clinic_existing_menu(current, current_state, available_site_ids)
+
+    menu.on("before-show", populate)
 
 
 def _resident_clinic_add_menu(

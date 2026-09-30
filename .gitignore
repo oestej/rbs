@@ -21,6 +21,12 @@ tmp/
 schedule.json
 *.sqlite
 *.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+*.sqlite3-shm
+*.sqlite3-wal
+*.sqlite3-journal
 rbs.sqlite
 # data/ holds versioned scheduling sources only: the demo catalog and the
 # committed sample dump. Ignore local solves, databases, and ad-hoc dumps

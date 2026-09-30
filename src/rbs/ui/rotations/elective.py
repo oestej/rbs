@@ -1404,7 +1404,7 @@ def _elective_rotation_view(
             with ui.row().classes("items-center gap-1"):
                 ui.button("Edit", icon="edit", on_click=on_edit).props(PRIMARY_BUTTON_PROPS)
                 if rotation.kind is RotationKind.ELECTIVE:
-                    ui.button(
+                    delete = ui.button(
                         icon="delete_outline",
                         on_click=partial(
                             _confirm_remove_elective_rotation,
@@ -1413,10 +1413,8 @@ def _elective_rotation_view(
                             selected_rotation_id=rotation.id,
                             on_save=on_save,
                         ),
-                    ).props(
-                        f"{DESTRUCTIVE_ICON_BUTTON_PROPS} "
-                        f"aria-label='Delete elective rotation {rotation.name}'"
-                    )
+                    ).props(DESTRUCTIVE_ICON_BUTTON_PROPS)
+                    delete.props["aria-label"] = f"Delete elective rotation {rotation.name}"
                 with ui.button(
                     icon="arrow_back",
                     on_click=partial(on_select, None),

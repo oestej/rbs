@@ -1658,11 +1658,63 @@ def test_attempt_rank_refuses_an_invalid_attempt_holding_a_better_objective() ->
     valid = attempt(1_233_681_318.0, [])
     invalid = attempt(
         996_481_423.0,
-        ["Hacienda Clinic capacity exceeded: week 22 monday morning (5 residents; max 4)"],
+        ["Hacienda Clinic capacity exceeded: week 22 monday morning (5 capacity points; max 4)"],
     )
 
     assert _attempt_rank(valid) < _attempt_rank(invalid)
     assert min([invalid, valid], key=_attempt_rank) is valid
+
+
+def test_portfolio_compiles_once_and_isolates_search_models(monkeypatch) -> None:
+    import threading
+
+    from rbs.solver.core import cp_sat
+    from rbs.solver.core.base import empty_schedule
+
+    instance = sample_instance()
+    options = instance.solver.revised(num_workers=12, solve_attempts=3, random_seed=7)
+    compiled = []
+    original_protos = []
+    attempts = []
+    barrier = threading.Barrier(3, timeout=10)
+
+    def compile_once(*args, **kwargs):
+        problem = compile_problem(*args, **kwargs)
+        compiled.append(problem)
+        original_protos.append(str(problem.context.model.Proto()))
+        return problem
+
+    def search(self, problem, *, started, workers, seed):
+        model = problem.context.model
+        assert str(model.Proto()) == original_protos[0]
+        literal = next(iter(problem.context.placements.values()))
+        model.Add(literal == seed % 2)
+        model.Minimize(problem.clinic.quality_cost)
+        assert model.Validate() == ""
+        barrier.wait()
+        assert len(model.Proto().constraints) == (
+            len(compiled[0].context.model.Proto().constraints) + 1
+        )
+        attempts.append((model, started, workers, seed))
+        result = empty_schedule(
+            instance, engine=self.name, status=SolverStatus.UNKNOWN, notes=[],
+        )
+        result.meta.solver_objective = float(seed)
+        return result
+
+    monkeypatch.setattr(cp_sat, "compile_problem", compile_once)
+    monkeypatch.setattr(cp_sat.CpSatEngine, "_solve_once", search)
+    result = cp_sat.CpSatEngine()._solve_portfolio(
+        instance, options=options, reference_schedule=None,
+    )
+
+    assert len(compiled) == 1
+    assert str(compiled[0].context.model.Proto()) == original_protos[0]
+    assert len({id(model) for model, *_ in attempts}) == 3
+    assert len({started for _, started, _, _ in attempts}) == 1
+    assert {workers for _, _, workers, _ in attempts} == {4}
+    assert sorted(seed for _, _, _, seed in attempts) == [7, 8, 9]
+    assert result.meta.solver_objective == 7
 
 
 @pytest.mark.solve

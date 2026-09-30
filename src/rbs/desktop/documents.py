@@ -26,6 +26,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Protocol
 
+from rbs.desktop.atomic_files import atomic_write_text
 from rbs.desktop.settings import DesktopSettingsFile
 from rbs.models.instance import SchedulerInput
 from rbs.models.rbsc import portable_case_payload, portable_catalog_payload
@@ -127,6 +128,7 @@ class DesktopDocumentController:
         self.application_settings = application_settings
         self.recovered_from: Path | None = None
         self._checkpoint_fingerprint: str | None = None
+        self._semantic_cache: tuple[tuple[int, int], str] | None = None
         self._recovery_suspended = 0
         self._recovery_lock = threading.RLock()
         self._select_only_workspace_if_present()
@@ -153,14 +155,24 @@ class DesktopDocumentController:
         name, scheduling input, solution and their revision relationship are in
         it, so edits such as a rename cannot accidentally remain "clean".
         """
-        workspace = self.workspace
+        return self.is_dirty(self.workspace)
+
+    def is_dirty(self, workspace: Workspace | None) -> bool:
+        """Compare a caller's snapshot with the saved document baseline."""
         if workspace is None:
             return False
         if workspace.is_sample:
             return False
         if self._saved_fingerprint is None:
             return True
-        return _semantic_fingerprint(workspace) != self._saved_fingerprint
+        return self._fingerprint(workspace) != self._saved_fingerprint
+
+    def _fingerprint(self, workspace: Workspace) -> str:
+        key = (workspace.id, workspace.workspace_revision)
+        with self._recovery_lock:
+            if self._semantic_cache is None or self._semantic_cache[0] != key:
+                self._semantic_cache = (key, _semantic_fingerprint(workspace))
+            return self._semantic_cache[1]
 
     @property
     def settings_error(self) -> str | None:
@@ -249,7 +261,7 @@ class DesktopDocumentController:
         payload, disk_fingerprint = self._read_payload(source)
         workspace = self._replace_workspace_from_rbsc(payload)
         self.path = source
-        self._saved_fingerprint = _semantic_fingerprint(workspace)
+        self._saved_fingerprint = self._fingerprint(workspace)
         self._disk_fingerprint = disk_fingerprint
         self.recovered_from = None
         self.generation += 1
@@ -386,7 +398,7 @@ class DesktopDocumentController:
                     _remove_recovery_checkpoint(self.recovery_path)
                     self._checkpoint_fingerprint = None
                 else:
-                    fingerprint = _semantic_fingerprint(workspace)
+                    fingerprint = self._fingerprint(workspace)
                     if (
                         fingerprint == self._checkpoint_fingerprint
                         and self.recovery_path.is_file()
@@ -471,6 +483,10 @@ class DesktopDocumentController:
 
     def _on_store_commit(self) -> None:
         """Checkpoint every committed mutation through the Store boundary."""
+        # Restore can replace a document with identical ids and revisions. Invalidate
+        # even while recovery is suspended, before inspecting the replacement.
+        with self._recovery_lock:
+            self._semantic_cache = None
         if not self._recovery_suspended:
             self.checkpoint()
 
@@ -522,7 +538,7 @@ class DesktopDocumentController:
                 )
             except KeyError:
                 pass
-            self._saved_fingerprint = _semantic_fingerprint(workspace)
+            self._saved_fingerprint = self._fingerprint(workspace)
             self.checkpoint()
         return destination
 
@@ -656,23 +672,7 @@ def _atomic_write_text(destination: Path, payload: str) -> None:
     except FileNotFoundError:
         pass
 
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=parent,
-        prefix=f".{destination.name}.",
-        suffix=".tmp",
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        if existing_mode is not None:
-            os.chmod(temporary, existing_mode)
-        os.replace(temporary, destination)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
+    atomic_write_text(destination, payload, mode=existing_mode)
 
 
 def _atomic_sqlite_checkpoint(source: Path, destination: Path) -> None:

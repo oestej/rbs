@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date
 
 from pydantic import ValidationError
@@ -19,6 +20,7 @@ from rbs.models.workspace import Workspace
 from rbs.repository import WorkspaceRepository
 from rbs.solver.validation import validate_schedule_or_raise
 from rbs.ui import page_shells
+from rbs.ui.deferred_sections import defer_sections
 from rbs.ui.locks import THROUGH_TODAY_SOURCE, set_lock_through_today
 from rbs.ui.settings.color_scheme import replace_color_scheme
 from rbs.ui.settings.training_levels import training_level_settings
@@ -45,6 +47,8 @@ def _settings_tab(
     active_section: str = "settings_general",
     on_section_change=None,
     apply_theme=None,
+    can_preload: Callable[[], bool] | None = None,
+    is_active: Callable[[], bool] | None = None,
 ) -> None:
     from nicegui import ui
 
@@ -54,7 +58,7 @@ def _settings_tab(
         max_width="max-w-4xl",
     ):
         with (
-            ui.tabs(on_change=on_section_change)
+            ui.tabs()
             .props("dense no-caps align=left")
             .classes("rbs-configuration-tabs w-full") as tabs
         ):
@@ -69,12 +73,17 @@ def _settings_tab(
             "settings_training_levels": training_levels_tab,
             "settings_advanced": advanced_tab,
         }
+        panels = {}
         with (
             ui.tab_panels(tabs, value=sections.get(active_section, general_tab))
             .props("animated")
             .classes("rbs-configuration-panels w-full")
         ):
-            with ui.tab_panel(general_tab).classes("p-0 pt-4"):
+            for name, tab in sections.items():
+                panels[name] = ui.tab_panel(tab).classes("p-0 pt-4")
+
+        def render_section(name: str) -> None:
+            if name == "settings_general":
                 _general_settings(
                     store,
                     workspace,
@@ -83,17 +92,27 @@ def _settings_tab(
                     redraw,
                     apply_theme,
                 )
-            with ui.tab_panel(training_levels_tab).classes("p-0 pt-4"):
+            elif name == "settings_training_levels":
                 training_level_settings(
                     workspace,
                     persist_instance,
                 )
-            with ui.tab_panel(advanced_tab).classes("p-0 pt-4"):
+            elif name == "settings_advanced":
                 _advanced_settings(
                     workspace,
                     persist_instance,
                     automatic_num_workers=_application_settings_io(state) is not None,
                 )
+
+        defer_sections(
+            tabs,
+            panels,
+            render_section,
+            active_section=active_section,
+            on_section_change=on_section_change,
+            can_preload=can_preload,
+            is_active=is_active,
+        )
 
 
 def _general_settings(
@@ -189,6 +208,16 @@ def _general_settings(
             persist_instance(
                 updated,
                 impact=InstanceEditImpact.CURRENT_SCHEDULE_CONSTRAINT,
+            )
+        except (ValidationError, ValueError) as exc:
+            ui.notify(str(exc), type="negative")
+
+    def toggle_placeholder_electives(event) -> None:
+        enabled = bool(event.value)
+        try:
+            persist_instance(
+                instance.revised(use_placeholder_electives=enabled),
+                impact=InstanceEditImpact.SOLVER_INPUT,
             )
         except (ValidationError, ValueError) as exc:
             ui.notify(str(exc), type="negative")
@@ -293,6 +322,17 @@ def _general_settings(
                     ):
                         ui.icon("lock_clock").classes("rbs-text-secondary")
                         ui.label(status).classes("rbs-type-body")
+                ui.checkbox(
+                    "Use placeholder electives",
+                    value=instance.use_placeholder_electives,
+                    on_change=toggle_placeholder_electives,
+                )
+                ui.label(
+                    "Every elective slot solves as a generic Placeholder block instead "
+                    "of a named service. Placeholder blocks are always eligible, "
+                    "carry no clinic hours so no clinic sessions are scheduled, and "
+                    "elective time is never backfilled with Clinic. Re-solve to apply."
+                ).classes("rbs-type-body rbs-text-muted")
 
 
 def _application_settings_io(state):

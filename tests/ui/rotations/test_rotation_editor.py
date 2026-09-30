@@ -1284,6 +1284,13 @@ def test_rotation_summary_is_the_first_and_default_workspace_tab() -> None:
     assert tabs[0]._props.get("label") == "Summary"
     panels = next(element for element in created if element.__class__.__name__ == "TabPanels")
     assert panels._props.get("model-value") == "rotation_summary"
+    section_panels = [element for element in created if element.__class__.__name__ == "TabPanel"]
+    assert [bool(panel.default_slot.children) for panel in section_panels] == [
+        True, False, False, False, False, False,
+    ]
+    section_tabs = next(element for element in created if element.__class__.__name__ == "Tabs")
+    section_tabs.set_value("fmed_configuration")
+    created = _editor_elements_since(before)
     # FMED and Elective block colors are chosen in their pop-out editors, so the
     # tab itself reports the current color rather than offering a palette.
     dedicated_color_buttons = [
@@ -1391,6 +1398,7 @@ def test_academic_override_row_has_edit_and_delete_actions() -> None:
         selected_rotation_id=None,
         on_select=lambda _rotation_id: None,
         on_save=lambda _instance, _rotation_id: None,
+        active_section="academic_configuration",
     )
     created = [
         element
@@ -1412,6 +1420,7 @@ def test_academic_screen_offers_a_switch_to_turn_the_half_day_off() -> None:
         selected_rotation_id=None,
         on_select=lambda _rotation_id: None,
         on_save=lambda _instance, _rotation_id: None,
+        active_section="academic_configuration",
     )
     created = [
         element
@@ -1447,6 +1456,7 @@ def test_academic_screen_reflects_a_program_that_runs_none() -> None:
         selected_rotation_id=None,
         on_select=lambda _rotation_id: None,
         on_save=lambda _instance, _rotation_id: None,
+        active_section="academic_configuration",
     )
     created = [
         element
@@ -1473,6 +1483,7 @@ def test_a_cancelled_week_renders_as_no_academic_half_day() -> None:
         selected_rotation_id=None,
         on_select=lambda _rotation_id: None,
         on_save=lambda _instance, _rotation_id: None,
+        active_section="academic_configuration",
     )
     created = [
         element
@@ -1817,6 +1828,8 @@ def test_clinic_editor_is_large_and_keeps_internal_id_hidden() -> None:
         element for element in inputs if element._props.get("label") == "Clinic name"
     )
     assert clinic_name.value == "Maple"
+    assert any(element._props.get("label") == "Capacity per attending" for element in created)
+    assert not any(element._props.get("label") == "Residents per attending" for element in created)
     assert not any(element._props.get("label") == "Clinic code" for element in inputs)
     clinic_editor_tabs = {
         element._props.get("label") for element in created if element.__class__.__name__ == "Tab"
@@ -2405,12 +2418,27 @@ def test_standalone_clinic_tab_uses_tabs_and_structured_site_cards() -> None:
     assert {card._style.get("--rbs-clinic-color") for card in site_cards} == {
         site.color for site in sample_instance().clinic_policy.sites
     }
-    assert {"Clinic", "Clinic sites", "Clinic block rules", "Resident Clinic exceptions"} <= labels
-    assert {"Target", "Weekly sessions", "Max residents", "Exceptions", "Primary"} <= labels
+    assert {"Clinic", "Clinic sites"} <= labels
+    assert "Clinic block rules" not in labels
+    assert "Resident Clinic exceptions" not in labels
+    assert {"Target", "Weekly sessions", "Max capacity", "Exceptions", "Primary"} <= labels
     assert add_clinic._props.get("unelevated") is True
-    assert "Constrained by clinic capacity only" in labels
     assert "No minimum or maximum" not in labels
     assert "Dedicated Clinic configuration" not in labels
+    controls = next(element for element in created if element.__class__.__name__ == "Tabs")
+    controls.set_value("clinic_block_rules")
+    controls.set_value("clinic_manual_blocks")
+    created = [
+        element for element_id, element in ui.context.client.elements.items()
+        if element_id not in before
+    ]
+    visited = set(ui.context.client.elements)
+    controls.set_value("clinic_sites")
+    controls.set_value("clinic_block_rules")
+    assert set(ui.context.client.elements) == visited
+    assert not site_grid.is_deleted
+    labels = {getattr(element, "_text", None) for element in created}
+    assert "Constrained by clinic capacity only" in labels
     assert any(
         element.__class__.__name__ == "Button"
         and element._props.get("label") == "Schedule clinic block"
@@ -2465,6 +2493,12 @@ def test_clinic_block_rules_dialog_uses_clinic_name_and_compact_pgy_controls() -
         for element in created
     ) == len(instance.color_scheme.palette)
     assert "Clinic required for PGY 1" in text
+    capacity_fields = [
+        element for element in created
+        if element._props.get("label") == "Capacity per resident"
+    ]
+    assert len(capacity_fields) == len(instance.rotation("clinic").pgy_rules)
+    assert all(element.value == 1 for element in capacity_fields)
     assert "4 Clinic weeks per resident" not in text
     assert "Count changes automatically add or remove Elective blocks." not in text
     assert not any(
@@ -3276,6 +3310,34 @@ def test_resident_waiver_skips_a_mandatory_block() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "resident_id,override_rotation,group_id,managed",
+    [
+        ("resident-009", "outpatient_gyn", None, True),
+        ("resident-009", "inpatient_ld", "bundle", True),
+        ("resident-009", "inpatient_ld", None, False),
+        ("resident-017", "inpatient_ld", "bundle", False),
+        ("resident-009", "elective", "bundle", False),
+        ("missing-resident", "inpatient_ld", "bundle", False),
+    ],
+)
+def test_resident_override_ownership_is_shared_by_editors_and_operations(
+    resident_id, override_rotation, group_id, managed,
+) -> None:
+    from rbs.models.case_blocks import ResidentRotationOverride
+    from rbs.ui.rotations.ops import resident_override_managed_by_rotation
+
+    override = ResidentRotationOverride(
+        resident_id=resident_id,
+        rotation_id=override_rotation,
+        duration_weeks=2,
+        group_instance_id=group_id,
+    )
+    assert resident_override_managed_by_rotation(
+        sample_instance(), override, "outpatient_gyn",
+    ) is managed
+
+
 def test_grouped_resident_override_requires_a_complete_linked_bundle() -> None:
     instance = sample_instance()
     rotation = instance.rotation("outpatient_gyn")
@@ -3341,6 +3403,25 @@ def test_grouped_resident_override_requires_a_complete_linked_bundle() -> None:
     )
     assert unmatched_extra.rotation_group_key is None
     assert unmatched_extra.rotation_group_instance_id is None
+
+
+def test_anchored_group_companions_are_not_owned_by_the_anchor_editor() -> None:
+    from rbs.models.case_blocks import ResidentRotationOverride
+    from rbs.ui.rotations.ops import resident_override_managed_by_rotation
+
+    instance = sample_instance()
+    instance = replace_standard_rotation(
+        instance,
+        "night_float",
+        instance.rotation("night_float"),
+        group_members_by_pgy={1: ["clinic", "fmed"], 2: [], 3: []},
+    )
+    override = ResidentRotationOverride(
+        resident_id="resident-001", rotation_id="fmed",
+        duration_weeks=2, group_instance_id="bundle",
+    )
+    assert not resident_override_managed_by_rotation(instance, override, "night_float")
+    assert resident_override_managed_by_rotation(instance, override, "fmed")
 
 
 def test_override_funding_prefers_unallocated_time() -> None:
@@ -4298,6 +4379,10 @@ def test_directory_click_with_two_dirty_editors_confirms_twice() -> None:
         on_save=lambda _instance, _rotation_id: None,
         active_section="standard_rotations",
     )
+    created = _editor_elements_since(before)
+    section_tabs = next(element for element in created if element.__class__.__name__ == "Tabs")
+    section_tabs.set_value("elective_configuration")
+    section_tabs.set_value("standard_rotations")
     created = _editor_elements_since(before)
     edits = [
         element

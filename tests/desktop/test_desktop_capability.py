@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from rbs.desktop.capability import (
     CAPABILITY_QUERY,
     DesktopCapability,
@@ -149,6 +151,38 @@ def test_query_capability_is_only_accepted_for_initial_root_get() -> None:
 
     assert post[0]["status"] == 404
     assert asset[0]["status"] == 404
+    assert inner.scopes == []
+
+
+@pytest.mark.parametrize("value", [b"%C3%A9", b"%FF", b"\xff", b"", b"wrong"])
+def test_malformed_query_capability_is_rejected_without_raising(value: bytes) -> None:
+    gate, inner = _gate()
+
+    messages = _run(_http_scope(query=CAPABILITY_QUERY.encode() + b"=" + value), gate)
+
+    assert messages[0]["status"] == 404
+    assert b"set-cookie" not in _headers(messages)
+    assert inner.scopes == []
+
+
+@pytest.mark.parametrize("scope_type", ["http", "websocket"])
+@pytest.mark.parametrize("value", [b'"\xe9"', b'"\\351"', b'"\xc3\xa9"', b"wrong"])
+def test_malformed_cookie_is_rejected_without_raising(scope_type: str, value: bytes) -> None:
+    gate, inner = _gate()
+    scope = (
+        _http_scope(origin=ORIGIN)
+        if scope_type == "http"
+        else _websocket_scope(cookie=None, origin=ORIGIN)
+    )
+    scope["headers"].append((b"cookie", COOKIE_NAME.encode() + b"=" + value))
+
+    messages = _run(scope, gate)
+
+    if scope_type == "http":
+        assert messages[0]["status"] == 404
+        assert b"set-cookie" not in _headers(messages)
+    else:
+        assert messages == [{"type": "websocket.close", "code": 1008}]
     assert inner.scopes == []
 
 

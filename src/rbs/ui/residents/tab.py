@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import calendar as calendar_module
 from collections.abc import Callable
-from datetime import date, timedelta
+from datetime import date
 from functools import partial
 
 from pydantic import ValidationError
@@ -22,12 +21,9 @@ from rbs.ui.buttons import (
 from rbs.ui.residents.ops import (
     add_resident,
     day_off_date,
-    day_off_is_selectable,
     next_resident_id,
     replace_resident,
     vacation_monday,
-    vacation_monday_is_selectable,
-    vacation_month_dates,
     vacation_week_for_monday,
 )
 from rbs.ui.residents.schedule import (
@@ -35,6 +31,7 @@ from rbs.ui.residents.schedule import (
     _resident_clinic_half_day_editor,
     _resident_schedule_workspace,
 )
+from rbs.ui.residents.time_away_calendar import time_away_calendar
 from rbs.workspaces import InstanceEditImpact
 
 SelectResident = Callable[[str | None], None]
@@ -61,49 +58,78 @@ def render_residents_tab(
     schedule_editing: bool = False,
     on_schedule_editing_change: Callable[[bool], None] | None = None,
     active_schedule_section: str = "resident_block_schedule",
+    focus_week: int | None = None,
     on_schedule_section_change=None,
     on_pdf_open: OpenPdfExport | None = None,
-) -> None:
+    detail_panel=None,
+    on_directory_ready: Callable[[Callable[[str | None], bool]], None] | None = None,
+):
+    """Render the resident directory and the open resident beside it.
+
+    Returns the detail container. Passing it back as ``detail_panel`` redraws
+    that side alone: editing one resident's preferences, locks, or schedule
+    cannot change the directory, which only lists names, training levels, and
+    time-away counts.
+    """
     creating = selected_resident_id == NEW_RESIDENT_ID
     selected = next(
         (resident for resident in instance.residents if resident.id == selected_resident_id),
         None,
     )
+    detail = {
+        "schedule": schedule,
+        "resident": selected,
+        "creating": creating,
+        "missing_id": (
+            selected_resident_id
+            if selected_resident_id and not creating and selected is None
+            else None
+        ),
+        "on_select": on_select,
+        "on_save": on_save,
+        "on_schedule_save": on_schedule_save,
+        "on_block_schedule_save": on_block_schedule_save,
+        "on_schedule_change": on_schedule_change,
+        "schedule_is_current": schedule_is_current,
+        "block_schedule_editing": block_schedule_editing,
+        "on_block_schedule_editing_change": on_block_schedule_editing_change,
+        "schedule_editing": schedule_editing,
+        "on_schedule_editing_change": on_schedule_editing_change,
+        "active_schedule_section": active_schedule_section,
+        "focus_week": focus_week,
+        "on_schedule_section_change": on_schedule_section_change,
+        "on_pdf_open": on_pdf_open,
+    }
+    if detail_panel is not None:
+        return _resident_detail_panel(instance, panel=detail_panel, **detail)
 
     with page_shells.master_detail(
         "Residents",
         subtitle="Manage resident details, time off, preferences, and schedules.",
     ):
-        with master_detail.split(detail_selected=selected_resident_id is not None):
-            _resident_directory(
+        with master_detail.split(detail_selected=selected_resident_id is not None) as split:
+            select_directory = _resident_directory(
                 instance,
                 selected_resident_id=selected_resident_id,
                 on_select=on_select,
             )
-            _resident_detail_panel(
-                instance,
-                schedule=schedule,
-                resident=selected,
-                creating=creating,
-                missing_id=(
-                    selected_resident_id
-                    if selected_resident_id and not creating and selected is None
-                    else None
-                ),
-                on_select=on_select,
-                on_save=on_save,
-                on_schedule_save=on_schedule_save,
-                on_block_schedule_save=on_block_schedule_save,
-                on_schedule_change=on_schedule_change,
-                schedule_is_current=schedule_is_current,
-                block_schedule_editing=block_schedule_editing,
-                on_block_schedule_editing_change=on_block_schedule_editing_change,
-                schedule_editing=schedule_editing,
-                on_schedule_editing_change=on_schedule_editing_change,
-                active_schedule_section=active_schedule_section,
-                on_schedule_section_change=on_schedule_section_change,
-                on_pdf_open=on_pdf_open,
-            )
+
+            def update_selection(resident_id: str | None) -> bool:
+                if split.is_deleted:
+                    return False
+                select_directory(resident_id)
+                split.classes(
+                    remove="rbs-master-has-selection rbs-master-no-selection",
+                    add=(
+                        "rbs-master-has-selection"
+                        if resident_id is not None else "rbs-master-no-selection"
+                    ),
+                )
+                return True
+
+            if on_directory_ready is not None:
+                on_directory_ready(update_selection)
+            return _resident_detail_panel(instance, **detail)
 
 
 def _resident_directory(
@@ -111,7 +137,7 @@ def _resident_directory(
     *,
     selected_resident_id: str | None,
     on_select: SelectResident,
-) -> None:
+) -> Callable[[str | None], None]:
     from nicegui import ui
 
     elements = master_detail.directory(
@@ -124,9 +150,20 @@ def _resident_directory(
     )
     search = elements.search
     directory = elements.body
+    items = {}
+
+    def select(resident_id: str | None) -> None:
+        nonlocal selected_resident_id
+        selected_resident_id = resident_id
+        for item_id, item in items.items():
+            item.classes(
+                remove="rbs-master-selected",
+                add=master_detail.selected_class(item_id == resident_id),
+            )
 
     def render_directory() -> None:
         directory.clear()
+        items.clear()
         query = str(search.value or "").strip().casefold()
         filtered = [
             resident
@@ -160,7 +197,7 @@ def _resident_directory(
                 )
                 with ui.list().props("separator").classes("w-full"):
                     for resident in sorted(grouped[pgy], key=resident_display_sort_key):
-                        _resident_list_item(
+                        items[resident.id] = _resident_list_item(
                             resident,
                             selected_resident_id,
                             on_select,
@@ -168,16 +205,17 @@ def _resident_directory(
 
     search.on_value_change(lambda: render_directory())
     render_directory()
+    return select
 
 
 def _resident_list_item(
     resident: Resident,
     selected_resident_id: str | None,
     on_select: SelectResident,
-) -> None:
+):
     vacation_label = _vacation_week_count_label(len(resident.vacation_weeks))
     day_label = _individual_day_count_label(len(resident.days_off))
-    master_detail.person_directory_item(
+    return master_detail.person_directory_item(
         resident.name,
         f"{vacation_label} · {day_label}",
         selected=resident.id == selected_resident_id,
@@ -204,11 +242,14 @@ def _resident_detail_panel(
     schedule_editing: bool = False,
     on_schedule_editing_change: Callable[[bool], None] | None = None,
     active_schedule_section: str = "resident_block_schedule",
+    focus_week: int | None = None,
     on_schedule_section_change=None,
     on_pdf_open: OpenPdfExport | None = None,
-) -> None:
+    panel=None,
+):
     editing = creating
-    panel = master_detail.detail_panel()
+    if panel is None:
+        panel = master_detail.detail_panel()
 
     def render_panel() -> None:
         nonlocal editing
@@ -256,6 +297,7 @@ def _resident_detail_panel(
                     schedule_editing=schedule_editing,
                     on_schedule_editing_change=on_schedule_editing_change,
                     active_schedule_section=active_schedule_section,
+                    focus_week=focus_week,
                     on_schedule_section_change=on_schedule_section_change,
                     on_pdf_open=on_pdf_open,
                 )
@@ -263,6 +305,7 @@ def _resident_detail_panel(
                 _empty_resident_detail(missing_id)
 
     render_panel()
+    return panel
 
 
 def _resident_view(
@@ -281,6 +324,7 @@ def _resident_view(
     schedule_editing: bool = False,
     on_schedule_editing_change: Callable[[bool], None] | None = None,
     active_schedule_section: str = "resident_block_schedule",
+    focus_week: int | None = None,
     on_schedule_section_change=None,
     on_pdf_open: OpenPdfExport | None = None,
 ) -> None:
@@ -324,6 +368,7 @@ def _resident_view(
             schedule_editing=schedule_editing,
             on_schedule_editing_change=on_schedule_editing_change,
             active_section=active_schedule_section,
+            focus_week=focus_week,
             on_section_change=on_schedule_section_change,
             on_pdf_open=on_pdf_open,
         )
@@ -555,115 +600,18 @@ def _vacation_week_editor(
     render_selected()
 
     with ui.row().classes("w-full items-end gap-2"):
-        with (
-            ui.input(
-                "Add vacation Monday",
-                placeholder="Choose a Monday",
-            )
-            .props("outlined readonly")
-            .classes("min-w-64 flex-1") as selected_date
-        ):
-            with ui.menu() as calendar_menu:
-                first_monday = instance.calendar.first_week_start
-                last_monday = vacation_monday(instance, instance.calendar.weeks)
-                first_month = first_monday.replace(day=1)
-                last_month = (last_monday + timedelta(days=6)).replace(day=1)
-                visible_month = first_month
-                highlighted_monday: date | None = None
-                calendar_container = ui.column().classes("rbs-vacation-calendar gap-0")
-
-                def select_calendar_monday(selected: date) -> None:
-                    nonlocal highlighted_monday
-                    highlighted_monday = selected
-                    selected_date.set_value(selected.isoformat())
-                    render_calendar()
-
-                def move_calendar_month(offset: int) -> None:
-                    nonlocal visible_month
-                    month_index = visible_month.year * 12 + visible_month.month - 1 + offset
-                    visible_month = date(month_index // 12, month_index % 12 + 1, 1)
-                    render_calendar()
-
-                def render_calendar() -> None:
-                    calendar_container.clear()
-                    with calendar_container:
-                        with ui.row().classes(
-                            "rbs-vacation-calendar-nav w-full items-center justify-between"
-                        ):
-                            previous = ui.button(
-                                icon="chevron_left",
-                                on_click=partial(move_calendar_month, -1),
-                            ).props("flat round dense aria-label='Previous month'")
-                            if visible_month <= first_month:
-                                previous.props("disable")
-                            ui.label(
-                                f"{calendar_module.month_name[visible_month.month]} "
-                                f"{visible_month.year}"
-                            ).classes("rbs-font-semibold")
-                            following = ui.button(
-                                icon="chevron_right",
-                                on_click=partial(move_calendar_month, 1),
-                            ).props("flat round dense aria-label='Next month'")
-                            if visible_month >= last_month:
-                                following.props("disable")
-
-                        with ui.element("div").classes("rbs-vacation-calendar-grid"):
-                            for weekday in ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"):
-                                ui.label(weekday).classes("rbs-vacation-calendar-weekday")
-                            highlighted_sunday = (
-                                highlighted_monday + timedelta(days=6)
-                                if highlighted_monday is not None
-                                else None
-                            )
-                            for calendar_day in vacation_month_dates(
-                                visible_month.year, visible_month.month
-                            ):
-                                classes = ["rbs-vacation-calendar-day"]
-                                if calendar_day.month != visible_month.month:
-                                    classes.append("is-outside-month")
-                                if (
-                                    highlighted_monday is not None
-                                    and highlighted_sunday is not None
-                                    and highlighted_monday <= calendar_day <= highlighted_sunday
-                                ):
-                                    classes.append("is-selected-week")
-                                selectable = vacation_monday_is_selectable(instance, calendar_day)
-                                if selectable:
-                                    classes.append("is-selectable")
-                                if calendar_day == highlighted_monday:
-                                    classes.append("is-selected-monday")
-                                with ui.element("div").classes(" ".join(classes)):
-                                    if selectable:
-                                        ui.button(
-                                            str(calendar_day.day),
-                                            on_click=partial(select_calendar_monday, calendar_day),
-                                        ).props(
-                                            "flat dense round "
-                                            f"aria-label='Choose Monday {calendar_day:%b %d, %Y}'"
-                                        ).classes("rbs-vacation-calendar-monday")
-                                    else:
-                                        ui.label(str(calendar_day.day))
-
-                render_calendar()
-                with ui.row().classes("w-full justify-end p-2"):
-                    ui.button("Close", on_click=calendar_menu.close).props("flat dense")
-            with selected_date.add_slot("append"):
-                ui.icon("event").classes("cursor-pointer").on("click", calendar_menu.open)
-        selected_date.on("click", calendar_menu.open)
+        calendar = time_away_calendar(instance, vacation=True)
+        selected_date = calendar.selected_date
 
         def add_week() -> None:
-            nonlocal highlighted_monday
             try:
                 week = vacation_week_for_monday(instance, selected_date.value or "")
                 if week in weeks:
                     raise ValueError(f"week {week} is already selected")
                 weeks.append(week)
                 weeks.sort()
-                selected_date.set_value(None)
-                highlighted_monday = None
-                calendar_menu.close()
+                calendar.reset()
                 render_selected()
-                render_calendar()
             except ValueError as exc:
                 ui.notify(str(exc), type="negative")
 
@@ -714,104 +662,18 @@ def _days_off_editor(
     render_selected()
 
     with ui.row().classes("w-full items-end gap-2"):
-        with (
-            ui.input(
-                "Add day off",
-                placeholder="Choose a date",
-            )
-            .props("outlined readonly")
-            .classes("min-w-64 flex-1") as selected_date
-        ):
-            with ui.menu() as calendar_menu:
-                first_day = instance.calendar.first_week_start
-                last_day = first_day + timedelta(days=instance.calendar.weeks * 7 - 1)
-                first_month = first_day.replace(day=1)
-                last_month = last_day.replace(day=1)
-                visible_month = first_month
-                highlighted_day: date | None = None
-                calendar_container = ui.column().classes("rbs-vacation-calendar gap-0")
-
-                def select_calendar_day(selected: date) -> None:
-                    nonlocal highlighted_day
-                    highlighted_day = selected
-                    selected_date.set_value(selected.isoformat())
-                    render_calendar()
-
-                def move_calendar_month(offset: int) -> None:
-                    nonlocal visible_month
-                    month_index = visible_month.year * 12 + visible_month.month - 1 + offset
-                    visible_month = date(month_index // 12, month_index % 12 + 1, 1)
-                    render_calendar()
-
-                def render_calendar() -> None:
-                    calendar_container.clear()
-                    with calendar_container:
-                        with ui.row().classes(
-                            "rbs-vacation-calendar-nav w-full items-center justify-between"
-                        ):
-                            previous = ui.button(
-                                icon="chevron_left",
-                                on_click=partial(move_calendar_month, -1),
-                            ).props("flat round dense aria-label='Previous month'")
-                            if visible_month <= first_month:
-                                previous.props("disable")
-                            ui.label(
-                                f"{calendar_module.month_name[visible_month.month]} "
-                                f"{visible_month.year}"
-                            ).classes("rbs-font-semibold")
-                            following = ui.button(
-                                icon="chevron_right",
-                                on_click=partial(move_calendar_month, 1),
-                            ).props("flat round dense aria-label='Next month'")
-                            if visible_month >= last_month:
-                                following.props("disable")
-
-                        with ui.element("div").classes("rbs-vacation-calendar-grid"):
-                            for weekday in ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"):
-                                ui.label(weekday).classes("rbs-vacation-calendar-weekday")
-                            for calendar_day in vacation_month_dates(
-                                visible_month.year, visible_month.month
-                            ):
-                                classes = ["rbs-vacation-calendar-day"]
-                                if calendar_day.month != visible_month.month:
-                                    classes.append("is-outside-month")
-                                selectable = day_off_is_selectable(instance, calendar_day)
-                                if selectable:
-                                    classes.append("is-selectable")
-                                if calendar_day == highlighted_day:
-                                    classes.append("is-selected-day")
-                                with ui.element("div").classes(" ".join(classes)):
-                                    if selectable:
-                                        ui.button(
-                                            str(calendar_day.day),
-                                            on_click=partial(select_calendar_day, calendar_day),
-                                        ).props(
-                                            "flat dense round "
-                                            f"aria-label='Choose day off {calendar_day:%b %d, %Y}'"
-                                        ).classes("rbs-day-off-calendar-date")
-                                    else:
-                                        ui.label(str(calendar_day.day))
-
-                render_calendar()
-                with ui.row().classes("w-full justify-end p-2"):
-                    ui.button("Close", on_click=calendar_menu.close).props("flat dense")
-            with selected_date.add_slot("append"):
-                ui.icon("event").classes("cursor-pointer").on("click", calendar_menu.open)
-        selected_date.on("click", calendar_menu.open)
+        calendar = time_away_calendar(instance, vacation=False)
+        selected_date = calendar.selected_date
 
         def add_day() -> None:
-            nonlocal highlighted_day
             try:
                 selected_day = day_off_date(instance, selected_date.value or "")
                 if selected_day in days:
                     raise ValueError(f"{selected_day:%b %d, %Y} is already selected")
                 days.append(selected_day)
                 days.sort()
-                selected_date.set_value(None)
-                highlighted_day = None
-                calendar_menu.close()
+                calendar.reset()
                 render_selected()
-                render_calendar()
             except ValueError as exc:
                 ui.notify(str(exc), type="negative")
 

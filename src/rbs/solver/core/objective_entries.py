@@ -352,7 +352,7 @@ def _available_week_entries(
     surviving: dict[str, list[tuple]] = defaultdict(list)
     for entry in entries:
         occurrence, weekday, session, literal, pinned = entry
-        if context.instance.resident_clinic_is_blocked(
+        if context.resident_clinic_is_blocked(
             occurrence.resident_id,
             week,
             weekday,
@@ -390,20 +390,12 @@ def _materialize_week_entries(
             slots_by_resident[resident_id].append(literal)
             present_by_slot[weekday, session].append(literal)
             present_by_pgy[weekday, session, pgy].append(literal)
-            # Decoding drops a vacation week, so a true literal there seats
-            # nobody. Only the sessions that survive into the schedule may be
-            # held against a half-day's capacity.
+        points = context.instance.clinic_capacity_for_pgy(pgy)
+        for literal in literals:
             if not on_vacation:
-                occupied_by_slot[weekday, session].append(literal)
-            if _counts_at_primary_site(
-                context,
-                week,
-                weekday,
-                session,
-                pinned,
-                literal,
-            ):
-                primary_by_slot[weekday, session].append(literal)
+                occupied_by_slot[weekday, session].extend([literal] * points)
+            if _counts_at_primary_site(context, week, weekday, session, pinned, literal):
+                primary_by_slot[weekday, session].extend([literal] * points)
     return (
         slots_by_resident,
         present_by_slot,
@@ -487,7 +479,7 @@ def _clinic_kind_occupancy(
             for index, slot in enumerate(decision.domain)
             if slot.weekday is not None and slot.session is not None
         }
-        for slot in clinic_kind.week_domain(context.instance, week, rotation):
+        for slot in clinic_kind.cached_week_domain(context, week, rotation):
             if slot.weekday is None or slot.session is None:
                 continue
             selected = selected_by_slot.get((slot.weekday, slot.session))
@@ -504,7 +496,7 @@ def _clinic_kind_occupancy(
             )
             entries.append((occurrence, slot.weekday, slot.session, in_clinic, pinned))
         return
-    for slot in clinic_kind.week_domain(context.instance, week, rotation):
+    for slot in clinic_kind.cached_week_domain(context, week, rotation):
         entries.append(
             (
                 occurrence,

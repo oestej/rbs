@@ -1,8 +1,8 @@
 """Golden fingerprint for the clinic objective model build.
 
-The ``objective.py`` split (slots / entries / terms / orchestration) must be a
-verbatim code motion: compiling the same instance has to produce the exact
-same CP-SAT proto, bounds, and decision counts. This test pins that behavior.
+Compiling the same instance must produce the same CP-SAT proto, bounds, and
+decision counts. Pin both the default pruned objective and the model with all
+quality goals enabled.
 
 Regenerate ``objective_golden.json`` only intentionally, after reviewing the
 model diff::
@@ -84,9 +84,16 @@ def objective_fingerprint(instance: SchedulerInput) -> dict:
 
 
 def _fingerprints() -> dict:
+    enabled = _configured_instance()
+    enabled = enabled.revised(
+        solver=enabled.solver.revised(
+            weights=enabled.solver.weights.revised(session_pgy_mix=1),
+        )
+    )
     return {
         "configured_sample": objective_fingerprint(_configured_instance()),
         "academic_override": objective_fingerprint(_academic_override_instance()),
+        "all_goals_enabled": objective_fingerprint(enabled),
     }
 
 

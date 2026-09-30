@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from functools import partial
 
 from rbs.logging import (
     get_logger,
@@ -14,6 +15,7 @@ from rbs.models.color_scheme import (
     accessible_text_color,
     contrasting_text_color,
 )
+from rbs.models.enums import RotationKind
 from rbs.models.instance import SchedulerInput
 from rbs.models.schedule import Schedule
 from rbs.models.workspace import Workspace, WorkspaceConflictError
@@ -152,7 +154,7 @@ def _mount_shell(session: WorkspaceSession) -> None:
             session.active_tab,
             session.navigation.block_schedule,
         )
-        with ui.tab_panels(session.navigation.tabs, value=active).classes(
+        with ui.tab_panels(session.navigation.tabs, value=active, animated=False).classes(
             "w-full min-w-0 max-w-full"
         ):
             for name in TAB_NAMES:
@@ -316,6 +318,7 @@ def _render_tab(session: WorkspaceSession, name: str) -> None:
             workspace.instance,
             on_save=persist_clinic,
             active_section=session.clinic_section,
+            selected_rotation_id=session.rotation_id,
             on_section_change=lambda event: _remember_clinic_section(session, event.value),
             schedule=workspace.latest_schedule,
             on_block_schedule_save=persist_clinic_block_schedule,
@@ -349,6 +352,10 @@ def _render_tab(session: WorkspaceSession, name: str) -> None:
             active_section=session.settings_section,
             on_section_change=lambda event: _remember_settings_section(session, event.value),
             apply_theme=lambda scheme: _set_nicegui_theme(session, scheme),
+            can_preload=lambda: (
+                session.workspace_id == workspace.id and "settings" not in session.stale_panels
+            ),
+            is_active=lambda: session.active_tab == "settings",
         )
 
 
@@ -411,14 +418,16 @@ def _render_block_schedule(session: WorkspaceSession, workspace: Workspace) -> N
         def render_grid() -> None:
             grid.clear()
             with grid:
-                _html(
-                    render_grid_html(
-                        instance,
-                        schedule,
-                        resident_edit_url="/",
-                        show_past_weeks=bool(session.show_past_block_weeks),
+                with ui.element("div").classes("w-full min-w-0") as board:
+                    _html(
+                        render_grid_html(
+                            instance,
+                            schedule,
+                            resident_edit_url="/",
+                            show_past_weeks=bool(session.show_past_block_weeks),
+                        )
                     )
-                )
+                _schedule_context_menu(board, session, instance)
 
         def toggle_block_past(event) -> None:
             session.show_past_block_weeks = bool(event.value)
@@ -426,6 +435,82 @@ def _render_block_schedule(session: WorkspaceSession, workspace: Workspace) -> N
 
         block_past.on_value_change(toggle_block_past)
         render_grid()
+
+
+def _schedule_context_menu(
+    board, session: WorkspaceSession, instance: SchedulerInput, *, clinic: bool = False,
+) -> None:
+    from nicegui import ui
+
+    selection: dict[str, object] = {}
+
+    def navigate(destination: str) -> None:
+        current = session.workspace()
+        if current is None:
+            return
+        resident_id = selection.get("resident_id")
+        rotation_id = selection.get("rotation_id")
+        week = selection.get("week")
+        if resident_id not in current.instance.residents_by_id:
+            return
+        if destination == "residents":
+            if not isinstance(week, int) or not 1 <= week <= current.instance.calendar.weeks:
+                return
+            session.resident_id = resident_id
+            session.resident_focus_week = week
+            session.resident_schedule_section = (
+                "resident_clinic_schedule" if clinic else "resident_block_schedule"
+            )
+            session.resident_block_schedule_editing = False
+            session.resident_schedule_editing = False
+        else:
+            if rotation_id not in current.instance.rotations_by_id:
+                return
+            session.rotation_id = rotation_id
+            rotation = current.instance.rotation(rotation_id)
+            if rotation.kind is RotationKind.CLINIC:
+                destination = "clinic"
+                session.clinic_section = "clinic_block_rules"
+            else:
+                session.rotation_section = {
+                    RotationKind.FMED: "fmed_configuration",
+                    RotationKind.ELECTIVE: "elective_configuration",
+                }.get(rotation.kind, "standard_rotations")
+        session.active_tab = destination
+        session.refresh_panel(destination)
+        if session.navigation is not None:
+            session.navigation.tabs.set_value(getattr(session.navigation, destination))
+
+    with board:
+        with ui.context_menu() as menu:
+            ui.menu_item(
+                "Go to resident" if clinic else "Go to Resident",
+                on_click=lambda: navigate("residents"),
+            )
+            rotation_item = None
+            if not clinic:
+                rotation_item = ui.menu_item(
+                    "Go to Rotation", on_click=lambda: navigate("rotations"),
+                )
+
+    def select(event) -> None:
+        selection.clear()
+        args = event.args
+        if not isinstance(args, dict):
+            menu.close()
+            return
+        selection.update(args)
+        if rotation_item is not None:
+            rotation_item.set_visibility(args.get("rotation_id") in instance.rotations_by_id)
+
+    board.on("contextmenu.capture", select, js_handler="""(event) => {
+      const cell = event.target.closest('SELECTION_TARGET');
+      if (!cell) { event.stopImmediatePropagation(); return; }
+      emit({resident_id: cell.dataset.residentId, rotation_id: cell.dataset.rotationId,
+            week: Number(cell.dataset.startWeek)});
+    }""".replace(
+        "SELECTION_TARGET", ".rbs-clinic-person" if clinic else "td[data-resident-id]",
+    ))
 
 
 def _render_clinic_schedule(session: WorkspaceSession, workspace: Workspace) -> None:
@@ -446,15 +531,17 @@ def _render_clinic_schedule(session: WorkspaceSession, workspace: Workspace) -> 
     def render_board() -> None:
         clinic_schedule.clear()
         with clinic_schedule:
-            _html(
-                render_clinic_html(
-                    instance,
-                    schedule,
-                    show_past_weeks=bool(session.show_past_clinic_weeks),
-                    site=selected_clinic_site(),
-                    show_legend=False,
+            with ui.element("div").classes("w-full min-w-0") as board:
+                _html(
+                    render_clinic_html(
+                        instance,
+                        schedule,
+                        show_past_weeks=bool(session.show_past_clinic_weeks),
+                        site=selected_clinic_site(),
+                        show_legend=False,
+                    )
                 )
-            )
+            _schedule_context_menu(board, session, instance, clinic=True)
 
     def toggle_clinic_past(event) -> None:
         session.show_past_clinic_weeks = bool(event.value)
@@ -591,6 +678,29 @@ def _render_rotations(session: WorkspaceSession, workspace: Workspace) -> None:
             impact=InstanceEditImpact.PRESENTATION,
         )
 
+    async def export_rotations_csv(content: str, filename: str) -> None:
+        from nicegui import ui
+
+        try:
+            if not await _present_csv_export(session, content, filename):
+                get_logger("documents").info(
+                    "schedule.export_cancelled",
+                    source="rotations_csv",
+                )
+                return
+            get_logger("documents").info(
+                "schedule.exported",
+                source="rotations_csv",
+            )
+        except Exception as exc:
+            get_logger("documents").error(
+                "schedule.export_failed",
+                source="rotations_csv",
+                error_code=type(exc).__name__,
+                exc_info=True,
+            )
+            ui.notify(str(exc), type="negative")
+
     render_rotations_tab(
         workspace.instance,
         schedule=workspace.latest_schedule,
@@ -601,6 +711,11 @@ def _render_rotations(session: WorkspaceSession, workspace: Workspace) -> None:
         active_section=session.rotation_section,
         on_section_change=lambda event: _remember_rotation_section(session, event.value),
         resident_edit_url="/",
+        on_export_csv=export_rotations_csv,
+        can_preload=lambda: (
+            session.workspace_id == workspace.id and "rotations" not in session.stale_panels
+        ),
+        is_active=lambda: session.active_tab == "rotations",
     )
 
 
@@ -636,7 +751,26 @@ async def _present_csv_export(
     return True
 
 
-def _render_residents(session: WorkspaceSession, workspace: Workspace) -> None:
+RESIDENT_DETAIL_REGION = "resident_detail"
+
+
+def _refresh_resident_detail(session: WorkspaceSession, panel) -> None:
+    """Redraw the open resident without rebuilding the directory beside them.
+
+    Re-entering the tab renderer rebuilds the save callbacks against the current
+    workspace, so the next edit still carries an up-to-date revision.
+    """
+    workspace = _workspace_for_render(session)
+    if workspace is not None:
+        _render_residents(session, workspace, detail_panel=panel)
+
+
+def _render_residents(
+    session: WorkspaceSession,
+    workspace: Workspace,
+    *,
+    detail_panel=None,
+) -> None:
     def select_resident(resident_id: str | None) -> None:
         if resident_id != session.resident_id:
             session.resident_block_schedule_editing = False
@@ -644,7 +778,23 @@ def _render_residents(session: WorkspaceSession, workspace: Workspace) -> None:
             session.resident_schedule_section = "resident_block_schedule"
         session.resident_id = resident_id
         session.active_tab = "residents"
-        session.refresh_panel("residents")
+        current = session.workspace()
+        if current is None:
+            session.refresh_panel("residents")
+            return
+        update_directory = session._select_resident_in_directory
+        with session.render_snapshot(current):
+            if (
+                current.instance.residents == workspace.instance.residents
+                and current.instance.requirements == workspace.instance.requirements
+                and update_directory is not None
+                and update_directory(resident_id)
+                and session.refresh_region(RESIDENT_DETAIL_REGION)
+            ):
+                return
+            # A different caller may have changed names, training levels, or time
+            # away since this directory was drawn; refresh those rows as well.
+            session.refresh_panel("residents")
 
     def persist_resident(updated: SchedulerInput, resident_id: str) -> None:
         session.resident_block_schedule_editing = False
@@ -665,7 +815,12 @@ def _render_residents(session: WorkspaceSession, workspace: Workspace) -> None:
         session.resident_schedule_editing = False
         session.resident_id = resident_id
         session.active_tab = "residents"
-        session.persist_instance(workspace, updated, impact=impact)
+        session.persist_instance(
+            workspace,
+            updated,
+            impact=impact,
+            region=RESIDENT_DETAIL_REGION,
+        )
 
     def persist_resident_block_schedule(
         updated: SchedulerInput,
@@ -686,9 +841,10 @@ def _render_residents(session: WorkspaceSession, workspace: Workspace) -> None:
         resident_id: str,
         refresh: bool,
     ) -> None:
+        nonlocal workspace
         session.resident_id = resident_id
         session.active_tab = "residents"
-        session.persist_schedule(workspace, updated, refresh=refresh)
+        workspace = session.persist_schedule(workspace, updated, refresh=refresh)
 
     def set_block_schedule_editing(editing: bool) -> None:
         session.resident_block_schedule_editing = editing
@@ -710,9 +866,11 @@ def _render_residents(session: WorkspaceSession, workspace: Workspace) -> None:
         }:
             session.resident_schedule_section = name
 
-    render_residents_tab(
+    panel = render_residents_tab(
         workspace.instance,
         workspace.latest_schedule,
+        detail_panel=detail_panel,
+        on_directory_ready=lambda select: setattr(session, "_select_resident_in_directory", select),
         selected_resident_id=session.resident_id,
         on_select=select_resident,
         on_save=persist_resident,
@@ -725,11 +883,20 @@ def _render_residents(session: WorkspaceSession, workspace: Workspace) -> None:
         schedule_editing=session.resident_schedule_editing,
         on_schedule_editing_change=set_clinic_schedule_editing,
         active_schedule_section=session.resident_schedule_section,
+        focus_week=getattr(session, "resident_focus_week", None),
         on_schedule_section_change=remember_schedule_section,
         on_pdf_open=lambda content, filename: _open_exported_pdf(
             session, content, filename
         ),
     )
+    session.resident_focus_week = None
+    if detail_panel is None:
+        session.register_region(
+            RESIDENT_DETAIL_REGION,
+            "residents",
+            panel,
+            partial(_refresh_resident_detail, session, panel),
+        )
 
 
 def _render_attendings(session: WorkspaceSession, workspace: Workspace) -> None:

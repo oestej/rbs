@@ -32,17 +32,92 @@
   Attending-managed staffing. Attending-managed resident capacity now follows
   effective week-by-week Precepting Clinic assignments, including weekly
   half-day overrides, schedule dates, vacation, clinic closures, and the
-  clinic's residents-per-attending ratio. Switching modes preserves the
+  clinic's capacity-per-attending ratio. Switching modes preserves the
   clinic's inactive numeric capacity setup.
 
 ### Changed
 
 - **Data compatibility:** Version 11 `.rbsc` files migrate dated attending work
   into separate, week-specific attending schedules and convert single category
-  targets into exact minimum/maximum ranges. Version 9 catalogs migrate with
-  automatic attending Admin Time enabled for the academic half-day. Files saved
-  by this version use `.rbsc` schema 12 and catalog schema 10 and cannot be
-  opened by older builds.
+  targets into exact minimum/maximum ranges. Versions 9 and 10 `.rbsc` files
+  migrate with an empty attending directory. Version 8 and 9 catalogs migrate
+  with capacity-managed staffing and automatic attending Admin Time enabled
+  for the academic half-day. Files saved by this version use `.rbsc` schema
+  12 and catalog schema 10 and cannot be opened by older builds.
+
+## [0.1.14] - 2026-09-29
+
+### Changed
+
+- Rotations and Configuration show the selected section first, then prepare
+  unopened sections while you are idle without replacing open editors.
+- **Scheduling:** Preparing a solve is faster and uses a smaller model when
+  quality goals are disabled, leaving more of the solve budget for scheduling.
+- Main pages open faster, and large block schedules resize more smoothly while
+  keeping rotation names readable.
+
+### Added
+
+- **Clinic schedule:** Right-click a resident’s clinic block to open their clinic
+  schedule at the selected week. Hovering still shows the details card.
+- **Block schedule:** Right-click a block to jump to its resident’s schedule or
+  rotation configuration.
+- **Clinic schedule:** Hover over or keyboard-focus a resident’s name to see their
+  rotation, clinic rules, availability restrictions, and manual override details.
+
+## [0.1.13] - 2026-09-19
+
+### Changed
+
+- **Desktop:** Clinic staffing now uses capacity points. Set Capacity per attending
+  in the Clinic editor and Capacity per resident for each training level in Clinic
+  block rules (default 1). These points apply to clinic attendance on every rotation,
+  including allocation, capacity checks, and attending totals.
+- **Data compatibility:** Documents and catalogs now use schemas 10 and 9;
+  preceding schemas migrate with capacity defaulting to 1. Older builds cannot
+  read newly saved files. Solver protocol 6 requires matching solver binaries;
+  schedule output and settings formats are unchanged.
+
+## [0.1.12] - 2026-09-18
+
+### Security
+
+- **Desktop:** Imported names remain literal text in action buttons, spreadsheet
+  exports protect against embedded formulas, and malformed local access tokens
+  are rejected without causing request errors. Saved documents are unchanged.
+
+### Added
+
+- **Rotations:** The Rotations screen now has an Export CSV button that
+  downloads every rotation and its configured parameters as a single
+  spreadsheet-friendly CSV file.
+- **Configuration:** A new Use placeholder electives option, off by default,
+  solves every elective slot as a generic gray Placeholder block with no
+  clinic hours instead of matching elective preferences or backfilling with
+  Clinic.
+
+### Fixed
+
+- **Desktop:** Editing solved schedules and checking save status do less repeated
+  work. Clinic sections and edit menus load when opened, switching residents
+  retains the directory search, and multi-attempt solves share model preparation
+  to leave more of the time budget for finding a schedule. Saved file formats
+  and scheduling priorities are unchanged.
+- **Residents:** Ranking elective preferences is about an order of magnitude
+  faster, and no longer slows down as the list grows. A resident's block and
+  clinic schedule reports are now drawn when their tab is opened, and saving
+  an edit redraws only the resident being edited instead of the whole tab —
+  which also speeds up block, clinic, and lock edits, the more so the larger
+  the program.
+- **Scheduling:** Solve readiness now identifies when required rotation blocks
+  need more resident-weeks than an overall or training-level maximum can hold,
+  including resident-specific additions and waivers, instead of starting a
+  solve that can only return infeasible.
+- **Academic year:** Moving to a new academic year now clears resident rotation
+  exceptions and overrides along with the block schedule and other
+  year-specific entries.
+
+## [0.1.11] - 2026-09-12
 
 ### Fixed
 
@@ -358,7 +433,11 @@
 - **Releases:** Download a macOS disk image built from the tagged commit, with
   that release's changelog section as its published description.
 
-[Unreleased]: https://github.com/oestej/rbs/compare/v0.1.10...HEAD
+[Unreleased]: https://github.com/oestej/rbs/compare/v0.1.14...HEAD
+[0.1.14]: https://github.com/oestej/rbs/compare/v0.1.13...v0.1.14
+[0.1.13]: https://github.com/oestej/rbs/compare/v0.1.12...v0.1.13
+[0.1.12]: https://github.com/oestej/rbs/compare/v0.1.11...v0.1.12
+[0.1.11]: https://github.com/oestej/rbs/compare/v0.1.10...v0.1.11
 [0.1.10]: https://github.com/oestej/rbs/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/oestej/rbs/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/oestej/rbs/compare/v0.1.7...v0.1.8

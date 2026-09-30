@@ -444,6 +444,92 @@ def test_impossible_weekly_minimum_explains_bounds_and_available_weeks() -> None
     assert "at most 16 are available" in issue.message
 
 
+def test_required_weeks_above_training_level_maximum_are_reported() -> None:
+    raw = sample_instance().model_dump(mode="json")
+    rotation = next(rotation for rotation in raw["rotations"] if rotation["id"] == "fmed")
+    pgy3_rule = next(rule for rule in rotation["pgy_rules"] if rule["pgy"] == 3)
+    pgy3_rule["max_concurrent"] = 1
+    instance = SchedulerInput.model_validate(raw)
+
+    result = check_solve_readiness(SolverProblem.from_instance(instance))
+
+    issue = next(issue for issue in result.issues if issue.rotation_id == "fmed")
+    assert issue.code == "rotation_capacity_conflict"
+    assert "64 PGY3 resident-weeks are required" in issue.message
+    assert "PGY3 maximum of 1 resident at a time allows 52" in issue.message
+    assert "shortfall of 12" in issue.message
+    assert issue.suggestions[0] == (
+        "Raise the PGY3 maximum for Family Med Education Service to at least 2 residents."
+    )
+
+
+def test_required_weeks_above_overall_maximum_are_reported() -> None:
+    raw = sample_instance().model_dump(mode="json")
+    rotation = next(rotation for rotation in raw["rotations"] if rotation["id"] == "fmed")
+    rotation["capacity"]["max_concurrent"] = 3
+    instance = SchedulerInput.model_validate(raw)
+
+    result = check_solve_readiness(SolverProblem.from_instance(instance))
+
+    issue = next(issue for issue in result.issues if issue.rotation_id == "fmed")
+    assert "required blocks need 208 resident-weeks" in issue.message
+    assert "overall maximum of 3 residents at a time allows 156" in issue.message
+    assert "shortfall of 52" in issue.message
+
+
+def test_maximum_capacity_counts_resident_specific_additions() -> None:
+    raw = sample_instance().model_dump(mode="json")
+    rotation = next(rotation for rotation in raw["rotations"] if rotation["id"] == "fmed")
+    pgy2_rule = next(rule for rule in rotation["pgy_rules"] if rule["pgy"] == 2)
+    pgy2_rule["max_concurrent"] = 1
+    raw["resident_rotation_overrides"] = [
+        {
+            "resident_id": "resident-009",
+            "rotation_id": "fmed",
+            "duration_weeks": 2,
+            "replaces_rotation_id": "elective",
+        }
+    ]
+    instance = SchedulerInput.model_validate(raw)
+
+    result = check_solve_readiness(SolverProblem.from_instance(instance))
+
+    issue = next(issue for issue in result.issues if issue.rotation_id == "fmed")
+    assert "82 PGY2 resident-weeks are required" in issue.message
+    assert "maximum of 1 resident at a time allows 52" in issue.message
+
+
+def test_maximum_capacity_excludes_waived_blocks() -> None:
+    raw = sample_instance().model_dump(mode="json")
+    rotation = next(rotation for rotation in raw["rotations"] if rotation["id"] == "fmed")
+    pgy3_rule = next(rule for rule in rotation["pgy_rules"] if rule["pgy"] == 3)
+    pgy3_rule["max_concurrent"] = 1
+    raw["resident_rotation_waivers"] = [
+        {
+            "resident_id": resident_id,
+            "rotation_id": "fmed",
+            "duration_weeks": 4,
+        }
+        for resident_id in ("resident-017", "resident-018", "resident-019")
+    ]
+    instance = SchedulerInput.model_validate(raw)
+
+    result = check_solve_readiness(SolverProblem.from_instance(instance))
+
+    assert not any(issue.rotation_id == "fmed" for issue in result.issues)
+
+
+def test_maximum_capacity_does_not_treat_elective_choices_as_required() -> None:
+    raw = sample_instance().model_dump(mode="json")
+    rotation = next(rotation for rotation in raw["rotations"] if rotation["id"] == "geriatrics")
+    rotation["capacity"]["max_concurrent"] = 0
+    instance = SchedulerInput.model_validate(raw)
+
+    result = check_solve_readiness(SolverProblem.from_instance(instance))
+
+    assert not any(issue.rotation_id == "geriatrics" for issue in result.issues)
+
+
 def test_required_block_longer_than_consecutive_limit_is_reported() -> None:
     raw = sample_instance().model_dump(mode="json")
     rotation = next(rotation for rotation in raw["rotations"] if rotation["id"] == "icu")

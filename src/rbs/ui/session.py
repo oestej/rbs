@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Protocol, runtime_checkable
@@ -47,6 +48,20 @@ class UiElement(Protocol):
     def __exit__(self, *args: object) -> object: ...
 
 
+@dataclass
+class PanelRegion:
+    """A sub-panel of a tab that a narrow edit can redraw on its own.
+
+    ``render`` owns clearing and refilling ``panel``; the session only decides
+    whether that is enough. Register a region only where the rest of its tab
+    cannot be affected by the edits that target it.
+    """
+
+    tab: str
+    panel: UiElement
+    render: Callable[[], None]
+
+
 RenderTab = Callable[["WorkspaceSession", str], None]
 MountShell = Callable[["WorkspaceSession"], None]
 RefreshStatus = Callable[["WorkspaceSession"], None]
@@ -77,6 +92,7 @@ class WorkspaceSession:
     resident_block_schedule_editing: bool = False
     resident_schedule_editing: bool = False
     resident_schedule_section: str = "resident_block_schedule"
+    resident_focus_week: int | None = None
     active_tab: str = "block_schedule"
     solving: bool = False
     theme: UiElement | None = field(default=None, repr=False)
@@ -88,12 +104,17 @@ class WorkspaceSession:
     workspace_dialog: UiElement | None = field(default=None, repr=False)
     solve_chip: UiElement | None = field(default=None, repr=False)
     panels: dict[str, UiElement] = field(default_factory=dict, repr=False)
+    regions: dict[str, PanelRegion] = field(default_factory=dict, repr=False)
     stale_panels: set[str] = field(default_factory=set, repr=False)
     _render_tab: RenderTab | None = field(default=None, repr=False)
     _mount: MountShell | None = field(default=None, repr=False)
     _refresh_status: RefreshStatus | None = field(default=None, repr=False)
     _recovery_error: str | None = field(default=None, repr=False)
     _leave_guard_baseline: tuple[int, int] | None = field(default=None, repr=False)
+    _render_workspace: Workspace | None = field(default=None, repr=False)
+    _select_resident_in_directory: Callable[[str | None], bool] | None = field(
+        default=None, repr=False,
+    )
 
     def __post_init__(self) -> None:
         # A session built without a host is the desktop case: one database, one
@@ -114,10 +135,22 @@ class WorkspaceSession:
         """Return the current workspace without changing it."""
         if self.workspace_id is None:
             return None
+        if self._render_workspace is not None and self._render_workspace.id == self.workspace_id:
+            return self._render_workspace
         try:
             return self.store.get(self.workspace_id)
         except KeyError:
             return None
+
+    @contextmanager
+    def render_snapshot(self, workspace: Workspace) -> Iterator[None]:
+        """Reuse one snapshot during a synchronous render, never across UI events."""
+        previous = self._render_workspace
+        self._render_workspace = workspace
+        try:
+            yield
+        finally:
+            self._render_workspace = previous
 
     def refresh_automatic_locks(
         self,
@@ -144,6 +177,7 @@ class WorkspaceSession:
     def reset_navigation(self, workspace_id: int | None) -> None:
         self.workspace_id = workspace_id
         self._leave_guard_baseline = None
+        self._select_resident_in_directory = None
         self.resident_id = None
         self.attending_id = None
         self.rotation_id = None
@@ -156,6 +190,7 @@ class WorkspaceSession:
         self.resident_block_schedule_editing = False
         self.resident_schedule_editing = False
         self.resident_schedule_section = "resident_block_schedule"
+        self.resident_focus_week = None
         self.active_tab = "block_schedule"
         self.solving = False
 
@@ -166,7 +201,14 @@ class WorkspaceSession:
         *,
         impact: InstanceEditImpact = InstanceEditImpact.SOLVER_INPUT,
         draft_schedule: Schedule | None = None,
+        region: str | None = None,
     ) -> Workspace:
+        """Save an instance edit and redraw what it can have changed.
+
+        ``region`` names a registered sub-panel that already covers the edit, so
+        the rest of its tab is left standing. Pass it only when nothing outside
+        that region can render the fields being edited.
+        """
         self._require_active_snapshot(workspace)
         try:
             saved = WorkspaceController(self.store).save_instance(
@@ -182,9 +224,11 @@ class WorkspaceSession:
         sync_settings = getattr(documents, "sync_application_settings", None)
         if sync_settings is not None:
             sync_settings(saved.instance)
-        self.touch()
-        self.mark_stale()
-        self.refresh_visible()
+        with self.render_snapshot(saved):
+            self.touch()
+            self.mark_stale()
+            if region is None or not self.refresh_region(region):
+                self.refresh_visible()
         return saved
 
     def persist_schedule(
@@ -200,10 +244,11 @@ class WorkspaceSession:
         except WorkspaceConflictError:
             self._refresh_after_conflict()
             raise
-        self.touch()
-        self.mark_stale()
-        if refresh:
-            self.refresh_visible()
+        with self.render_snapshot(saved):
+            self.touch()
+            self.mark_stale()
+            if refresh:
+                self.refresh_visible()
         return saved
 
     def _require_active_snapshot(self, workspace: Workspace) -> None:
@@ -234,6 +279,32 @@ class WorkspaceSession:
     def mark_stale(self, *tabs: str) -> None:
         self.stale_panels.update(tabs or TAB_NAMES)
 
+    def register_region(
+        self,
+        name: str,
+        tab: str,
+        panel: UiElement,
+        render: Callable[[], None],
+    ) -> None:
+        """Expose a sub-panel of ``tab`` that an edit can redraw by itself."""
+        self.regions[name] = PanelRegion(tab=tab, panel=panel, render=render)
+
+    def refresh_region(self, name: str) -> bool:
+        """Redraw one region, or report that it is no longer mounted.
+
+        A caller that gets ``False`` still owes its tab a full refresh: the
+        region belongs to a torn-down render, or was never registered.
+        """
+        region = self.regions.get(name)
+        if region is None:
+            return False
+        if getattr(region.panel, "is_deleted", False):
+            del self.regions[name]
+            return False
+        region.render()
+        self.stale_panels.discard(region.tab)
+        return True
+
     def refresh_visible(self) -> None:
         self.refresh_panel(self.active_tab)
 
@@ -242,6 +313,9 @@ class WorkspaceSession:
         if panel is None or self._render_tab is None:
             self.stale_panels.discard(name)
             return
+        for region_name, region in list(self.regions.items()):
+            if region.tab == name:
+                del self.regions[region_name]
         panel.clear()
         with panel:
             self._render_tab(self, name)
@@ -261,6 +335,7 @@ class WorkspaceSession:
         if self._mount is None:
             return
         self.panels.clear()
+        self.regions.clear()
         self.navigation = None
         self.stale_panels.clear()
         self._mount(self)

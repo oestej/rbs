@@ -247,3 +247,73 @@ def apply_shared_elective_color(
 
 
 __all__.append("apply_shared_elective_color")
+
+
+PLACEHOLDER_ELECTIVE_ID = "placeholder-elective"
+PLACEHOLDER_ELECTIVE_CODE = "PHOLD"
+PLACEHOLDER_ELECTIVE_NAME = "Placeholder"
+PLACEHOLDER_ELECTIVE_COLOR = DEFAULT_ROTATION_COLOR
+
+
+def is_placeholder_elective(rotation_id: str) -> bool:
+    """Whether an ID is the generic placeholder used for elective time."""
+    return rotation_id == PLACEHOLDER_ELECTIVE_ID
+
+
+def placeholder_elective_rotation(pgys: list[int] | tuple[int, ...]) -> Rotation:
+    """Build the generic placeholder block for elective time.
+
+    The placeholder is always eligible for any elective slot (1-5 weeks for
+    every training level), is Away so no clinic sessions are assigned on its
+    schedule, keeps its own neutral-gray color, and is repeatable without
+    blackouts. It uses a standard kind so the shared elective color does not
+    overwrite its neutral gray.
+    """
+    from rbs.models.rotation import (
+        PGYRotationRule,
+        RotationBlockConfig,
+        VacationRule,
+    )
+
+    ordered = sorted({int(pgy) for pgy in pgys if int(pgy) >= 1})
+    if not ordered:
+        ordered = [1]
+    rules = [
+        PGYRotationRule(
+            pgy=pgy,
+            block_configs=[
+                RotationBlockConfig(
+                    duration_weeks=duration,
+                    vacation=VacationRule(
+                        allowed=True,
+                        max_weeks_per_block=duration,
+                    ),
+                )
+                for duration in (1, 2, 3, 4, 5)
+            ],
+        )
+        for pgy in ordered
+    ]
+    return Rotation(
+        id=PLACEHOLDER_ELECTIVE_ID,
+        code=PLACEHOLDER_ELECTIVE_CODE,
+        name=PLACEHOLDER_ELECTIVE_NAME,
+        color=PLACEHOLDER_ELECTIVE_COLOR,
+        pgy_rules=rules,
+        clinic=None,
+        away=True,
+        no_clinic_hours=True,
+        max_consecutive_weeks=6,
+    )
+
+
+__all__.extend(
+    [
+        "PLACEHOLDER_ELECTIVE_CODE",
+        "PLACEHOLDER_ELECTIVE_COLOR",
+        "PLACEHOLDER_ELECTIVE_ID",
+        "PLACEHOLDER_ELECTIVE_NAME",
+        "is_placeholder_elective",
+        "placeholder_elective_rotation",
+    ]
+)

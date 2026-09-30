@@ -163,8 +163,8 @@ def test_catalog_schema_rejects_curriculum_choice_groups() -> None:
         ConstraintCatalog.model_validate(raw)
 
 
-@pytest.mark.parametrize("legacy_version", [5, 6, 7, 8])
-def test_pre_v9_catalogs_are_rejected(legacy_version: int) -> None:
+@pytest.mark.parametrize("legacy_version", [5, 6, 7])
+def test_pre_v8_catalogs_are_rejected(legacy_version: int) -> None:
     raw = bootstrap_catalog().model_dump(mode="json")
     raw["schema_version"] = legacy_version
 
@@ -172,15 +172,38 @@ def test_pre_v9_catalogs_are_rejected(legacy_version: int) -> None:
         ConstraintCatalog.model_validate(raw)
 
 
-def test_v9_catalog_enables_attending_admin_time_for_academic_half_day() -> None:
+def test_v8_catalog_migrates_staffing_and_admin_time_defaults() -> None:
     raw = bootstrap_catalog().model_dump(mode="json")
-    raw["schema_version"] = 9
-    raw["clinic_policy"].pop("academic_half_day_is_attending_admin_time")
+    raw["schema_version"] = 8
+    raw["clinic_policy"].pop("academic_half_day_is_attending_admin_time", None)
+    for site in raw["clinic_policy"]["sites"]:
+        site.pop("staffing_mode", None)
 
     restored = ConstraintCatalog.model_validate(raw)
 
     assert restored.schema_version == 10
     assert restored.clinic_policy.academic_half_day_is_attending_admin_time is True
+    assert all(
+        site.staffing_mode == "capacity_managed"
+        for site in restored.clinic_policy.sites
+    )
+
+
+def test_v9_catalog_enables_attending_admin_time_for_academic_half_day() -> None:
+    raw = bootstrap_catalog().model_dump(mode="json")
+    raw["schema_version"] = 9
+    raw["clinic_policy"].pop("academic_half_day_is_attending_admin_time")
+    for site in raw["clinic_policy"]["sites"]:
+        site.pop("staffing_mode", None)
+
+    restored = ConstraintCatalog.model_validate(raw)
+
+    assert restored.schema_version == 10
+    assert restored.clinic_policy.academic_half_day_is_attending_admin_time is True
+    assert all(
+        site.staffing_mode == "capacity_managed"
+        for site in restored.clinic_policy.sites
+    )
 
 
 def test_instance_catalog_projection_preserves_explicit_elective_policy() -> None:

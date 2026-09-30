@@ -16,7 +16,7 @@ from rbs.models.resident import resident_display_sort_key
 from rbs.models.rotation import Rotation, rotation_display_sort_key
 from rbs.models.schedule import Schedule
 from rbs.ui import page_shells
-from rbs.ui.buttons import SECONDARY_BUTTON_PROPS
+from rbs.ui.buttons import ICON_BUTTON_PROPS, SECONDARY_BUTTON_PROPS
 from rbs.ui.case_ops import (
     add_resident_rotation_waiver,
     place_manual_clinic_block,
@@ -72,6 +72,7 @@ def render_clinic_tab(
     *,
     on_save: SaveRotation,
     active_section: str = "clinic_sites",
+    selected_rotation_id: str | None = None,
     on_section_change=None,
     schedule: Schedule | None = None,
     on_block_schedule_save: SaveClinicBlockSchedule | None = None,
@@ -85,7 +86,7 @@ def render_clinic_tab(
         subtitle="Configure clinics, block rules, and manual placements.",
     ):
         with (
-            ui.tabs(on_change=on_section_change)
+            ui.tabs()
             .props("dense no-caps align=left")
             .classes("rbs-configuration-tabs w-full") as tabs
         ):
@@ -105,39 +106,65 @@ def render_clinic_tab(
             "clinic_block_rules": rules_tab,
             "clinic_manual_blocks": manual_tab,
         }
+        panels = {}
         with (
             ui.tab_panels(tabs, value=sections.get(active_section, sites_tab))
             .props("animated")
             .classes("rbs-configuration-panels w-full")
         ):
-            with ui.tab_panel(sites_tab).classes("p-0 pt-4"):
-                _clinic_directory_configuration(
-                    instance,
-                    selected_rotation_id=None,
-                    on_save=on_save,
-                    on_manage_attendings=on_manage_attendings,
-                )
-            with ui.tab_panel(rules_tab).classes("p-0 pt-4"):
-                _clinic_block_rules_configuration(instance, on_save=on_save)
-            with ui.tab_panel(manual_tab).classes("p-0 pt-4"):
-                _manual_clinic_blocks_configuration(
-                    instance,
-                    on_save=on_save,
-                    schedule=schedule,
-                    on_block_schedule_save=on_block_schedule_save,
-                )
+            for name, tab in sections.items():
+                panels[name] = ui.tab_panel(tab).classes("p-0 pt-4")
+
+        rendered: set[str] = set()
+
+        def render_section(name: str) -> None:
+            if name not in panels or name in rendered:
+                return
+            with panels[name]:
+                if name == "clinic_sites":
+                    _clinic_directory_configuration(
+                        instance,
+                        selected_rotation_id=None,
+                        on_save=on_save,
+                        on_manage_attendings=on_manage_attendings,
+                    )
+                elif name == "clinic_block_rules":
+                    _clinic_block_rules_configuration(
+                        instance, on_save=on_save, selected_rotation_id=selected_rotation_id,
+                    )
+                else:
+                    _manual_clinic_blocks_configuration(
+                        instance,
+                        on_save=on_save,
+                        schedule=schedule,
+                        on_block_schedule_save=on_block_schedule_save,
+                    )
+            rendered.add(name)
+
+        def select_section(event) -> None:
+            value = getattr(event.value, "name", event.value)
+            render_section(value)
+            if on_section_change is not None:
+                on_section_change(event)
+
+        # Keep visited sections mounted so returning to an editor retains its draft.
+        render_section(active_section if active_section in sections else "clinic_sites")
+        tabs.on_value_change(select_section)
 
 
 def _clinic_block_rules_configuration(
     instance: SchedulerInput,
     *,
     on_save: SaveRotation,
+    selected_rotation_id: str | None = None,
 ) -> None:
     from nicegui import ui
 
     clinic_rotations = sorted(
         (rotation for rotation in instance.rotations if rotation.kind is RotationKind.CLINIC),
-        key=rotation_display_sort_key,
+        key=lambda rotation: (
+            rotation.id != selected_rotation_id, rotation_display_sort_key(rotation),
+        ),
     )
     with ui.column().classes("w-full gap-5"):
         with ui.row().classes("w-full items-center justify-between gap-3 flex-wrap"):
@@ -473,6 +500,19 @@ def _clinic_pgy_rule_panel(
             )
             if rule is None:
                 return
+
+            capacity_points = ui.number(
+                "Capacity per resident",
+                value=int(rule.get("capacity_per_resident", 1)),
+                min=1,
+                precision=0,
+                step=1,
+            ).props("outlined").classes("w-full sm:w-80")
+            capacity_points.bind_value(rule, "capacity_per_resident", forward=_as_int)
+            ui.label(
+                "Capacity points used whenever a resident of this training level attends clinic, "
+                "on any rotation."
+            ).classes("rbs-type-caption rbs-text-muted")
 
             with ui.row().classes("w-full items-center justify-between gap-3 pt-2"):
                 ui.label("Required blocks").classes("rbs-type-control-label")
@@ -1600,9 +1640,9 @@ def _clinic_directory_configuration(
                                 ),
                             ).props("outline dense no-caps")
                             with ui.button(icon="more_vert").props(
-                                "flat round dense "
-                                f"aria-label='More actions for {clinic.name} clinic'"
-                            ):
+                                ICON_BUTTON_PROPS
+                            ) as more:
+                                more.props["aria-label"] = f"More actions for {clinic.name} clinic"
                                 ui.tooltip("More actions")
                                 with ui.menu():
                                     remove = ui.menu_item(
@@ -1634,7 +1674,7 @@ def _clinic_directory_configuration(
                         _clinic_metric(
                             "Peak resident capacity"
                             if attending_managed
-                            else "Max residents",
+                            else "Max capacity",
                             str(max(maximums)) if maximums else "—",
                         )
                         _clinic_metric(
@@ -1932,12 +1972,11 @@ def _open_clinic_editor_dialog(
                                     "rbs-type-section-title"
                                 )
                                 ui.label(
-                                    "Each resident maximum is scheduled attendings × residents "
-                                    "per attending."
+                                    "Each maximum is attendings × capacity per attending."
                                 ).classes("rbs-type-caption rbs-text-muted")
                             ratio = (
                                 ui.number(
-                                    "Residents per attending",
+                                    "Capacity per attending",
                                     value=int(draft["residents_per_attending"]),
                                     min=1,
                                     step=1,
@@ -2312,7 +2351,7 @@ def _clinic_capacity_grid(draft: Draft) -> Callable[[], None]:
                 label.set_text("Not staffed")
             else:
                 maximum = int(rule.get("attendings") or 1) * ratio
-                label.set_text(f"Maximum {maximum} residents")
+                label.set_text(f"Maximum {maximum} capacity points")
 
     with ui.element("div").classes("rbs-clinic-capacity-grid w-full"):
         for weekday in capacity_week:
@@ -2435,7 +2474,7 @@ def _clinic_capacity_overrides_editor(
         ratio = max(int(draft.get("residents_per_attending") or 1), 1)
         for label, override in maximum_labels:
             maximum = int(override.get("attendings") or 0) * ratio
-            label.set_text(f"Maximum {maximum} residents")
+            label.set_text(f"Maximum {maximum} capacity points")
 
     def add_override() -> None:
         used = {(str(item.get("date") or ""), str(item.get("session") or "")) for item in overrides}

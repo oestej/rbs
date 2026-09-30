@@ -87,7 +87,7 @@ def unique_clinic(context: PlanningContext) -> dict[str, ClinicDecision]:
                     resident = context.residents[occ.resident_id]
                     if (
                         week in resident.vacation_weeks
-                        or context.instance.resident_clinic_is_blocked(
+                        or context.resident_clinic_is_blocked(
                             resident.id,
                             week,
                             weekday,
