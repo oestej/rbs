@@ -3078,3 +3078,64 @@ def test_individual_days_off_are_sorted_and_unique() -> None:
             pgy=1,
             days_off=[date(2026, 9, 15), date(2026, 9, 15)],
         )
+
+
+def test_clinic_editors_reuse_one_capacity_view_instead_of_rebuilding_it(monkeypatch) -> None:
+    from rbs.models.enums import RotationKind, Session, SolverEngineName, SolverStatus, Weekday
+    from rbs.models.schedule import AssignedClinic, Assignment, Schedule, ScheduleMeta
+    from rbs.solver import attending_availability
+    from rbs.ui.residents import ops
+
+    assert not hasattr(attending_availability, "_VIEW_CACHE")
+    instance = sample_instance()
+    resident = instance.residents[0]
+    schedule = Schedule(
+        meta=ScheduleMeta(
+            academic_year=instance.academic_year,
+            engine=SolverEngineName.STUB,
+            status=SolverStatus.UNKNOWN,
+            solver_status=SolverStatus.UNKNOWN,
+        ),
+        assignments=[
+            Assignment(
+                resident_id=resident.id,
+                rotation_id="fmed",
+                kind=RotationKind.FMED,
+                start_week=1,
+                end_week=1,
+                weeks=[1],
+                clinic_slots=[
+                    AssignedClinic(
+                        weekday=Weekday.TUESDAY,
+                        session=Session.AFTERNOON,
+                        site="cedar",
+                        week=1,
+                    )
+                ],
+            )
+        ],
+    )
+    views: list[object] = []
+    build = ops.schedule_capacity_view
+    monkeypatch.setattr(
+        ops,
+        "schedule_capacity_view",
+        lambda *args: views.append(args) or build(*args),
+    )
+    target = dict(
+        resident_id=resident.id, week=1, weekday=Weekday.THURSDAY, session=Session.MORNING,
+    )
+
+    available = ops.resident_clinic_available_site_ids(instance, schedule, **target)
+    assert {"maple", "cedar"} <= set(available)
+    assert len(views) == 1  # once for every site, not once per site
+
+    view = build(instance, schedule)
+    assert ops.resident_clinic_available_site_ids(
+        instance, schedule, capacity_view=view, **target,
+    ) == available
+    ops.resident_clinic_target_conflicts(
+        instance, schedule, source_slot=schedule.assignments[0].clinic_slots[0],
+        capacity_view=view, **target,
+    )
+    assert len(views) == 1

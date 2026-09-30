@@ -13,11 +13,12 @@ from pydantic import ValidationError
 
 from rbs.logging import get_logger
 from rbs.models.enums import RotationKind, Session, Weekday
-from rbs.models.instance import SchedulerInput
+from rbs.models.instance import SchedulerInput, SolverProblem
 from rbs.models.locks import LockedPlacement
 from rbs.models.resident import Resident, ResidentClinicHalfDay
 from rbs.models.rotation import rotation_display_sort_key
 from rbs.models.schedule import AssignedClinic, Schedule
+from rbs.solver.attending_availability import schedule_capacity_view
 from rbs.ui import master_detail
 from rbs.ui.clinic.projection import clinic_weekdays, occupancy
 from rbs.ui.editor_common import _default_block_duration
@@ -1489,6 +1490,11 @@ def _resident_clinic_schedule_report(
     current_clinic_occupancy = (
         occupancy(instance, current_schedule) if current_schedule is not None else {}
     )
+    current_capacity_view = (
+        schedule_capacity_view(instance, current_schedule)
+        if current_schedule is not None
+        else instance
+    )
     report_rows = resident_clinic_schedule_report_rows(
         instance,
         current_schedule,
@@ -1579,6 +1585,7 @@ def _resident_clinic_schedule_report(
                     editing=editing,
                     on_schedule_change=partial(save_week_change, week=week),
                     clinic_occupancy=current_clinic_occupancy,
+                    capacity_view=current_capacity_view,
                     schedule_state=schedule_state,
                     today=today,
                 )
@@ -1590,12 +1597,13 @@ def _resident_clinic_schedule_report(
             *,
             week: int,
         ) -> None:
-            nonlocal current_clinic_occupancy
+            nonlocal current_clinic_occupancy, current_capacity_view
             if on_schedule_change is None:
                 return
             on_schedule_change(updated, resident_id, False)
             schedule_state["value"] = updated
             current_clinic_occupancy = occupancy(instance, updated)
+            current_capacity_view = schedule_capacity_view(instance, updated)
             render_week(week)
 
         with ui.column().classes(calendar_classes):
@@ -1614,6 +1622,7 @@ def _resident_clinic_schedule_report(
                         editing=editing,
                         on_schedule_change=partial(save_week_change, week=week),
                         clinic_occupancy=current_clinic_occupancy,
+                        capacity_view=current_capacity_view,
                         schedule_state=schedule_state,
                         today=today,
                     )
@@ -1638,6 +1647,7 @@ class _ResidentClinicWeekContext:
     week: int
     has_rotation_assignment: bool
     client: Any
+    capacity_view: SolverProblem | None = None
 
     def notify(self, message: str, **options) -> None:
         from nicegui import ui
@@ -1949,6 +1959,7 @@ def _resident_clinic_week_calendar(
     editing: bool = False,
     on_schedule_change: SaveResidentScheduleResult | None = None,
     clinic_occupancy: ClinicOccupancy | None = None,
+    capacity_view: SolverProblem | None = None,
     schedule_state: dict[str, Schedule | None] | None = None,
     today: date | None = None,
 ) -> None:
@@ -1963,6 +1974,7 @@ def _resident_clinic_week_calendar(
         editing=editing,
         on_schedule_change=on_schedule_change,
         clinic_occupancy=clinic_occupancy,
+        capacity_view=capacity_view,
         schedule_state=schedule_state,
         today=today,
         week=week,
@@ -2058,6 +2070,7 @@ def _resident_clinic_cell_state(
             weekday=weekday,
             session=session,
             clinic_occupancy=context.clinic_occupancy,
+            capacity_view=context.capacity_view,
         )
     academic = context.instance.is_academic_half_day(context.week, weekday, session)
     locked = bool(
@@ -2193,6 +2206,11 @@ def _resident_clinic_context_menu(
                 if schedule is context.schedule
                 else occupancy(context.instance, schedule)
             ),
+            capacity_view=(
+                context.capacity_view
+                if schedule is context.schedule
+                else schedule_capacity_view(context.instance, schedule)
+            ),
         )
         current_state = _resident_clinic_cell_state(current, state.weekday, state.session)
         available_site_ids = resident_clinic_available_site_ids(
@@ -2203,6 +2221,7 @@ def _resident_clinic_context_menu(
             weekday=state.weekday,
             session=state.session,
             clinic_occupancy=current.clinic_occupancy,
+            capacity_view=current.capacity_view,
         )
         menu.clear()
         with menu:
@@ -2351,6 +2370,7 @@ def _resident_clinic_override_badge(
         session=state.session,
         source_slot=state.visible_slot,
         clinic_occupancy=context.clinic_occupancy,
+        capacity_view=context.capacity_view,
     )
     with ui.badge("Manual override").classes("rbs-resident-clinic-override-badge"):
         ui.tooltip(" ".join(reasons) or "This clinic block was changed manually.")

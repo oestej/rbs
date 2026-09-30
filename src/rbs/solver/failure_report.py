@@ -16,6 +16,13 @@ from dataclasses import dataclass
 from rbs.models.enums import SolverStatus
 from rbs.models.schedule import Schedule, SolverDiagnostic
 
+MODEL_NOT_BUILT_NOTE = "the schedule model was not built, so no search ran"
+"""Note on a result whose configuration stopped the build before any search.
+
+Its diagnostics keep each readiness conflict's own code, so the note, not a
+diagnostic code, is what marks the outcome as a build failure.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class SolverFailureReport:
@@ -68,7 +75,9 @@ def describe_solver_failure(schedule: Schedule) -> SolverFailureReport | None:
             diagnostics=diagnostics,
         )
 
-    if any(diagnostic.code == "model_build_error" for diagnostic in diagnostics):
+    if MODEL_NOT_BUILT_NOTE in schedule.meta.notes or any(
+        diagnostic.code == "model_build_error" for diagnostic in diagnostics
+    ):
         return SolverFailureReport(
             title="Cannot build schedule model",
             detail="The configured rules could not be converted into a solver model.",
@@ -158,4 +167,9 @@ def _fallback_diagnostics(schedule: Schedule) -> tuple[SolverDiagnostic, ...]:
     )
 
 
-__all__ = ["SolverFailureReport", "describe_solver_failure", "format_report_text"]
+__all__ = [
+    "MODEL_NOT_BUILT_NOTE",
+    "SolverFailureReport",
+    "describe_solver_failure",
+    "format_report_text",
+]

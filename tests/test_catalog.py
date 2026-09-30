@@ -619,24 +619,21 @@ def test_single_clinic_supports_weekend_capacity_and_owns_its_closures() -> None
         == 1
     )
     assert (
-        policy.max_capacity_on(
-            "weekend_clinic",
+        policy.site("weekend_clinic").max_capacity_on(
             date(2026, 7, 5),
             Session.AFTERNOON,
         )
         == 9
     )
     assert (
-        policy.min_capacity_on(
-            "weekend_clinic",
+        policy.site("weekend_clinic").min_capacity_on(
             date(2026, 7, 5),
             Session.AFTERNOON,
         )
         == 2
     )
     assert (
-        policy.max_capacity_on(
-            "weekend_clinic",
+        policy.site("weekend_clinic").max_capacity_on(
             date(2026, 12, 26),
             Session.MORNING,
         )

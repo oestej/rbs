@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 from datetime import date, timedelta
 
-from rbs.models.attending import AttendingWorkType
+from rbs.models.attending import ATTENDING_WORK_TYPE_LABELS, AttendingWorkType
 from rbs.models.clinic import ClinicPolicy, ClinicStaffingMode
 from rbs.models.curriculum import default_training_level_code
 from rbs.models.enums import Session, Weekday
@@ -16,7 +16,6 @@ from rbs.solver.attending_availability import schedule_capacity_view
 from rbs.ui.clinic.details import clinic_details
 from rbs.ui.clinic.projection import (
     ACADEMIC_LABEL,
-    ATTENDING_WORK_LABELS,
     SESSION_SHORT,
     AttendingOccupant,
     ClinicClosureView,
@@ -431,7 +430,7 @@ def render_clinic_legend_html(
             '<span class="rbs-clinic-swatch'
             f'{" admin" if kind is AttendingWorkType.ADMIN_TIME else ""}">'
             f"{html.escape(label)}</span>"
-            for kind, label in ATTENDING_WORK_LABELS.items()
+            for kind, label in ATTENDING_WORK_TYPE_LABELS.items()
         )
     else:
         swatches += '<span class="rbs-clinic-swatch admin">Admin</span>'

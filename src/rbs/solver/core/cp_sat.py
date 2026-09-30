@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from rbs.models.enums import Session, SolverEngineName, SolverStatus
 from rbs.models.instance import SolverConfig, SolverProblem
 from rbs.models.schedule import Schedule, SolverDiagnostic, ordered_attending_work
-from rbs.solver.attending_availability import attending_week_facts
+from rbs.solver.attending_availability import AttendingWeekFacts, attending_week_facts
 from rbs.solver.core.attending_assignment import schedule_attending_work
 from rbs.solver.core.base import SchedulerEngine, empty_schedule
 from rbs.solver.core.compile import compile_problem
@@ -21,8 +21,9 @@ from rbs.solver.core.context import CompiledProblem, ModelBuildError
 from rbs.solver.core.decode import decode_solution, final_status_for
 from rbs.solver.core.diagnostics import explain_infeasibility
 from rbs.solver.diagnostic_summaries import validation_failure_diagnostics
+from rbs.solver.failure_report import MODEL_NOT_BUILT_NOTE
 from rbs.solver.planning import resolve_clinic_block_band
-from rbs.solver.readiness import check_solve_readiness
+from rbs.solver.readiness import ReadinessIssue, ReadinessResult, check_solve_readiness
 from rbs.solver.reference import (
     REFERENCE_LOCK_CONFLICT,
     honored_reference_lock_diagnostic,
@@ -44,10 +45,25 @@ class CpSatEngine:
         reference_schedule: Schedule | None = None,
     ) -> Schedule:
         reference_schedule = _compatible_reference(instance, reference_schedule)
+        # Readiness does not depend on solver options, so relaxing the clinic
+        # band below could never clear a configuration conflict.
+        started = time.perf_counter()
+        readiness = check_solve_readiness(instance, reference_schedule=reference_schedule)
+        if not readiness.ready:
+            return self._model_not_built(
+                instance,
+                ModelBuildError("; ".join(readiness.errors), readiness.issues),
+                started,
+            )
+        # Computed once: the precepting envelope and the weekly attending pass
+        # must agree on what is fixed, and the facts cover every attending-week.
+        attending_facts = attending_week_facts(instance, reference_schedule)
         schedule = self._solve_portfolio(
             instance,
             options=options,
             reference_schedule=reference_schedule,
+            attending_facts=attending_facts,
+            readiness=readiness,
         )
         if not _needs_band_relaxation(instance, options, schedule):
             return _with_attending_work(
@@ -55,7 +71,7 @@ class CpSatEngine:
                 _with_infeasibility_diagnostics(
                     instance, options, schedule, reference_schedule
                 ),
-                reference_schedule,
+                attending_facts,
             )
         # The curriculum-derived clinic band is a convenience, not a rule the
         # program asked for. Vacation, locks, or manual blocks can leave it
@@ -67,6 +83,8 @@ class CpSatEngine:
             instance,
             options=relaxed_options,
             reference_schedule=reference_schedule,
+            attending_facts=attending_facts,
+            readiness=readiness,
         )
         if fallback.is_empty():
             return _with_infeasibility_diagnostics(
@@ -76,7 +94,7 @@ class CpSatEngine:
             *fallback.meta.notes,
             "automatic clinic balance could not be satisfied and was dropped for this solve",
         ]
-        return _with_attending_work(instance, fallback, reference_schedule)
+        return _with_attending_work(instance, fallback, attending_facts)
 
     def _solve_portfolio(
         self,
@@ -84,6 +102,8 @@ class CpSatEngine:
         *,
         options: SolverConfig,
         reference_schedule: Schedule | None,
+        attending_facts: dict[int, list[AttendingWeekFacts]] | None = None,
+        readiness: ReadinessResult | None = None,
     ) -> Schedule:
         """Race a few independent seeds and keep the best schedule.
 
@@ -104,17 +124,11 @@ class CpSatEngine:
                 options,
                 cp_model,
                 reference_schedule=reference_schedule,
+                attending_facts=attending_facts,
+                readiness=readiness,
             )
         except ModelBuildError as exc:
-            message = str(exc)
-            return empty_schedule(
-                instance,
-                engine=self.name,
-                status=SolverStatus.INFEASIBLE,
-                notes=[message],
-                diagnostics=_model_build_diagnostics(instance, message),
-                wall_time_seconds=time.perf_counter() - started,
-            )
+            return self._model_not_built(instance, exc, started)
 
         attempts, workers = portfolio_plan(options)
         if attempts == 1:
@@ -145,6 +159,22 @@ class CpSatEngine:
                 f"best of {attempts} concurrent solves x {workers} workers",
             ]
         return best
+
+    def _model_not_built(
+        self,
+        instance: SolverProblem,
+        error: ModelBuildError,
+        started: float,
+    ) -> Schedule:
+        message = str(error)
+        return empty_schedule(
+            instance,
+            engine=self.name,
+            status=SolverStatus.INFEASIBLE,
+            notes=[MODEL_NOT_BUILT_NOTE, message],
+            diagnostics=_model_build_diagnostics(message, error.issues),
+            wall_time_seconds=time.perf_counter() - started,
+        )
 
     def _solve_once(
         self,
@@ -328,7 +358,7 @@ class CpSatEngine:
 def _with_attending_work(
     instance: SolverProblem,
     schedule: Schedule,
-    reference_schedule: Schedule | None,
+    facts: dict[int, list[AttendingWeekFacts]],
 ) -> Schedule:
     """Name the attendings the chosen schedule needs and fill their weeks.
 
@@ -350,7 +380,6 @@ def _with_attending_work(
     from rbs.solver.validation import validate_schedule
 
     started = time.perf_counter()
-    facts = attending_week_facts(instance, reference_schedule)
     result = schedule_attending_work(instance, schedule, facts, cp_model)
     notes = [
         *schedule.meta.notes,
@@ -569,17 +598,16 @@ def _with_infeasibility_diagnostics(
 
 
 def _model_build_diagnostics(
-    instance: SolverProblem,
     message: str,
+    issues: tuple[ReadinessIssue, ...],
 ) -> list[SolverDiagnostic]:
     """Keep each readiness conflict structured instead of joining them.
 
-    Compilation checks solve readiness before building the model, so a build
-    error on an unready workspace really is those readiness issues. Reporting
-    each one keeps its code and suggestions; anything else keeps the single
-    consolidated diagnostic.
+    Compilation checks solve readiness before building the model and raises
+    with the issues it found, so reporting each one keeps its code and
+    suggestions; any other build error keeps the single consolidated
+    diagnostic.
     """
-    issues = check_solve_readiness(instance).issues
     if not issues:
         return [
             SolverDiagnostic(
@@ -621,9 +649,11 @@ def _compatible_reference(
 ) -> Schedule | None:
     if (
         reference_schedule is None
-        or reference_schedule.is_empty()
+        or (reference_schedule.is_empty() and not reference_schedule.attending_work)
         or reference_schedule.meta.academic_year != instance.academic_year
     ):
+        # A draft with no resident assignments can still hold attending work
+        # locked by hand, which the solve must keep.
         return None
     return reference_schedule
 

@@ -28,18 +28,15 @@ def explain_infeasibility(
     diagnostics: list[SolverDiagnostic] = []
     diagnostics.extend(_locked_capacity_conflicts(problem))
     diagnostics.extend(_locked_elective_repeats(problem))
-    if reference_schedule is None:
-        # Reference-lock extra sessions can rescue a week this probe calls
-        # dead, so the probe only speaks when no reference is in play. The
-        # provisional reference-lock explanation already covers that side.
-        diagnostics.extend(
-            uncoverable_clinic_sessions(
-                problem,
-                allow_boundary_spans=(
-                    options.allow_blocks_to_span_four_week_boundaries
-                ),
-            )
+    # The probe leaves alone any resident-week a reference clinic lock could
+    # rescue with an extra session, so it stays conclusive on a re-solve.
+    diagnostics.extend(
+        uncoverable_clinic_sessions(
+            problem,
+            allow_boundary_spans=options.allow_blocks_to_span_four_week_boundaries,
+            reference_schedule=reference_schedule,
         )
+    )
     for resident in problem.residents:
         feasible = _resident_curriculum_can_cover_year(problem, options, resident)
         if feasible is not False:

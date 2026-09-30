@@ -115,145 +115,113 @@ def _migrate_portable_state(value: object) -> object:
     range, adds attending clinic-day and preferred-schedule configuration, and
     allows descriptions on Special/Other work. Accepted attending schedules
     move out of roster configuration into their own case-level collection.
-    Each migrated week uses its resulting assignment count as its half-day
-    override. Versions 9 and 10 predate attending configuration; they upgrade
-    to an empty attending directory while nested catalogs migrate
-    independently (missing resident capacity defaults to one). Older shapes
-    remain unsupported.
+    Each week that receives a dated shift uses its resulting assignment count
+    as its half-day override. Versions 9 and 10 predate attending
+    configuration; they upgrade to an empty attending directory while nested
+    catalogs migrate independently (missing resident capacity defaults to
+    one). Older shapes remain unsupported.
+
+    Only the document-specific steps live here. The models themselves lift
+    nested week-by-week schedules to the case level and turn a single weekly
+    count into a range, because SQLite working copies and unversioned JSON
+    carry those shapes too; new fields take their model defaults.
     """
     if not isinstance(value, dict) or value.get("schema_version") not in (9, 10, 11):
         return value
     source_version = value.get("schema_version")
     migrated = deepcopy(value)
     migrated["schema_version"] = RBSC_SCHEMA_VERSION
-    if source_version in (9, 10):
-        for workspace in migrated.get("workspaces", []):
-            if not isinstance(workspace, dict):
-                continue
-            case = workspace.get("case")
-            if not isinstance(case, dict):
-                continue
-            case.setdefault("attendings", [])
-            case.setdefault("attending_schedules", [])
-        return migrated
     for workspace in migrated.get("workspaces", []):
         if not isinstance(workspace, dict):
             continue
         case = workspace.get("case")
         if not isinstance(case, dict):
             continue
+        if source_version in (9, 10):
+            case.setdefault("attendings", [])
+            case.setdefault("attending_schedules", [])
+            continue
         calendar = case.get("calendar")
         first_week_start = (
             calendar.get("first_week_start") if isinstance(calendar, dict) else None
         )
-        migrated_schedules = case.setdefault("attending_schedules", [])
-        if not isinstance(migrated_schedules, list):
-            continue
         for attending in case.get("attendings", []):
-            if not isinstance(attending, dict):
-                continue
-            attending.setdefault("minimum_attending_clinic_days_per_week", 0)
-            attending.setdefault("preferred_weekly_schedule_half_days", [])
-            targets = attending.get("weekly_shift_targets", [])
-            if isinstance(targets, list):
-                attending["weekly_shift_targets"] = [
-                    target
-                    for target in targets
-                    if not (
-                        isinstance(target, dict)
-                        and target.get("work_type") == "special_other"
-                    )
-                ]
-                for target in attending["weekly_shift_targets"]:
-                    if not isinstance(target, dict) or "shifts_per_week" not in target:
-                        continue
-                    shifts = target.pop("shifts_per_week")
-                    target["minimum_shifts_per_week"] = shifts
-                    target["maximum_shifts_per_week"] = shifts
-            schedules = attending.pop("weekly_work_schedules", [])
-            if not isinstance(schedules, list):
-                continue
-            schedules_by_week: dict[int, dict[str, Any]] = {}
-            for schedule in schedules:
-                if not isinstance(schedule, dict):
-                    continue
-                schedule.setdefault("half_days_override", None)
-                week = schedule.get("week")
-                if isinstance(week, int):
-                    schedules_by_week[week] = schedule
-
-            dated_shifts = attending.pop("ad_hoc_work_half_days", [])
-            if not isinstance(dated_shifts, list):
-                raise ValueError("version 11 attending shifts must be a list")
-            touched_weeks: set[int] = set()
-            if dated_shifts:
-                try:
-                    first_day = date.fromisoformat(str(first_week_start))
-                except (TypeError, ValueError) as exc:
-                    raise ValueError(
-                        "version 11 attending shifts require a valid academic calendar"
-                    ) from exc
-                for dated_shift in dated_shifts:
-                    if not isinstance(dated_shift, dict):
-                        raise ValueError(
-                            "version 11 attending shifts must contain objects"
-                        )
-                    try:
-                        calendar_day = date.fromisoformat(
-                            str(dated_shift.get("date"))
-                        )
-                    except (TypeError, ValueError) as exc:
-                        raise ValueError(
-                            "version 11 attending shifts require valid dates"
-                        ) from exc
-                    week = (calendar_day - first_day).days // 7 + 1
-                    session = dated_shift.get("session")
-                    schedule = schedules_by_week.get(week)
-                    if schedule is None:
-                        schedule = {
-                            "week": week,
-                            "half_days_override": None,
-                            "half_days": [],
-                        }
-                        schedules.append(schedule)
-                        schedules_by_week[week] = schedule
-                    half_days = schedule.setdefault("half_days", [])
-                    if not isinstance(half_days, list):
-                        continue
-                    assignment = {
-                        "work_type": dated_shift.get(
-                            "work_type", "special_other"
-                        ),
-                        "clinic_id": dated_shift.get("clinic_id"),
-                        "description": None,
-                        "weekday": _WEEKDAYS[calendar_day.weekday()],
-                        "session": session,
-                    }
-                    half_days[:] = [
-                        half_day
-                        for half_day in half_days
-                        if not (
-                            isinstance(half_day, dict)
-                            and half_day.get("weekday") == assignment["weekday"]
-                            and half_day.get("session") == session
-                        )
-                    ]
-                    half_days.append(assignment)
-                    touched_weeks.add(week)
-
-            for week in touched_weeks:
-                schedule = schedules_by_week[week]
-                half_days = schedule.get("half_days")
-                if isinstance(half_days, list):
-                    schedule["half_days_override"] = len(half_days)
-            if schedules:
-                migrated_schedules.append(
-                    {
-                        "attending_id": attending.get("id"),
-                        "weeks": schedules,
-                    }
-                )
+            if isinstance(attending, dict):
+                _migrate_version_11_attending(attending, first_week_start)
     return migrated
+
+
+def _migrate_version_11_attending(
+    attending: dict[str, Any],
+    first_week_start: object,
+) -> None:
+    """Drop Special/Other targets and fold dated shifts into nested weeks."""
+    targets = attending.get("weekly_shift_targets", [])
+    if isinstance(targets, list):
+        attending["weekly_shift_targets"] = [
+            target
+            for target in targets
+            if not (isinstance(target, dict) and target.get("work_type") == "special_other")
+        ]
+    dated_shifts = attending.pop("ad_hoc_work_half_days", [])
+    if not isinstance(dated_shifts, list):
+        raise ValueError("version 11 attending shifts must be a list")
+    if not dated_shifts:
+        return
+    try:
+        first_day = date.fromisoformat(str(first_week_start))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "version 11 attending shifts require a valid academic calendar"
+        ) from exc
+    schedules = attending.setdefault("weekly_work_schedules", [])
+    if not isinstance(schedules, list):
+        return
+    schedules_by_week: dict[int, dict[str, Any]] = {
+        schedule["week"]: schedule
+        for schedule in schedules
+        if isinstance(schedule, dict) and isinstance(schedule.get("week"), int)
+    }
+    touched_weeks: set[int] = set()
+    for dated_shift in dated_shifts:
+        if not isinstance(dated_shift, dict):
+            raise ValueError("version 11 attending shifts must contain objects")
+        try:
+            calendar_day = date.fromisoformat(str(dated_shift.get("date")))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("version 11 attending shifts require valid dates") from exc
+        week = (calendar_day - first_day).days // 7 + 1
+        session = dated_shift.get("session")
+        schedule = schedules_by_week.get(week)
+        if schedule is None:
+            schedule = {"week": week, "half_days": []}
+            schedules.append(schedule)
+            schedules_by_week[week] = schedule
+        half_days = schedule.setdefault("half_days", [])
+        if not isinstance(half_days, list):
+            continue
+        assignment = {
+            "work_type": dated_shift.get("work_type", "special_other"),
+            "clinic_id": dated_shift.get("clinic_id"),
+            "description": None,
+            "weekday": _WEEKDAYS[calendar_day.weekday()],
+            "session": session,
+        }
+        half_days[:] = [
+            half_day
+            for half_day in half_days
+            if not (
+                isinstance(half_day, dict)
+                and half_day.get("weekday") == assignment["weekday"]
+                and half_day.get("session") == session
+            )
+        ]
+        half_days.append(assignment)
+        touched_weeks.add(week)
+    for week in touched_weeks:
+        half_days = schedules_by_week[week].get("half_days")
+        if isinstance(half_days, list):
+            schedules_by_week[week]["half_days_override"] = len(half_days)
 
 
 def _validated_timestamp(value: str) -> str:

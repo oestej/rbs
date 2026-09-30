@@ -13,7 +13,16 @@ from rbs.solver.planning import Occurrence, expand_occurrences, legal_starts
 
 
 class ModelBuildError(ValueError):
-    pass
+    """The configured rules could not be turned into a solver model.
+
+    ``issues`` holds the readiness conflicts that stopped the build, when
+    readiness is what stopped it, so each can be reported with its own code
+    and suggestions without checking readiness again.
+    """
+
+    def __init__(self, message: str, issues: tuple = ()) -> None:
+        super().__init__(message)
+        self.issues = tuple(issues)
 
 
 @dataclass(frozen=True)

@@ -20,7 +20,7 @@ from rbs.models.clinic import ClinicPolicy
 from rbs.models.enums import Session, Weekday
 from rbs.models.instance import SchedulerInput
 from rbs.ui.clinic.board import render_clinic_html
-from rbs.ui.clinic.projection import attending_occupancy
+from rbs.ui.clinic.projection import attending_occupancy, clinic_weekdays
 from rbs.ui.clinic.schedule_csv import build_clinic_schedule_csv, clinic_schedule_csv_filename
 from rbs.ui.clinic.schedule_pdf import build_clinic_schedule_pdf, clinic_schedule_pdf_filename
 
@@ -127,6 +127,29 @@ def test_attending_calendar_uses_week_specific_academic_admin_policy(attending_c
     instance = SchedulerInput.model_validate(raw)
     assert not attending_occupancy(instance)[(51, Weekday.SUNDAY, Session.MORNING)]
     assert 'datetime="2027-06-20"' not in render_clinic_html(instance, None, view="attendings")
+
+
+def test_attending_view_renders_and_exports_without_an_academic_half_day(
+    attending_calendar,
+) -> None:
+    # A program may run no recurring academic half-day while Admin Time stays
+    # on, and a one-week override may cancel its week instead of moving it.
+    raw = attending_calendar.model_dump(mode="json")
+    raw["clinic_policy"]["academic"] = {"weekday": None, "session": None}
+    raw["academic_half_day_overrides"] = [{"week": 51, "weekday": None, "session": None}]
+    instance = SchedulerInput.model_validate(raw)
+    assert instance.clinic_policy.academic_half_day_is_attending_admin_time
+    assert instance.clinic_policy.recurring_academic_half_day is None
+
+    assert Weekday.SATURDAY in clinic_weekdays(instance, view="attendings")
+    markup = render_clinic_html(instance, None, view="attendings")
+    assert "Ada Lovelace" in markup
+    rows = list(csv.DictReader(StringIO(build_clinic_schedule_csv(
+        instance, None, view="attendings",
+    ))))
+    assert rows[50]["Mon AM"] == "Ada Lovelace · Precepting Clinic · Maple"
+    assert rows[50]["Wed PM"] == ""
+    assert PdfReader(BytesIO(build_clinic_schedule_pdf(instance, None, view="attendings"))).pages
 
 
 def test_attending_calendar_closures_only_remove_work_at_the_closed_clinic(

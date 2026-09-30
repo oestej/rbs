@@ -320,3 +320,104 @@ def test_report_can_be_filtered_to_one_attending() -> None:
     )
     with pytest.raises(ValueError, match="unknown attending"):
         attending_schedule_report(instance, attending_id="missing")
+
+
+def _scheduled(
+    instance: SchedulerInput,
+    week: int,
+    weekday: Weekday,
+    work_type: AttendingWorkType,
+    *,
+    attending_id: str = "attending-001",
+    clinic_id: str | None = None,
+):
+    from rbs.models.schedule import AssignedAttendingWork
+
+    return AssignedAttendingWork(
+        attending_id=attending_id,
+        week=week,
+        weekday=weekday,
+        session=Session.MORNING,
+        work_type=work_type,
+        clinic_id=clinic_id,
+    )
+
+
+def test_schedule_work_is_grouped_once_by_attending_and_week() -> None:
+    from rbs.attending_schedule import effective_attending_schedule_week
+    from rbs.models.enums import SolverEngineName, SolverStatus
+    from rbs.models.schedule import Schedule, ScheduleMeta
+
+    instance = blank_instance().revised(
+        attendings=[Attending(id="attending-001", name="Ada Lovelace")],
+    )
+    kept = [
+        _scheduled(instance, 1, Weekday.MONDAY, AttendingWorkType.ADMIN_TIME),
+        _scheduled(instance, 1, Weekday.TUESDAY, AttendingWorkType.ATTENDING_CLINIC),
+        _scheduled(instance, 2, Weekday.MONDAY, AttendingWorkType.INPATIENT_SERVICE),
+    ]
+    hidden = [
+        _scheduled(instance, 1, Weekday.MONDAY, AttendingWorkType.ADMIN_TIME,
+                   attending_id="attending-gone"),
+        _scheduled(instance, instance.calendar.weeks + 1, Weekday.MONDAY,
+                   AttendingWorkType.ADMIN_TIME),
+        _scheduled(instance, 3, Weekday.MONDAY, AttendingWorkType.PRECEPTING_CLINIC,
+                   clinic_id="closed-site"),
+    ]
+    schedule = Schedule(
+        meta=ScheduleMeta(
+            academic_year=instance.academic_year,
+            engine=SolverEngineName.STUB,
+            status=SolverStatus.FEASIBLE,
+        ),
+        attending_work=[*kept, *hidden],
+    )
+
+    grouped = instance.scheduled_attending_work(schedule)
+    assert grouped == {
+        ("attending-001", 1): tuple(kept[:2]),
+        ("attending-001", 2): (kept[2],),
+    }
+    other_year = schedule.revised(meta=schedule.meta.revised(academic_year="1999-2000"))
+    assert instance.scheduled_attending_work(other_year) == {}
+    attending = instance.attendings[0]
+    for week in (1, 2, 3):
+        assert effective_attending_schedule_week(
+            instance, attending, week, work_by_week=grouped,
+        ) == effective_attending_schedule_week(instance, attending, week, schedule)
+
+
+def test_work_category_names_come_from_one_table() -> None:
+    from rbs.models.attending import ATTENDING_WORK_TYPE_LABELS
+    from rbs.ui.attendings.tab import _WORK_TYPE_OPTIONS
+    from rbs.ui.clinic.projection import AttendingOccupant
+
+    assert list(ATTENDING_WORK_TYPE_LABELS) == list(AttendingWorkType)
+    assert _WORK_TYPE_OPTIONS == {
+        work_type.value: label for work_type, label in ATTENDING_WORK_TYPE_LABELS.items()
+    }
+    for work_type, label in ATTENDING_WORK_TYPE_LABELS.items():
+        occupant = AttendingOccupant(attending_id="a", name="Ada", work_type=work_type)
+        assert occupant.work_label() == label
+
+
+def test_current_attending_shapes_skip_the_nested_schedule_migration() -> None:
+    from rbs.models.instance import _migrate_nested_attending_schedules
+
+    current = {"attendings": [{"id": "attending-001", "name": "Ada Lovelace"}]}
+    assert _migrate_nested_attending_schedules(current) is current
+
+    nested = {
+        "attendings": [
+            {
+                "id": "attending-001",
+                "name": "Ada Lovelace",
+                "weekly_work_schedules": [{"week": 1, "half_days": []}],
+            }
+        ]
+    }
+    migrated = _migrate_nested_attending_schedules(nested)
+    assert migrated["attending_schedules"] == [
+        {"attending_id": "attending-001", "weeks": [{"week": 1, "half_days": []}]}
+    ]
+    assert "weekly_work_schedules" in nested["attendings"][0]

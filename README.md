@@ -25,8 +25,8 @@ Schedule**, **Residents**, **Attendings**, **Rotations**, **Clinic**, and
 **Configuration** (annual calendar start, automatic locking, training levels,
 solver tuning). The Attendings tab records each attending's weekly half-day
 total, optional Fixed or Flexible minimum/maximum ranges for each recurring work
-category, a minimum number of distinct Attending Clinic days in non-vacation
-weeks, an independent schedule for every academic week, schedule dates, and
+category, a minimum number of distinct Attending Clinic days in full weeks
+without weekday vacation, an independent schedule for every academic week, schedule dates, and
 day-level vacation ranges. A preferred weekly schedule records soft placement
 preferences without creating work. Special/Other work is scheduled manually
 and can carry a free-text description. Adding an attending starts with only
@@ -34,8 +34,9 @@ their name, schedule dates, and weekly half-day total. Edit attending contains
 Details, Targets, Preferences, and Vacation. Edit schedule works directly in the
 full academic-year calendar, with changes saved immediately. Work half-days can
 be locked individually or together to protect their placement during editing
-and future solves. Automatic locking through today also covers attending work;
-explicit unlocks allow those half-days to be edited. Weekly and preferred
+and future solves. Hand-entered work is always kept by a solve, locked or not;
+automatic locking through today also covers attending work, and explicit
+unlocks allow those half-days to be edited. Weekly and preferred
 half-days use the same click-to-edit and drag-to-move grid as resident clinic
 schedules. A week's half-day total can be overridden with its
 current assignment count, including for attendings whose usual total is zero.

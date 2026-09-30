@@ -1,8 +1,10 @@
 """Week-by-week attending availability shared by readiness, solving, and validation.
 
 A solve fills each attending's open half-days around work that is already
-fixed: hand-entered week-by-week work, the automatic academic Admin Time, and
-scheduled work that is locked by hand or inside the automatic lock window.
+fixed: hand-entered week-by-week work (including hand-entered work the
+schedule holds only to record its lock state), the automatic academic Admin
+Time, and scheduled work that is locked by hand or inside the automatic lock
+window.
 This module states those facts once, without OR-Tools, so the readiness
 probe, the block solve's precepting envelope, the weekly attending pass, and
 schedule validation all agree on who could work when.
@@ -18,7 +20,7 @@ unless a Fixed range rules it out.
 
 from __future__ import annotations
 
-from collections import Counter, OrderedDict, defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -145,12 +147,13 @@ def attending_week_facts(
 ) -> dict[int, list[AttendingWeekFacts]]:
     """Return per-week facts for every attending, in deterministic order.
 
-    ``reference`` is the previous schedule. Its locked attending work (and
-    work inside the automatic lock window) is kept exactly; its other work
-    only guides stability. Locked work that no longer fits the attending's
-    dates, vacation, hand-entered work, or Admin Time is released.
+    ``reference`` is the previous schedule. Its locked attending work, work
+    inside the automatic lock window, and hand-entered work are kept exactly;
+    its other work only guides stability. Kept work that no longer fits the
+    attending's dates, vacation, other hand-entered work, or Admin Time is
+    released.
     """
-    reference_items = _reference_work(problem, reference)
+    reference_items = problem.scheduled_attending_work(reference)
     managed = sorted(problem.attending_managed_clinic_ids)
     by_week: dict[int, list[AttendingWeekFacts]] = defaultdict(list)
     # Identity order, not display order: renaming someone must not change
@@ -206,6 +209,7 @@ def _week_facts(
                 item
                 for item in prior
                 if item.work_type is AttendingWorkType.SPECIAL_OTHER
+                or item.hand_entered
                 or attending_work_is_locked(problem, item, today=today)
             ),
         )
@@ -236,9 +240,12 @@ def _week_facts(
         slot = (item.weekday, item.session)
         viable = item.weekday in available_days and slot not in occupied
         # A solve never places Special/Other work, so it cannot recreate an
-        # unlocked copy either. Keep it rather than silently dropping it.
-        if item.work_type is AttendingWorkType.SPECIAL_OTHER or attending_work_is_locked(
-            problem, item, today=today
+        # unlocked copy either. Keep it rather than silently dropping it, and
+        # keep hand-entered work whether or not it is locked.
+        if (
+            item.work_type is AttendingWorkType.SPECIAL_OTHER
+            or item.hand_entered
+            or attending_work_is_locked(problem, item, today=today)
         ):
             if viable:
                 locked.append(item)
@@ -337,27 +344,6 @@ def _week_facts(
     )
 
 
-def _reference_work(
-    problem: SolverProblem,
-    reference: Schedule | None,
-) -> dict[tuple[str, int], tuple[AssignedAttendingWork, ...]]:
-    if reference is None or reference.meta.academic_year != problem.academic_year:
-        return {}
-    known = {attending.id for attending in problem.attendings}
-    weeks = problem.calendar.weeks
-    grouped: dict[tuple[str, int], list[AssignedAttendingWork]] = defaultdict(list)
-    for item in reference.attending_work:
-        if item.attending_id not in known or not 1 <= item.week <= weeks:
-            continue
-        if (
-            item.work_type is AttendingWorkType.PRECEPTING_CLINIC
-            and item.clinic_id not in problem.clinic_policy.site_ids
-        ):
-            continue
-        grouped[item.attending_id, item.week].append(item)
-    return {key: tuple(items) for key, items in grouped.items()}
-
-
 def potential_attending_coverage(
     problem: SolverProblem,
     facts_by_week: dict[int, list[AttendingWeekFacts]] | None = None,
@@ -434,87 +420,38 @@ def schedule_attending_coverage(
 ) -> list[AttendingClinicCoverage]:
     """Preceptors a schedule provides: hand-entered plus scheduled work.
 
-    Scheduled work counts exactly where the effective attending week would
-    show it: on the attending's scheduled, non-vacation days, at an open
-    clinic, and not under hand-entered work or the automatic academic Admin
-    Time.
+    Scheduled work counts exactly where the effective attending week shows
+    it: on the attending's scheduled, non-vacation days, at an open clinic,
+    and not under hand-entered work or the automatic academic Admin Time.
     """
     managed = problem.attending_managed_clinic_ids
     if not managed or schedule is None or not schedule.attending_work:
         return list(problem.attending_coverage)
-    counts: Counter[tuple[str, date, Session]] = Counter(
-        {
-            (item.clinic_id, item.date, item.session): item.attendings
-            for item in problem.attending_coverage
-        }
-    )
     attendings = {attending.id: attending for attending in problem.attendings}
-    first_day = problem.calendar.first_week_start
-    last_day = first_day + timedelta(days=problem.calendar.weeks * 7 - 1)
-    automatic_admin = problem.clinic_policy.academic_half_day_is_attending_admin_time
-    hand_entered: dict[tuple[str, int], set[HalfDay]] = {}
-    for item in schedule.attending_work:
-        if (
-            item.work_type is not AttendingWorkType.PRECEPTING_CLINIC
-            or item.clinic_id not in managed
-        ):
-            continue
-        attending = attendings.get(item.attending_id)
-        if attending is None or item.week > problem.calendar.weeks:
-            continue
-        calendar_day = first_day + timedelta(
-            weeks=item.week - 1,
-            days=_WEEKDAY_INDEX[item.weekday],
-        )
-        if (
-            not attending.is_scheduled_on(
-                calendar_day,
-                academic_year_start=first_day,
-                academic_year_end=last_day,
+    precepting = {
+        key: [
+            item
+            for item in items
+            if item.work_type is AttendingWorkType.PRECEPTING_CLINIC
+            and item.clinic_id in managed
+        ]
+        for key, items in problem.scheduled_attending_work(schedule).items()
+    }
+    # Each half-day holds one item, so the other scheduled work in a week
+    # cannot change where its precepting shows.
+    return problem.attending_coverage_for(
+        (
+            problem.effective_attending_week(
+                attendings[attending_id],
+                week,
+                scheduled_work=items,
             )
-            or attending.is_on_vacation(calendar_day)
-            or problem.clinic_policy.site(item.clinic_id).is_closed(calendar_day)
-        ):
-            continue
-        slot = (item.weekday, item.session)
-        if automatic_admin and problem.academic_half_day_for_week(item.week) == slot:
-            continue
-        key = (attending.id, item.week)
-        if key not in hand_entered:
-            schedule_record = problem.attending_schedule_for(attending.id)
-            saved_week = (
-                schedule_record.schedule_for_week(item.week)
-                if schedule_record is not None
-                else None
-            )
-            hand_entered[key] = (
-                {(half_day.weekday, half_day.session) for half_day in saved_week.half_days}
-                if saved_week is not None
-                else set()
-            )
-        if slot in hand_entered[key]:
-            continue
-        counts[item.clinic_id, calendar_day, item.session] += 1
-    return [
-        AttendingClinicCoverage(
-            clinic_id=clinic_id,
-            date=calendar_day,
-            session=session,
-            attendings=count,
-        )
-        for (clinic_id, calendar_day, session), count in sorted(
-            counts.items(),
-            key=lambda item: (item[0][1], _SESSION_INDEX[item[0][2]], item[0][0]),
-        )
-        if count > 0
-    ]
-
-
-_VIEW_CACHE: OrderedDict[
-    tuple[int, int],
-    tuple[SolverProblem, Schedule, SolverProblem],
-] = OrderedDict()
-_VIEW_CACHE_SIZE = 8
+            for (attending_id, week), items in precepting.items()
+            if items
+        ),
+        scheduled_only=True,
+        base=problem.attending_coverage,
+    )
 
 
 def schedule_capacity_view(
@@ -523,10 +460,8 @@ def schedule_capacity_view(
 ) -> SolverProblem:
     """Return a problem whose attending-managed capacity is what ``schedule`` staffs.
 
-    Editors ask this for every drop target, so the latest views are kept by
-    identity. The cache holds its keys alive, so an ``id`` is never reused
-    while it is cached, and schedules are replaced rather than mutated when
-    their attending work changes.
+    Build the view once per render or validation and pass it down; editors
+    that check many drop targets must not rebuild it for each one.
     """
     if (
         not problem.attending_managed_clinic_ids
@@ -534,16 +469,7 @@ def schedule_capacity_view(
         or not schedule.attending_work
     ):
         return problem
-    key = (id(problem), id(schedule))
-    cached = _VIEW_CACHE.get(key)
-    if cached is not None and cached[0] is problem and cached[1] is schedule:
-        _VIEW_CACHE.move_to_end(key)
-        return cached[2]
-    view = problem.with_attending_coverage(schedule_attending_coverage(problem, schedule))
-    _VIEW_CACHE[key] = (problem, schedule, view)
-    while len(_VIEW_CACHE) > _VIEW_CACHE_SIZE:
-        _VIEW_CACHE.popitem(last=False)
-    return view
+    return problem.with_attending_coverage(schedule_attending_coverage(problem, schedule))
 
 
 __all__ = [

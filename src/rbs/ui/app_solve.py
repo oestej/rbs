@@ -59,7 +59,10 @@ async def _solve(session: WorkspaceSession) -> None:
     workspace = session.workspace()
     if workspace is None:
         return
-    readiness = check_solve_readiness(SolverProblem.from_instance(workspace.instance))
+    readiness = check_solve_readiness(
+        SolverProblem.from_instance(workspace.instance),
+        reference_schedule=workspace.latest_schedule,
+    )
     if not readiness.ready:
         _open_readiness_diagnostics(session, readiness)
         ui.notify(

@@ -7,7 +7,7 @@ from datetime import date
 from typing import Literal
 
 from rbs.attending_schedule import effective_attending_schedule_week
-from rbs.models.attending import AttendingWorkType
+from rbs.models.attending import ATTENDING_WORK_TYPE_LABELS, AttendingWorkType
 from rbs.models.clinic import ClinicPolicy, clinic_slot_date
 from rbs.models.curriculum import default_training_level_code
 from rbs.models.enums import WEEKDAYS_MF, RotationKind, Session, Weekday
@@ -18,14 +18,6 @@ from rbs.models.special import SpecialRotation, SpecialRotationKind
 
 ACADEMIC_LABEL = "Academic Half Day"
 ClinicScheduleView = Literal["residents", "attendings"]
-
-ATTENDING_WORK_LABELS = {
-    AttendingWorkType.INPATIENT_SERVICE: "Inpatient Service",
-    AttendingWorkType.ATTENDING_CLINIC: "Attending Clinic",
-    AttendingWorkType.PRECEPTING_CLINIC: "Precepting Clinic",
-    AttendingWorkType.ADMIN_TIME: "Admin Time",
-    AttendingWorkType.SPECIAL_OTHER: "Special/Other",
-}
 
 
 @dataclass(frozen=True)
@@ -38,7 +30,7 @@ class AttendingOccupant:
     description: str | None = None
 
     def work_label(self) -> str:
-        label = ATTENDING_WORK_LABELS[self.work_type]
+        label = ATTENDING_WORK_TYPE_LABELS[self.work_type]
         return f"{label} · {self.site_name}" if self.site_name else label
 
     def label(self) -> str:
@@ -60,8 +52,11 @@ def attending_occupancy(
         for session in Session
     }
     attendings = {attending.id: attending for attending in instance.attendings}
+    work_by_week = instance.scheduled_attending_work(schedule)
     effective_weeks = (
-        effective_attending_schedule_week(instance, attending, week, schedule)
+        effective_attending_schedule_week(
+            instance, attending, week, work_by_week=work_by_week,
+        )
         for attending in instance.attendings
         for week in range(1, instance.calendar.weeks + 1)
     )
@@ -196,18 +191,25 @@ def clinic_weekdays(
                 for week in schedule.weeks
                 for assignment in week.half_days
             )
-            if schedule is not None and schedule.meta.academic_year == instance.academic_year:
-                days.update(
-                    item.weekday for item in schedule.attending_work
-                    if any(person.id == item.attending_id for person in instance.attendings)
-                    and item.week <= instance.calendar.weeks
-                )
+            days.update(
+                item.weekday
+                for items in instance.scheduled_attending_work(schedule).values()
+                for item in items
+            )
             if (
                 instance.attendings
                 and instance.clinic_policy.academic_half_day_is_attending_admin_time
             ):
-                days.add(instance.clinic_policy.recurring_academic_half_day[0])
-                days.update(override.weekday for override in instance.academic_half_day_overrides)
+                # A program may run no recurring academic half-day, and a
+                # one-week override may cancel its week instead of moving it.
+                recurring = instance.clinic_policy.recurring_academic_half_day
+                if recurring is not None:
+                    days.add(recurring[0])
+                days.update(
+                    override.weekday
+                    for override in instance.academic_half_day_overrides
+                    if override.weekday is not None
+                )
     return tuple(day for day in Weekday if day in days)
 
 

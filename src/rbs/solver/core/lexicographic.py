@@ -22,6 +22,8 @@ from typing import Any
 
 DEFAULT_TIER_WORK_LIMIT = 0.1
 """CP-SAT deterministic time per tier: enough to find, not always prove, the best."""
+FIRST_SOLUTION_BUDGET_MULTIPLIERS = (1, 10, 100)
+"""Budgets, as multiples of the tier budget, tried in turn for a first solution."""
 _SAFETY_TIME_LIMIT_SECONDS = 10.0
 
 
@@ -35,9 +37,11 @@ def solve_in_tiers(
 ):
     """Minimize each non-empty tier's sum in order; return the last solver.
 
-    Returns ``None`` when the model has no solution at all. If a later tier
-    fails to improve within its time limit, the previous tier's solution is
-    kept, since it already satisfies every tier fixed so far.
+    Returns ``None`` only when CP-SAT proves the model has no solution, or
+    when even the largest first-solution budget finds none; a budget running
+    out is never mistaken for proof sooner than that. Once a solution exists,
+    a later tier that fails to improve within its budget keeps the previous
+    tier's solution, since it already satisfies every tier fixed so far.
     """
     hints = list(hint_variables)
     solver = None
@@ -46,7 +50,11 @@ def solve_in_tiers(
             continue
         expression = sum(tier)
         model.Minimize(expression)
-        attempt = solve_small(model, cp_model, work_limit=work_limit)
+        attempt = (
+            solve_small(model, cp_model, work_limit=work_limit)
+            if solver is not None
+            else _first_solution(model, cp_model, work_limit)
+        )
         if attempt is None:
             return solver
         solver = attempt
@@ -56,12 +64,25 @@ def solve_in_tiers(
             model.AddHint(variable, attempt.Value(variable))
     if solver is None:
         model.ClearObjective()
-        solver = solve_small(model, cp_model, work_limit=work_limit)
+        solver = _first_solution(model, cp_model, work_limit)
     return solver
+
+
+def _first_solution(model, cp_model, work_limit: float):
+    """Search with growing budgets until a solution appears or none can exist."""
+    for multiplier in FIRST_SOLUTION_BUDGET_MULTIPLIERS:
+        solver, status = _solve(model, cp_model, work_limit * multiplier)
+        if solver is not None or status in (cp_model.INFEASIBLE, cp_model.MODEL_INVALID):
+            return solver
+    return None
 
 
 def solve_small(model, cp_model, *, work_limit: float = DEFAULT_TIER_WORK_LIMIT):
     """Solve a small model reproducibly; return the solver, or ``None`` if unsolved."""
+    return _solve(model, cp_model, work_limit)[0]
+
+
+def _solve(model, cp_model, work_limit: float):
     solver = cp_model.CpSolver()
     solver.parameters.num_search_workers = 1
     solver.parameters.random_seed = 0
@@ -69,8 +90,13 @@ def solve_small(model, cp_model, *, work_limit: float = DEFAULT_TIER_WORK_LIMIT)
     solver.parameters.max_time_in_seconds = _SAFETY_TIME_LIMIT_SECONDS
     status = solver.Solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return None
-    return solver
+        return None, status
+    return solver, status
 
 
-__all__ = ["DEFAULT_TIER_WORK_LIMIT", "solve_in_tiers", "solve_small"]
+__all__ = [
+    "DEFAULT_TIER_WORK_LIMIT",
+    "FIRST_SOLUTION_BUDGET_MULTIPLIERS",
+    "solve_in_tiers",
+    "solve_small",
+]

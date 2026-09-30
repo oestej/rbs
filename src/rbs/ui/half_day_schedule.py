@@ -110,10 +110,7 @@ def create_half_day_cell(
     if on_drop is not None:
         bind_half_day_drop(cell, on_drop)
     if on_click is not None:
-        if accessible_name:
-            cell.props(f"role=button tabindex=0 aria-label='{accessible_name}'")
-        else:
-            cell.props("role=button tabindex=0")
+        _make_activatable(cell, accessible_name)
         cell.on("click", on_click)
         cell.on("keydown.enter", on_click)
     return cell
@@ -140,23 +137,34 @@ def create_draggable_half_day_event(
     """Create the same draggable event block used by resident clinic schedules."""
     from nicegui import ui
 
-    event = (
-        ui.element("div")
-        .classes(f"rbs-resident-clinic-event {classes}".strip())
-        .props(
-            f"draggable={'true' if draggable else 'false'} data-scope={scope} "
-            f"data-week={week} data-weekday={weekday.value} "
-            f"data-session={session.value}"
-        )
+    event = ui.element("div").classes(f"rbs-resident-clinic-event {classes}".strip())
+    # Assigned directly rather than through a props string: a scope carries a
+    # configured ID, which may contain spaces or quotes.
+    event._props.update(
+        {
+            "draggable": "true" if draggable else "false",
+            "data-scope": scope,
+            "data-week": str(week),
+            "data-weekday": weekday.value,
+            "data-session": session.value,
+        }
     )
     if draggable:
         event.on("dragstart", js_handler=_HALF_DAY_DRAG_START_JS)
         event.on("dragend", js_handler=_HALF_DAY_DRAG_END_JS)
     if on_click is not None:
-        if accessible_name:
-            event.props(f"role=button tabindex=0 aria-label='{accessible_name}'")
-        else:
-            event.props("role=button tabindex=0")
+        _make_activatable(event, accessible_name)
         event.on("click", on_click)
         event.on("keydown.enter", on_click)
     return event
+
+
+def _make_activatable(element: Any, accessible_name: str | None) -> None:
+    """Expose an element as a keyboard-reachable button with an optional name.
+
+    The name is assigned directly because display names can contain quotes,
+    which would end a quoted value in a props string early.
+    """
+    element._props.update({"role": "button", "tabindex": "0"})
+    if accessible_name:
+        element._props["aria-label"] = accessible_name

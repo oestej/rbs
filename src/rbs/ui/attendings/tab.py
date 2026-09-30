@@ -19,6 +19,7 @@ from rbs.models.attending import (
     ATTENDING_PREFERRED_WORK_TYPES,
     ATTENDING_WEEKLY_TARGET_WORK_TYPES,
     ATTENDING_WORK_DESCRIPTION_MAX_LENGTH,
+    ATTENDING_WORK_TYPE_LABELS,
     DEFAULT_ATTENDING_HALF_DAYS_PER_WEEK,
     MAX_ATTENDING_CLINIC_DAYS_PER_WEEK,
     MAX_ATTENDING_HALF_DAYS_PER_WEEK,
@@ -83,11 +84,7 @@ SaveAttendingSchedule = Callable[[SchedulerInput, Schedule | None, str], None]
 NEW_ATTENDING_ID = "__new_attending__"
 
 _WORK_TYPE_OPTIONS = {
-    AttendingWorkType.INPATIENT_SERVICE.value: "Inpatient Service",
-    AttendingWorkType.ATTENDING_CLINIC.value: "Attending Clinic",
-    AttendingWorkType.PRECEPTING_CLINIC.value: "Precepting Clinic",
-    AttendingWorkType.ADMIN_TIME.value: "Admin Time",
-    AttendingWorkType.SPECIAL_OTHER.value: "Special/Other",
+    work_type.value: label for work_type, label in ATTENDING_WORK_TYPE_LABELS.items()
 }
 
 _WEEKLY_TARGET_MODE_OPTIONS = {
@@ -370,19 +367,17 @@ def _attending_view(
                             )
                         ):
                             ui.tooltip("Back to attending directory")
-                    with ui.button(
+                    remove_button = ui.button(
                         icon="delete_outline",
                         on_click=lambda: _confirm_remove_attending(
                             instance,
                             attending,
                             on_save=on_save,
                         ),
-                    ).props(
-                        button_props(
-                            DESTRUCTIVE_ICON_BUTTON_PROPS,
-                            f"aria-label='Remove attending {attending.name}'",
-                        )
-                    ):
+                    ).props(button_props(DESTRUCTIVE_ICON_BUTTON_PROPS))
+                    # A name such as O'Brien would end a quoted props value early.
+                    remove_button._props["aria-label"] = f"Remove attending {attending.name}"
+                    with remove_button:
                         ui.tooltip("Remove attending")
         with master_detail.detail_card():
             with ui.column().classes(
@@ -621,6 +616,9 @@ def _attending_schedule_calendar(
     editing = bool(editing and (on_save is not None or on_work_save is not None))
     scope = f"attending-{attending.id}"
     week_containers: dict[int, object] = {}
+    # Grouped once per accepted edit so each rendered half-day looks up its
+    # work instead of scanning the whole schedule.
+    work_by_week = instance.scheduled_attending_work(schedule)
 
     def commit(
         snapshot: tuple[SchedulerInput, Schedule | None],
@@ -628,7 +626,7 @@ def _attending_schedule_calendar(
         week: int | None,
     ) -> bool:
         """Save an edit made from ``snapshot``; return whether anything changed."""
-        nonlocal instance, schedule
+        nonlocal instance, schedule, work_by_week
         if (calendar.is_deleted or not editing
                 or snapshot[0] is not instance or snapshot[1] is not schedule):
             raise ValueError("This attending schedule changed. Reopen the half-day and try again.")
@@ -641,6 +639,7 @@ def _attending_schedule_calendar(
         else:
             raise ValueError("Reopen this attending's schedule before editing it.")
         instance, schedule = updated
+        work_by_week = instance.scheduled_attending_work(schedule)
         if calendar.is_deleted:
             return True
         if on_change is not None:
@@ -828,14 +827,16 @@ def _attending_schedule_calendar(
     def render_week(week: int) -> None:
         container = week_containers[week]
         container.clear()
-        effective = effective_attending_schedule_week(instance, attending, week, schedule)
+        effective = effective_attending_schedule_week(
+            instance, attending, week, work_by_week=work_by_week,
+        )
         case_schedule = instance.attending_schedule_for(attending.id)
         saved_week = case_schedule.schedule_for_week(week) if case_schedule is not None else None
         dates = _short_week_range_label(
             effective.week_start, effective.week_start + timedelta(days=6),
         )
         over_maximum = (
-            precepting_over_maximum(instance, schedule, week)
+            precepting_over_maximum(instance, schedule, week, work_by_week=work_by_week)
             if any(
                 assignment.work_type is AttendingWorkType.PRECEPTING_CLINIC
                 for assignment in effective.assignments
@@ -853,6 +854,7 @@ def _attending_schedule_calendar(
                 on_drop=partial(drop_on, week=week, weekday=weekday, session=session),
                 work=attending_schedule_work_on(
                     instance, schedule, attending.id, week=week, weekday=weekday, session=session,
+                    effective=effective, work_by_week=work_by_week,
                 ),
                 on_lock_change=(
                     partial(save_lock, week, weekday, session)
@@ -2256,7 +2258,7 @@ def _minimum_attending_clinic_days_label(count: int) -> str:
     if count == 0:
         return "No Attending Clinic day minimum"
     unit = "day" if count == 1 else "days"
-    return f"At least {count} Attending Clinic {unit} per full non-vacation week"
+    return f"At least {count} Attending Clinic {unit} per full week without weekday vacation"
 
 
 def _weekly_shift_target_count_label(count: int) -> str:

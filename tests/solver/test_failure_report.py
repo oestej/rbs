@@ -130,3 +130,58 @@ def test_model_build_error_reports_configuration() -> None:
 
     assert report is not None
     assert report.title == "Cannot build schedule model"
+
+
+def test_a_solve_stopped_by_configuration_reports_that_no_model_was_built(monkeypatch) -> None:
+    # Each readiness conflict keeps its own code, so the report must still
+    # recognize the build failure rather than call the rules contradictory.
+    from rbs.catalog import sample_instance
+    from rbs.solver.core import cp_sat, get_engine
+    from rbs.solver.failure_report import MODEL_NOT_BUILT_NOTE
+
+    instance = sample_instance()
+    blocked = instance.revised(rotations=[
+        rotation.model_copy(update={"max_consecutive_weeks": 2})
+        if rotation.id == "icu"
+        else rotation
+        for rotation in instance.rotations
+    ])
+    checks = []
+    readiness = cp_sat.check_solve_readiness
+    monkeypatch.setattr(
+        cp_sat,
+        "check_solve_readiness",
+        lambda *args, **kwargs: checks.append(True) or readiness(*args, **kwargs),
+    )
+
+    schedule = get_engine("cp_sat").solve(
+        blocked, options=blocked.solver.model_copy(update={"solve_attempts": 1}),
+    )
+    report = describe_solver_failure(schedule)
+
+    assert MODEL_NOT_BUILT_NOTE in schedule.meta.notes
+    assert [diagnostic.code for diagnostic in schedule.meta.diagnostics] == [
+        "block_exceeds_consecutive_limit"
+    ]
+    assert report is not None
+    assert report.title == "Cannot build schedule model"
+    assert "ICU · PGY1" in report.diagnostics[0].message
+    # Readiness ran once, before any compile; the report reuses its issues.
+    assert checks == [True]
+
+
+def test_infeasible_search_without_the_build_note_still_reports_contradiction() -> None:
+    report = describe_solver_failure(
+        _schedule(
+            SolverStatus.INFEASIBLE,
+            solver_status=SolverStatus.INFEASIBLE,
+            diagnostics=[
+                SolverDiagnostic(
+                    code="uncoverable_clinic_session",
+                    message="Ada Lovelace cannot place Clinic.",
+                )
+            ],
+        )
+    )
+    assert report is not None
+    assert report.title == "No feasible block schedule"

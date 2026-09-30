@@ -263,3 +263,82 @@ def test_probe_floor_matches_the_compiler_formula() -> None:
                     assert probe_floor(surviving, pick, domain_size, negated) == (
                         compiler_floor(surviving, pick, domain_size, negated)
                     )
+
+
+def _clinic_lock_reference(
+    problem: SolverProblem,
+    resident_ids: list[str],
+    *,
+    in_clinic: bool = True,
+):
+    """A previous schedule that locks one clinic session in every resident week."""
+    from rbs.models.enums import SolverEngineName, SolverStatus
+    from rbs.models.schedule import AssignedClinic, Assignment, Schedule, ScheduleMeta
+
+    weeks = list(range(1, problem.calendar.weeks + 1))
+    return Schedule(
+        meta=ScheduleMeta(
+            academic_year=problem.academic_year,
+            engine=SolverEngineName.CP_SAT,
+            status=SolverStatus.FEASIBLE,
+        ),
+        assignments=[
+            Assignment(
+                resident_id=resident_id,
+                rotation_id="inpatient_peds_metro",
+                start_week=1,
+                end_week=weeks[-1],
+                weeks=weeks,
+                clinic_slots=[
+                    AssignedClinic(
+                        weekday=Weekday.TUESDAY,
+                        session=Session.MORNING,
+                        admin=not in_clinic,
+                        locked=True,
+                    )
+                ],
+            )
+            for resident_id in resident_ids
+        ],
+    )
+
+
+def test_readiness_does_not_block_a_resolve_that_reference_clinic_locks_can_rescue() -> None:
+    # A locked clinic session in the schedule a re-solve starts from can add a
+    # one-off session to its resident's week, so no week it covers is dead.
+    from rbs.solver.readiness import check_solve_readiness
+
+    problem = _problem(_attending_managed_instance(attendings=[], attending_schedules=[]))
+    (diagnostic,) = uncoverable_clinic_sessions(problem, allow_boundary_spans=True)
+    reference = _clinic_lock_reference(problem, diagnostic.resident_ids)
+
+    assert not check_solve_readiness(problem).ready
+    assert check_solve_readiness(problem, reference_schedule=reference).ready
+    assert uncoverable_clinic_sessions(
+        problem, allow_boundary_spans=False, reference_schedule=reference
+    ) == []
+
+
+def test_reference_admin_locks_do_not_silence_the_probe() -> None:
+    # A locked Admin session only removes clinic time, so it cannot rescue a week.
+    problem = _problem(_attending_managed_instance(attendings=[], attending_schedules=[]))
+    (diagnostic,) = uncoverable_clinic_sessions(problem, allow_boundary_spans=True)
+    reference = _clinic_lock_reference(problem, diagnostic.resident_ids, in_clinic=False)
+
+    assert uncoverable_clinic_sessions(
+        problem, allow_boundary_spans=True, reference_schedule=reference
+    ) == [diagnostic]
+
+
+def test_infeasibility_explanation_uses_the_probe_on_a_resolve() -> None:
+    from rbs.solver.core.diagnostics import explain_infeasibility
+
+    instance = _attending_managed_instance(attendings=[], attending_schedules=[])
+    problem = _problem(instance)
+    unrelated = _clinic_lock_reference(problem, [problem.residents[0].id], in_clinic=False)
+
+    codes = {
+        diagnostic.code
+        for diagnostic in explain_infeasibility(problem, instance.solver, unrelated)
+    }
+    assert UNCOVERABLE_CLINIC_SESSION in codes

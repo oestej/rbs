@@ -37,6 +37,15 @@ class AttendingWorkType(StrEnum):
     SPECIAL_OTHER = "special_other"
 
 
+ATTENDING_WORK_TYPE_LABELS: dict[AttendingWorkType, str] = {
+    AttendingWorkType.INPATIENT_SERVICE: "Inpatient Service",
+    AttendingWorkType.ATTENDING_CLINIC: "Attending Clinic",
+    AttendingWorkType.PRECEPTING_CLINIC: "Precepting Clinic",
+    AttendingWorkType.ADMIN_TIME: "Admin Time",
+    AttendingWorkType.SPECIAL_OTHER: "Special/Other",
+}
+"""Display name of each work category, in category order (see docs/ui-glossary.md)."""
+
 ATTENDING_WEEKLY_TARGET_WORK_TYPES = (
     AttendingWorkType.INPATIENT_SERVICE,
     AttendingWorkType.ATTENDING_CLINIC,
@@ -657,14 +666,28 @@ def attending_clinic_coverage(
     *,
     managed_clinic_ids: set[str],
     closed_dates_by_clinic: dict[str, set[date]] | None = None,
+    scheduled_only: bool = False,
+    base: Iterable[AttendingClinicCoverage] = (),
 ) -> list[AttendingClinicCoverage]:
-    """Expand effective Precepting Clinic work into solver-facing counts."""
+    """Expand effective Precepting Clinic work into solver-facing counts.
+
+    ``scheduled_only`` counts only the half-days a schedule filled, and
+    ``base`` supplies counts to add them to, typically the hand-entered
+    coverage already derived for the problem.
+    """
     counts: Counter[tuple[str, date, Session]] = Counter()
+    for record in base:
+        counts[record.clinic_id, record.date, record.session] += record.attendings
     closed_dates = closed_dates_by_clinic or {}
     no_closed_dates: set[date] = set()
     for effective in effective_weeks:
         for assignment in effective.assignments:
             if assignment.work_type is not AttendingWorkType.PRECEPTING_CLINIC:
+                continue
+            if scheduled_only and not effective.is_scheduled(
+                assignment.weekday,
+                assignment.session,
+            ):
                 continue
             clinic_id = assignment.clinic_id
             assert clinic_id is not None

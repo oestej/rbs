@@ -103,13 +103,14 @@ def schedule_attending_work(
 ) -> AttendingPassResult:
     """Place every attending's work around the solved resident schedule."""
     demand = precepting_demand(problem, schedule)
+    managed = problem.attending_managed_clinic_ids
     fixed: Counter[PreceptingKey] = Counter()
     for week, weekly in facts_by_week.items():
         for facts in weekly:
             for item in facts.fixed:
                 if (
                     item.work_type is AttendingWorkType.PRECEPTING_CLINIC
-                    and item.clinic_id in problem.attending_managed_clinic_ids
+                    and item.clinic_id in managed
                 ):
                     fixed[item.clinic_id, week, item.weekday, item.session] += 1
     work: list[AssignedAttendingWork] = []
@@ -163,7 +164,7 @@ def schedule_attending_work(
         scheduled_half_days=placed,
         precepting_half_days=sum(
             item.work_type is AttendingWorkType.PRECEPTING_CLINIC
-            and item.clinic_id in problem.attending_managed_clinic_ids
+            and item.clinic_id in managed
             for item in work
         ),
     )
@@ -195,9 +196,10 @@ def _solve_week(
         hard_coverage=True,
     )
     if result is None:
-        # The envelope makes this unreachable for the rules it models. If a
-        # rule outside it ever blocks coverage, keep every other placement
-        # and let validation name the uncovered clinic sessions.
+        # The envelope makes this unreachable for the rules it models, and
+        # the search escalates its budget before giving up. If a rule outside
+        # the envelope ever blocks coverage, keep every other placement and
+        # let validation name the uncovered clinic sessions.
         result = _build_and_solve(
             problem,
             week,
@@ -207,7 +209,11 @@ def _solve_week(
             cp_model,
             hard_coverage=False,
         )
-    assert result is not None
+    if result is None:
+        # Placing nothing always satisfies the relaxed model, so only a
+        # search that ran out of budget ends here. Report the week rather
+        # than abort the whole solve.
+        return [], bool(placeable), dict(need)
     return result
 
 

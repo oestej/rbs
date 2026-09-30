@@ -26,6 +26,11 @@ class AssignedAttendingWork(AttendingWorkAssignment):
     The lock fields mirror :class:`AssignedClinic`: a locked item is a hard
     input for the next solve, and an unlocked one is only a stability
     preference.
+
+    Hand-entered work moves here only while it needs a lock field: while it
+    is locked, or explicitly unlocked inside the automatic lock window. It
+    keeps ``hand_entered`` so it stays a hard input either way, and it
+    returns to the case once neither field applies.
     """
 
     attending_id: str = Field(min_length=1)
@@ -47,6 +52,19 @@ class AssignedAttendingWork(AttendingWorkAssignment):
         default=False,
         description="Marks work placed or changed by hand after the solve.",
     )
+    hand_entered: bool = Field(
+        default=False,
+        description=(
+            "Hand-entered week-by-week work kept here for its lock state. A solve "
+            "keeps it whether or not it is locked."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def hand_entered_work_is_a_manual_override(self) -> "AssignedAttendingWork":
+        if self.hand_entered and not self.manual_override:
+            raise ValueError("hand-entered attending work must be marked as placed by hand")
+        return self
 
     @property
     def key(self) -> tuple[str, int, Weekday, Session]:

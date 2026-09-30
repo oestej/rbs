@@ -6,14 +6,14 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from rbs.models.attending import (
+    ATTENDING_WORK_TYPE_LABELS,
     Attending,
     AttendingWeeklyTargetMode,
-    AttendingWorkHalfDay,
     AttendingWorkType,
     EffectiveAttendingWeek,
 )
 from rbs.models.instance import SchedulerInput
-from rbs.models.schedule import Schedule
+from rbs.models.schedule import AssignedAttendingWork, Schedule
 
 
 class AttendingScheduleIssueSeverity(StrEnum):
@@ -65,13 +65,8 @@ class AttendingScheduleReport:
         )
 
 
-_WORK_TYPE_LABELS = {
-    AttendingWorkType.INPATIENT_SERVICE: "Inpatient Service",
-    AttendingWorkType.ATTENDING_CLINIC: "Attending Clinic",
-    AttendingWorkType.PRECEPTING_CLINIC: "Precepting Clinic",
-    AttendingWorkType.ADMIN_TIME: "Admin Time",
-    AttendingWorkType.SPECIAL_OTHER: "Special/Other",
-}
+ScheduledWorkByWeek = dict[tuple[str, int], tuple[AssignedAttendingWork, ...]]
+"""A schedule's attending work grouped by attending and academic week."""
 
 
 def effective_attending_schedule_week(
@@ -79,24 +74,23 @@ def effective_attending_schedule_week(
     attending: Attending,
     week: int,
     schedule: Schedule | None = None,
+    *,
+    work_by_week: ScheduledWorkByWeek | None = None,
 ) -> EffectiveAttendingWeek:
-    """Combine accepted case work and compatible generated work for a calendar week."""
-    compatible = schedule is not None and schedule.meta.academic_year == instance.academic_year
+    """Combine accepted case work and compatible generated work for a calendar week.
+
+    ``work_by_week`` is ``instance.scheduled_attending_work(schedule)``. A
+    caller projecting many weeks groups the schedule once and passes it.
+    """
+    grouped = (
+        work_by_week
+        if work_by_week is not None
+        else instance.scheduled_attending_work(schedule)
+    )
     return instance.effective_attending_week(
         attending,
         week,
-        scheduled_work=(
-            AttendingWorkHalfDay(
-                weekday=item.weekday,
-                session=item.session,
-                work_type=item.work_type,
-                clinic_id=item.clinic_id,
-                description=item.description,
-            )
-            for item in (schedule.attending_work if compatible else ())
-            if item.attending_id == attending.id and item.week == week
-            and (item.clinic_id is None or item.clinic_id in instance.clinic_policy.site_ids)
-        ),
+        scheduled_work=grouped.get((attending.id, week), ()),
     )
 
 
@@ -123,9 +117,12 @@ def attending_schedule_report(
         raise ValueError(f"unknown attending {attending_id!r}")
 
     issues: list[AttendingScheduleIssue] = []
+    work_by_week = instance.scheduled_attending_work(schedule)
     for attending in attendings:
         for week in range(1, instance.calendar.weeks + 1):
-            effective = effective_attending_schedule_week(instance, attending, week, schedule)
+            effective = effective_attending_schedule_week(
+                instance, attending, week, work_by_week=work_by_week,
+            )
             if not effective.is_active_week:
                 continue
             minimums_apply = (
@@ -211,7 +208,7 @@ def _category_target_issues(
             if target.mode is AttendingWeeklyTargetMode.FIXED
             else AttendingScheduleIssueSeverity.WARNING
         )
-        label = _WORK_TYPE_LABELS[target.work_type]
+        label = ATTENDING_WORK_TYPE_LABELS[target.work_type]
         expected = (
             str(target.minimum_shifts_per_week)
             if target.minimum_shifts_per_week == target.maximum_shifts_per_week

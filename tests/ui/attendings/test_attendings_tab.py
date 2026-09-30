@@ -873,7 +873,7 @@ def test_attending_view_shows_configured_category_targets_and_modes() -> None:
     assert "Admin Time" in labels
     assert "0–1 shifts per week" in labels
     assert "Flexible" in labels
-    assert "At least 2 Attending Clinic days per full non-vacation week" in labels
+    assert "At least 2 Attending Clinic days per full week without weekday vacation" in labels
     assert "Preferred weekly schedule" in labels
     assert "1 of 10 preferred half-days" in labels
     assert "Thursday · Morning (AM)" in labels
@@ -1340,3 +1340,37 @@ def test_attending_directory_selection_protects_a_dirty_draft() -> None:
     _click(discard)
 
     assert selections == ["attending-002"]
+
+
+def test_names_and_ids_with_quotes_keep_accessible_names_and_drop_scopes() -> None:
+    from nicegui import ui
+
+    attending = Attending(id="attending o'brien", name="Sean O'Brien")
+    instance = blank_instance().revised(
+        attendings=[attending],
+        attending_schedules=[AttendingSchedule(attending_id=attending.id, weeks=[
+            AttendingWeeklyWorkSchedule(week=1, half_days=[AttendingWorkHalfDay(
+                weekday=Weekday.MONDAY, session=Session.MORNING,
+                work_type=AttendingWorkType.ADMIN_TIME,
+            )]),
+        ])],
+    )
+    before = set(ui.context.client.elements)
+
+    render_attendings_tab(
+        instance,
+        selected_attending_id=attending.id,
+        on_select=lambda _attending_id: None,
+        on_save=lambda _instance, _attending_id: None,
+        on_work_save=lambda *_args: None,
+        schedule_editing=True,
+    )
+
+    created = _created_elements(before)
+    labels = {element._props.get("aria-label") for element in created}
+    assert "Remove attending Sean O'Brien" in labels
+    assert {
+        element._props.get("data-scope")
+        for element in created
+        if "rbs-resident-clinic-event" in getattr(element, "_classes", [])
+    } == {"attending-attending o'brien"}

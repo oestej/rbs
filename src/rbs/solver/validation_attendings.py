@@ -31,9 +31,10 @@ def _validate_attending_work(
 ) -> None:
     """Check attending work, and with ``maximums`` each clinic's preceptor limit.
 
-    Only a solved schedule is held to the limit. Hand edits may override it
-    in a working draft until the next solve, as block edits may exceed
-    rotation capacity.
+    Only a solved schedule is held to the limit, and only for work the solve
+    placed. Hand edits may override it in a working draft until the next
+    solve, as block edits may exceed rotation capacity, and they stay
+    overrides when a later lock change keeps the schedule solved.
     """
     if not schedule.attending_work:
         return
@@ -41,7 +42,7 @@ def _validate_attending_work(
     site_ids = set(instance.clinic_policy.site_ids)
     weeks: dict[tuple[str, int], EffectiveAttendingWeek] = {}
     placed_precepting: Counter[tuple[str, int, Weekday, Session]] = Counter()
-    locked_precepting: Counter[tuple[str, int, Weekday, Session]] = Counter()
+    override_precepting: Counter[tuple[str, int, Weekday, Session]] = Counter()
     for item in schedule.attending_work:
         attending = attendings.get(item.attending_id)
         if attending is None:
@@ -85,26 +86,29 @@ def _validate_attending_work(
             )
         elif item.work_type is AttendingWorkType.PRECEPTING_CLINIC:
             assert item.clinic_id is not None
+            # Whether work may override the maximum depends on who placed it,
+            # never on a lock that can later be removed.
             counts = (
-                locked_precepting if attending_work_is_locked(instance, item)
+                override_precepting
+                if item.manual_override or attending_work_is_locked(instance, item)
                 else placed_precepting
             )
             counts[item.clinic_id, item.week, item.weekday, item.session] += 1
     if maximums:
-        _validate_precepting_maximums(instance, placed_precepting, locked_precepting, errors)
+        _validate_precepting_maximums(instance, placed_precepting, override_precepting, errors)
 
 
 def _validate_precepting_maximums(
     instance: SolverProblem,
     placed: Counter[tuple[str, int, Weekday, Session]],
-    locked: Counter[tuple[str, int, Weekday, Session]],
+    overrides: Counter[tuple[str, int, Weekday, Session]],
     errors: list[str],
 ) -> None:
     """Reject placed precepting beyond a clinic's maximum for a half-day.
 
-    Hand-entered and locked precepting count toward the maximum, but they are
-    solve inputs and may exceed it by themselves as an override. Only unlocked
-    work, which the solve placed, can break the maximum here.
+    Hand-entered, locked, and hand-placed precepting count toward the
+    maximum, but they may exceed it by themselves as an override. Only work
+    the solve placed can break the maximum here.
     """
     if not placed:
         return
@@ -124,7 +128,7 @@ def _validate_precepting_maximums(
         clinic_id, week, weekday, session = key
         calendar_day = clinic_slot_date(instance.calendar.first_week_start, week, weekday)
         maximum = instance.clinic_max_attendings_on(clinic_id, calendar_day, session)
-        total = count + hand_entered[key] + locked[key]
+        total = count + hand_entered[key] + overrides[key]
         if total > maximum:
             half_day = "AM" if session is Session.MORNING else "PM"
             errors.append(

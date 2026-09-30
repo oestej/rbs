@@ -578,13 +578,26 @@ def test_calendar_locks_persist_and_protect_edit_controls(calendar_page):
                for element in page.elements())
     _click(page.button("Edit schedule"))
     _click(page.accessible("Unlock work half-day: Tuesday Morning (AM) in week 1"))
-    assert not page.store.get(page.workspace.id).schedule.attending_work[0].locked
+    # Unlocking returns hand-entered work to the week-by-week schedule, where
+    # the next solve still keeps it.
+    unlocked = page.store.get(page.workspace.id)
+    assert not unlocked.schedule.attending_work
+    assert unlocked.instance.attending_schedules == page.workspace.instance.attending_schedules
     assert page.accessible("Edit Tuesday Morning (AM) in week 1")._props["draggable"] == "true"
     _save_assignment(page, Weekday.FRIDAY, 1)
     _click(page.button("Lock all work"))
+    assert all(item.locked for item in page.store.get(page.workspace.id).schedule.attending_work)
     _click(page.button("Unlock all work"))
     latest = page.store.get(page.workspace.id)
     assert all(not item.locked for item in latest.schedule.attending_work)
+    assert [
+        (half_day.weekday, half_day.description)
+        for half_day in latest.instance.attending_schedule_weeks("attending-001")[0].half_days
+    ] == [
+        (Weekday.MONDAY, "Stored work before schedule dates"),
+        (Weekday.TUESDAY, "Faculty reviews"),
+        (Weekday.FRIDAY, None),
+    ]
     assert not directory.is_deleted
     assert page.session.attending_schedule_editing
     _click(page.button("Return to view"))
@@ -730,3 +743,118 @@ def test_locking_a_stale_schedule_after_vacation_edits_keeps_compatible_work(cal
     assert prior.attending_work[1] in current.schedule.attending_work  # other attending remains
     assert prior.attending_work[0] not in current.schedule.attending_work  # vacation masks it
     assert any("vacation" in note for note in current.schedule.meta.notes)
+
+
+def _hard_and_soft_half_days(instance, schedule, week=1, *, today=None):
+    facts = next(
+        item for item in attending_week_facts(
+            SolverProblem.from_instance(instance), schedule, today=today,
+        )[week]
+        if item.attending_id == "attending-001"
+    )
+    return (
+        {(item.weekday, item.session) for item in facts.fixed},
+        set(facts.reference),
+    )
+
+
+@pytest.mark.parametrize("bulk", [False, True])
+def test_lock_then_unlock_keeps_hand_entered_work_a_hard_solve_input(bulk):
+    instance = _instance()
+    original = _generated_schedule(instance)
+
+    def change(current, schedule, locked):
+        if bulk:
+            return set_attending_schedule_locked(
+                current, schedule, "attending-001", locked=locked,
+            )
+        return set_attending_work_locked(
+            current, schedule, "attending-001", week=1,
+            weekday=Weekday.TUESDAY, session=Session.MORNING, locked=locked,
+        )
+
+    locked_instance, locked = change(instance, original, True)
+    assert any(item.hand_entered and item.locked for item in locked.attending_work)
+    restored_instance, restored = change(locked_instance, locked, False)
+
+    # The round trip is exact: the work is hand-entered again, not unlocked
+    # schedule work that the next solve would treat only as a preference.
+    assert restored_instance.attending_schedules == instance.attending_schedules
+    assert restored.attending_work == original.attending_work
+    hard, soft = _hard_and_soft_half_days(restored_instance, restored)
+    assert (Weekday.TUESDAY, Session.MORNING) in hard
+    assert (Weekday.TUESDAY, Session.MORNING) not in soft
+
+
+def test_unlocking_past_hand_entered_work_keeps_it_hard_while_it_stays_editable():
+    instance = _instance().revised(lock_through_today=True)
+    today = instance.calendar.first_week_start + timedelta(days=5)
+    updated, unlocked = set_attending_work_locked(
+        instance, None, "attending-001", week=1,
+        weekday=Weekday.TUESDAY, session=Session.MORNING, locked=False, today=today,
+    )
+    (item,) = unlocked.attending_work
+    assert item.hand_entered and item.automatic_lock_exempt and not item.locked
+    assert not attending_work_is_locked(updated, item, today=today)
+    hard, soft = _hard_and_soft_half_days(updated, unlocked, today=today)
+    assert (Weekday.TUESDAY, Session.MORNING) in hard
+    assert (Weekday.TUESDAY, Session.MORNING) not in soft
+
+
+def test_hand_entered_work_without_manual_override_is_rejected():
+    with pytest.raises(ValueError, match="placed by hand"):
+        AssignedAttendingWork(
+            attending_id="attending-001", week=1,
+            weekday=Weekday.MONDAY, session=Session.MORNING,
+            work_type=AttendingWorkType.ADMIN_TIME, hand_entered=True,
+        )
+
+
+@pytest.mark.parametrize("source", [Weekday.TUESDAY, Weekday.FRIDAY])
+def test_swapping_hand_entered_and_generated_work_keeps_each_ones_provenance(source):
+    instance = _instance()
+    original = _generated_schedule(instance)
+    target = Weekday.FRIDAY if source is Weekday.TUESDAY else Weekday.TUESDAY
+    updated, swapped = move_attending_schedule_half_day(
+        instance, original, "attending-001", week=1,
+        source_weekday=source, source_session=Session.MORNING,
+        target_weekday=target, target_session=Session.MORNING,
+    )
+
+    # Hand-entered "Faculty reviews" moved to Friday and stays hand-entered;
+    # the solve's Attending Clinic moved to Tuesday and stays schedule work.
+    case_week = updated.attending_schedule_weeks("attending-001")[0]
+    assert case_week.half_days_override == 2
+    assert [(item.weekday, item.description) for item in case_week.half_days] == [
+        (Weekday.MONDAY, "Stored work before schedule dates"),
+        (Weekday.FRIDAY, "Faculty reviews"),
+    ]
+    moved = next(item for item in swapped.attending_work if item.attending_id == "attending-001")
+    assert (moved.weekday, moved.work_type) == (
+        Weekday.TUESDAY, AttendingWorkType.ATTENDING_CLINIC,
+    )
+    assert moved.manual_override and not moved.hand_entered and not moved.locked
+    assert original.attending_work[1] in swapped.attending_work
+    hard, soft = _hard_and_soft_half_days(updated, swapped)
+    assert (Weekday.FRIDAY, Session.MORNING) in hard
+    assert (Weekday.TUESDAY, Session.MORNING) in soft
+
+
+def test_editing_visible_hand_entered_work_clears_schedule_work_hidden_under_it():
+    instance = _instance()
+    hidden = AssignedAttendingWork(
+        attending_id="attending-001", week=1,
+        weekday=Weekday.TUESDAY, session=Session.MORNING,
+        work_type=AttendingWorkType.INPATIENT_SERVICE,
+    )
+    schedule = _generated_schedule(instance)
+    schedule = schedule.revised(attending_work=[*schedule.attending_work, hidden])
+
+    updated, removed = set_attending_schedule_half_day(
+        instance, schedule, "attending-001", week=1,
+        weekday=Weekday.TUESDAY, session=Session.MORNING, assignment=None,
+    )
+    attending = next(person for person in updated.attendings if person.id == "attending-001")
+    effective = effective_attending_schedule_week(updated, attending, 1, removed)
+    assert effective.assignment_on(Weekday.TUESDAY, Session.MORNING) is None
+    assert hidden not in removed.attending_work

@@ -34,7 +34,8 @@
   be assigned as Inpatient Service, Attending Clinic, Precepting Clinic, Admin
   Time, or Special/Other; Precepting Clinic work selects a clinic site.
   Attendings can also set a soft preferred weekly schedule and a minimum number
-  of distinct Attending Clinic days for non-vacation weeks. The program's
+  of distinct Attending Clinic days for full weeks without weekday vacation,
+  which solving also enforces in weeks with only weekend vacation. The program's
   effective academic half-day is reserved automatically as Admin Time for
   active attendings, with an option to disable that rule in Academic settings.
   Schedule checks identify missing weekly totals, Fixed ranges, and Attending
@@ -54,7 +55,8 @@
   explaining the limit, whether the next solve will keep the work, and how to
   allow it with a clinic exception, and the half-day stays marked in the
   calendar. Solving keeps hand-entered and locked overrides and adds no
-  preceptors beside them.
+  preceptors beside them. Unlocking a hand-placed override in a solved schedule
+  saves normally and leaves the work in place until the next solve.
 
 ### Changed
 
@@ -73,6 +75,9 @@
 - **Attendings:** Lock individual work half-days or use Lock all work and Unlock
   all work in Edit schedule. Locks protect placements from edits and future
   solves, and automatic locking through today also covers attending work.
+  Hand-entered work stays hand-entered through locking, unlocking, editing,
+  and dragging, so the next solve keeps it; work the solve placed stays a
+  preference for the next solve unless it is locked.
 - **Attendings:** Selecting an attending now shows their full academic-year AM/PM
   schedule, including vacation, schedule dates, and automatic Admin Time.
 - **Attendings:** Edit schedule now works directly in the full-year calendar,
@@ -100,7 +105,9 @@
 - **Scheduling:** An attending-managed clinic that no attending can precept at
   no longer ends in an unexplained infeasible result. Solve readiness now names
   the rotations that cannot be placed and links to the clinic configuration,
-  before any search starts.
+  before any search starts. The check allows for clinic sessions and
+  precepting locked in the previous schedule, so it never blocks a re-solve
+  those locks could make possible, and it no longer slows every edit.
 
 ## [0.1.14] - 2026-09-29
 

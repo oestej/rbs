@@ -382,12 +382,10 @@ class AttendingEnvelope:
         index: int,
     ) -> None:
         """Keep enough days free for each member's Attending Clinic day minimum."""
+        # The same condition as the weekly rule: the effective week's minimum
+        # already excludes partial and weekday-vacation weeks.
         needed = facts.clinic_day_minimum - len(facts.fixed_clinic_days)
-        if (
-            not facts.full_week
-            or needed <= 0
-            or AttendingWorkType.ATTENDING_CLINIC not in facts.work_types
-        ):
+        if needed <= 0 or AttendingWorkType.ATTENDING_CLINIC not in facts.work_types:
             return
         candidate_days = [
             weekday

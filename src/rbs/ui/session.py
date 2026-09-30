@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from rbs.catalog import current_blank_instance, current_sample_instance
 from rbs.models.color_scheme import ColorScheme
@@ -19,6 +19,9 @@ from rbs.ui.clinic.projection import ClinicScheduleView
 from rbs.ui.host import LocalHost, Principal, WorkspaceHost
 from rbs.ui.locks import refresh_locks_through_today
 from rbs.workspaces import InstanceEditImpact, WorkspaceController
+
+if TYPE_CHECKING:
+    from rbs.solver.readiness import ReadinessResult
 
 TAB_NAMES = (
     "block_schedule",
@@ -114,6 +117,9 @@ class WorkspaceSession:
     _refresh_status: RefreshStatus | None = field(default=None, repr=False)
     _recovery_error: str | None = field(default=None, repr=False)
     _leave_guard_baseline: tuple[int, int] | None = field(default=None, repr=False)
+    _readiness: tuple[tuple[int, int, date], ReadinessResult] | None = field(
+        default=None, repr=False,
+    )
     _render_workspace: Workspace | None = field(default=None, repr=False)
     _select_resident_in_directory: Callable[[str | None], bool] | None = field(
         default=None, repr=False,

@@ -269,14 +269,13 @@ class ClinicSiteConfig(StrictModel):
         return self._override_by_date_session.get((calendar_day, session))
 
     def max_capacity_on(self, calendar_day: date, session: Session) -> int:
-        """Return effective capacity after closures and date-specific overrides."""
-        if self.is_closed(calendar_day):
-            return 0
-        override = self.capacity_override(calendar_day, session)
-        if override is not None:
-            return override.max_residents(self.residents_per_attending)
-        weekday = tuple(Weekday)[calendar_day.weekday()]
-        return self.max_capacity(weekday, session)
+        """Return staffed capacity after closures and date-specific overrides.
+
+        This is the capacity of a capacity-managed clinic, whose grid names
+        the attendings staffing it. An attending-managed clinic seats only
+        whoever is scheduled to precept; ask the solver problem instead.
+        """
+        return self.max_attendings_on(calendar_day, session) * self.residents_per_attending
 
     def max_attendings_on(self, calendar_day: date, session: Session) -> int:
         """Most attendings who may precept here on one date and session.

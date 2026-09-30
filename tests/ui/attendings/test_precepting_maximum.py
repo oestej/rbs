@@ -402,3 +402,59 @@ def test_precepting_beside_solved_work_is_saved_as_a_draft_override(tmp_path, mo
         assert _maximum_markers(page.cell(Weekday.MONDAY))
     finally:
         page.root.delete()
+
+
+def test_unlocking_a_solved_over_maximum_override_keeps_the_schedule_valid(tmp_path):
+    from rbs.solver.validation import validate_schedule
+    from rbs.store import Store
+    from rbs.workspaces import WorkspaceController
+
+    # Ada's second preceptor at Maple on Monday is a hand edit of solved work,
+    # locked through a solve that therefore had to keep it over the maximum.
+    instance = _instance()
+    generated = attending_working_draft(instance, None).revised(attending_work=[
+        AssignedAttendingWork(
+            attending_id="attending-001", week=1, weekday=Weekday.MONDAY,
+            session=Session.MORNING, work_type=AttendingWorkType.INPATIENT_SERVICE,
+        ),
+    ])
+    instance, schedule = _assign_ada_monday(instance, generated)
+    instance, locked = set_attending_work_locked(
+        instance, schedule, "attending-001", week=1,
+        weekday=Weekday.MONDAY, session=Session.MORNING, locked=True,
+    )
+    solved = locked.revised(meta=locked.meta.revised(
+        status=SolverStatus.FEASIBLE, solver_status=SolverStatus.FEASIBLE,
+    ))
+    assert not validate_schedule(instance, solved).errors
+
+    store = Store(tmp_path / "maximum.sqlite")
+    store.init()
+    workspace = store.create("Maple maximum", instance, schedule=solved)
+    instance, unlocked = set_attending_work_locked(
+        instance, solved, "attending-001", week=1,
+        weekday=Weekday.MONDAY, session=Session.MORNING, locked=False,
+    )
+    assert precepting_over_maximum(instance, unlocked, 1)
+    assert not validate_schedule(instance, unlocked).errors
+    saved = WorkspaceController(store).save_schedule(workspace, unlocked)
+    assert saved.schedule.meta.status is SolverStatus.FEASIBLE
+    assert not saved.schedule.attending_work[0].locked
+
+
+def test_solved_precepting_the_solve_placed_is_still_held_to_the_maximum():
+    from rbs.solver.validation import validate_schedule
+
+    instance = _instance()
+    placed = attending_working_draft(instance, None).revised(attending_work=[
+        AssignedAttendingWork(attending_id="attending-001", week=1, **_precepting(
+            *MONDAY_AM,
+        ).model_dump()),
+    ])
+    solved = placed.revised(meta=placed.meta.revised(
+        status=SolverStatus.FEASIBLE, solver_status=SolverStatus.FEASIBLE,
+    ))
+    assert any(
+        "2 attendings precept, but at most 1 may" in error
+        for error in validate_schedule(instance, solved).errors
+    )

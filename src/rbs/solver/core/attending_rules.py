@@ -11,7 +11,8 @@ Rules, in the language of the Attendings tab:
 - the weekly half-day total is never exceeded, and is met exactly in full
   weeks without vacation;
 - Fixed minimum/maximum ranges hold (minimums only in full weeks);
-- the Attending Clinic day minimum holds in full weeks.
+- the Attending Clinic day minimum holds in full weeks without weekday
+  vacation.
 
 In ``relaxed`` mode every rule a hand-entered week could already break (a
 minimum or an exact total) becomes a counted violation instead of a hard
@@ -122,8 +123,11 @@ def add_attending_week(
                 name=f"{prefix}:{work_type.value}:min",
             )
 
+    # The effective week already zeroes the minimum in partial, inactive, and
+    # weekday-vacation weeks. A weekend vacation keeps it, as the schedule
+    # checks do, even though it relaxes the weekly total.
     needed_days = facts.clinic_day_minimum - len(facts.fixed_clinic_days)
-    if facts.full_week and needed_days > 0:
+    if needed_days > 0:
         day_literals = []
         for weekday in Weekday:
             if weekday in facts.fixed_clinic_days:

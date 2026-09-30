@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from rbs.models.enums import RotationKind
 from rbs.models.instance import SolverProblem
+from rbs.models.schedule import Schedule
 from rbs.solver.clinic_requirements import CODE as UNCOVERABLE_CLINIC_SESSION
 from rbs.solver.clinic_requirements import uncoverable_clinic_sessions
 from rbs.solver.planning import expand_occurrences
@@ -56,12 +57,17 @@ def unallocated_weeks_by_level(instance: SolverProblem) -> dict[int, int]:
     }
 
 
-def check_solve_readiness(instance: SolverProblem) -> ReadinessResult:
+def check_solve_readiness(
+    instance: SolverProblem,
+    *,
+    reference_schedule: Schedule | None = None,
+) -> ReadinessResult:
     """Report configuration gaps and contradictions before starting the engine.
 
     Only levels with residents block a solve. Every check here is a necessary
     condition, so it may miss a difficult shared contradiction but must never
-    reject a model that could be feasible.
+    reject a model that could be feasible. ``reference_schedule`` is the
+    schedule the solve would start from; its locks are solve inputs too.
     """
     staffed = {resident.pgy for resident in instance.residents}
     issues: list[ReadinessIssue] = []
@@ -107,7 +113,7 @@ def check_solve_readiness(instance: SolverProblem) -> ReadinessResult:
 
     issues.extend(_missing_elective_fallbacks(instance, staffed))
     issues.extend(_rotation_rule_conflicts(instance, staffed))
-    issues.extend(_uncoverable_clinic_sessions(instance))
+    issues.extend(_uncoverable_clinic_sessions(instance, reference_schedule))
     return ReadinessResult(
         errors=tuple(issue.message for issue in issues),
         issues=tuple(issues),
@@ -330,16 +336,24 @@ def _rotation_rule_conflicts(
     return issues
 
 
-def _uncoverable_clinic_sessions(instance: SolverProblem) -> list[ReadinessIssue]:
+def _uncoverable_clinic_sessions(
+    instance: SolverProblem,
+    reference_schedule: Schedule | None,
+) -> list[ReadinessIssue]:
     """Flag required clinic sessions no site has seats for, before searching.
 
     The probe mirrors the compiler's session requirements, so a hit proves
     the model infeasible and the solve must not start. Boundary spans are
     over-approximated on purpose: wider start domains can only clear weeks,
-    never invent a contradiction.
+    never invent a contradiction. The reference schedule's locked precepting
+    and clinic sessions are counted the way the solve would count them.
     """
     issues: list[ReadinessIssue] = []
-    for diagnostic in uncoverable_clinic_sessions(instance, allow_boundary_spans=True):
+    for diagnostic in uncoverable_clinic_sessions(
+        instance,
+        allow_boundary_spans=True,
+        reference_schedule=reference_schedule,
+    ):
         issues.append(
             ReadinessIssue(
                 code=UNCOVERABLE_CLINIC_SESSION,

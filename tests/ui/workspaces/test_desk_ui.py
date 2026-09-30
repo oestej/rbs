@@ -1147,6 +1147,40 @@ def test_a_semantic_configuration_conflict_is_labeled_cannot_solve(tmp_path) -> 
     assert "required 4-week block" in _workspace_status(workspace)
 
 
+def test_status_chrome_checks_readiness_once_per_workspace_revision(
+    tmp_path, monkeypatch,
+) -> None:
+    from rbs.solver.readiness import ReadinessResult
+    from rbs.ui import app_status
+
+    session, store = _session(tmp_path)
+    workspace = store.list()[0]
+    checks: list[object] = []
+
+    def check(_problem, *, reference_schedule=None):
+        checks.append(reference_schedule)
+        return ReadinessResult()
+
+    monkeypatch.setattr(app_status, "check_solve_readiness", check)
+
+    first = app_status.session_readiness(session, workspace)
+    assert app_status.session_readiness(session, workspace) is first
+    assert checks == [workspace.latest_schedule]
+
+    rotations = [
+        rotation.model_copy(update={"max_consecutive_weeks": 2})
+        if rotation.id == "icu"
+        else rotation
+        for rotation in workspace.instance.rotations
+    ]
+    edited = WorkspaceController(store).save_instance(
+        workspace,
+        workspace.instance.revised(rotations=rotations),
+    )
+    app_status.session_readiness(session, edited)
+    assert len(checks) == 2
+
+
 def test_a_schedule_left_behind_by_an_edit_reads_as_out_of_date(tmp_path) -> None:
     from rbs.ui.app_status import solve_summary
 

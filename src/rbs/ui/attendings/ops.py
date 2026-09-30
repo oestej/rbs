@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import date, timedelta
 
-from rbs.attending_schedule import effective_attending_schedule_week
+from rbs.attending_schedule import ScheduledWorkByWeek, effective_attending_schedule_week
 from rbs.clinic_locks import attending_work_is_locked, clinic_slot_is_in_automatic_lock_window
 from rbs.models.attending import (
     ATTENDING_WEEKLY_TARGET_WORK_TYPES,
@@ -17,6 +17,7 @@ from rbs.models.attending import (
     AttendingWeeklyWorkSchedule,
     AttendingWorkHalfDay,
     AttendingWorkType,
+    EffectiveAttendingWeek,
 )
 from rbs.models.clinic import clinic_slot_date
 from rbs.models.enums import Session, SolverStatus, Weekday
@@ -448,29 +449,41 @@ def attending_schedule_work_on(
     week: int,
     weekday: Weekday,
     session: Session,
+    effective: EffectiveAttendingWeek | None = None,
+    work_by_week: ScheduledWorkByWeek | None = None,
 ) -> AssignedAttendingWork | None:
     """Resolve visible work together with its persisted lock state.
 
     Hand-entered case work predates schedule lock fields. Materialize its state
-    here; changing its lock moves it into the schedule without changing the
-    placement. Academic Admin Time is program-owned and cannot be unlocked.
+    here; locking it moves it into the schedule, marked hand-entered, without
+    changing the placement. Academic Admin Time is program-owned and cannot be
+    unlocked. A caller rendering a whole week passes its ``effective`` week
+    and ``work_by_week`` grouping so each half-day does not recompute them.
     """
     attending = next((person for person in instance.attendings if person.id == attending_id), None)
     if attending is None:
         raise ValueError("This attending is no longer in the workspace.")
-    effective = effective_attending_schedule_week(instance, attending, week, schedule)
+    if work_by_week is None:
+        work_by_week = instance.scheduled_attending_work(schedule)
+    if effective is None:
+        effective = effective_attending_schedule_week(
+            instance, attending, week, work_by_week=work_by_week,
+        )
     assignment = effective.assignment_on(weekday, session)
     if assignment is None or assignment == effective.automatic_admin_half_day:
         return None
-    if effective.is_scheduled(weekday, session) and schedule is not None:
-        return next(item for item in schedule.attending_work if item.key == (
-            attending_id, week, weekday, session,
-        ))
+    if effective.is_scheduled(weekday, session):
+        return next(
+            item
+            for item in work_by_week.get((attending_id, week), ())
+            if item.weekday is weekday and item.session is session
+        )
     return AssignedAttendingWork(
         attending_id=attending_id,
         week=week,
         **assignment.model_dump(),
         manual_override=True,
+        hand_entered=True,
     )
 
 
@@ -521,6 +534,66 @@ def attending_working_draft(instance: SchedulerInput, schedule: Schedule | None)
     ))
 
 
+def _store_attending_work(
+    instance: SchedulerInput,
+    schedule: Schedule | None,
+    attending_id: str,
+    *,
+    cleared: set[tuple[str, int, Weekday, Session]],
+    placed: list[AssignedAttendingWork],
+    working_draft: bool,
+) -> tuple[SchedulerInput, Schedule | None]:
+    """Clear half-days in both the case and the schedule, then store ``placed``.
+
+    Each item keeps its provenance. Hand-entered work with no lock state to
+    record returns to the attending's week-by-week case schedule; anything
+    locked, explicitly unlocked inside the automatic lock window, or placed
+    by a solve stays in the schedule. ``working_draft`` marks the schedule
+    as changed placements; a lock change alone keeps a solved result.
+    """
+    to_case = [
+        item for item in placed
+        if item.hand_entered and not item.locked and not item.automatic_lock_exempt
+    ]
+    to_schedule = [item for item in placed if item not in to_case]
+    by_week = {weekly.week: weekly for weekly in instance.attending_schedule_weeks(attending_id)}
+    for week in sorted({key[1] for key in cleared} | {item.week for item in to_case}):
+        weekly = by_week.get(week)
+        kept = [
+            half_day for half_day in (weekly.half_days if weekly is not None else [])
+            if (attending_id, week, half_day.weekday, half_day.session) not in cleared
+        ]
+        returned = [
+            AttendingWorkHalfDay(
+                weekday=item.weekday,
+                session=item.session,
+                work_type=item.work_type,
+                clinic_id=item.clinic_id,
+                description=item.description,
+            )
+            for item in to_case
+            if item.week == week
+        ]
+        if weekly is not None:
+            by_week[week] = weekly.revised(half_days=[*kept, *returned])
+        elif returned:
+            by_week[week] = AttendingWeeklyWorkSchedule(week=week, half_days=returned)
+    updated = replace_attending_schedule(
+        instance, attending_id, sorted(by_week.values(), key=lambda weekly: weekly.week),
+    )
+    if schedule is None and not to_schedule:
+        return updated, None
+    base = (
+        attending_working_draft(updated, schedule)
+        if working_draft or schedule is None
+        else schedule
+    )
+    return updated, base.revised(attending_work=[
+        *(item for item in base.attending_work if item.key not in cleared),
+        *to_schedule,
+    ])
+
+
 def _save_attending_work_locks(
     instance: SchedulerInput,
     schedule: Schedule | None,
@@ -543,22 +616,13 @@ def _save_attending_work_locks(
     }
     if not changes:
         return instance, schedule
-    weeks = [
-        weekly.revised(half_days=[
-            half_day for half_day in weekly.half_days
-            if (attending_id, weekly.week, half_day.weekday, half_day.session) not in changes
-        ])
-        for weekly in instance.attending_schedule_weeks(attending_id)
-    ]
-    updated = replace_attending_schedule(instance, attending_id, weeks)
-    # Moving a hand-entered placement into the lockable schedule leaves the
-    # displayed work unchanged. Preserve an existing solved result; the caller
-    # marks an already stale reference as a draft before persisting it.
-    draft = schedule if schedule is not None else attending_working_draft(updated, None)
-    return updated, draft.revised(attending_work=[
-        *(item for item in draft.attending_work if item.key not in changes),
-        *changes.values(),
-    ])
+    # A lock change leaves the displayed work unchanged, so an existing solved
+    # result stays solved; the caller marks an already stale reference as a
+    # draft before persisting it.
+    return _store_attending_work(
+        instance, schedule, attending_id,
+        cleared=set(changes), placed=list(changes.values()), working_draft=False,
+    )
 
 
 def set_attending_work_locked(
@@ -596,13 +660,17 @@ def set_attending_schedule_locked(
     attending = next((person for person in instance.attendings if person.id == attending_id), None)
     if attending is None:
         raise ValueError("This attending is no longer in the workspace.")
+    work_by_week = instance.scheduled_attending_work(schedule)
     items = []
     for week in range(1, instance.calendar.weeks + 1):
-        effective = effective_attending_schedule_week(instance, attending, week, schedule)
+        effective = effective_attending_schedule_week(
+            instance, attending, week, work_by_week=work_by_week,
+        )
         for assignment in effective.assignments:
             item = attending_schedule_work_on(
                 instance, schedule, attending_id, week=week,
                 weekday=assignment.weekday, session=assignment.session,
+                effective=effective, work_by_week=work_by_week,
             )
             if item is not None:
                 items.append(item)
@@ -620,12 +688,27 @@ def _require_unlocked_attending_work(
     weekday: Weekday,
     session: Session,
     today: date | None,
-) -> None:
+) -> AssignedAttendingWork | None:
+    """Return the visible work in a half-day, rejecting it if it is locked."""
     item = attending_schedule_work_on(
         instance, schedule, attending_id, week=week, weekday=weekday, session=session,
     )
     if item is not None and attending_work_is_locked(instance, item, today=today):
         raise ValueError("This work half-day is locked. Unlock it before changing or removing it.")
+    return item
+
+
+def _in_schedule(schedule: Schedule | None, item: AssignedAttendingWork | None) -> bool:
+    """Whether visible work is stored in the schedule rather than the case.
+
+    Identity, not the half-day key: schedule work hidden under hand-entered
+    work shares the key of the case work actually shown there.
+    """
+    return (
+        schedule is not None
+        and item is not None
+        and any(existing is item for existing in schedule.attending_work)
+    )
 
 
 def set_attending_schedule_half_day(
@@ -640,33 +723,35 @@ def set_attending_schedule_half_day(
     today: date | None = None,
 ) -> tuple[SchedulerInput, Schedule | None]:
     """Edit combined case/generated work, rejecting a locked placement."""
-    _require_unlocked_attending_work(
+    previous = _require_unlocked_attending_work(
         instance, schedule, attending_id, week=week, weekday=weekday, session=session, today=today,
     )
-    key = attending_id, week, weekday, session
-    generated = schedule is not None and any(item.key == key for item in schedule.attending_work)
-    # Keep explicit unlocks and manual work in the schedule so a past-date edit
-    # does not immediately acquire the automatic lock again.
-    if generated:
-        _validate_attending_work_slot(instance, attending_id, week, weekday, session)
-        if (assignment is not None
-                and (assignment.weekday, assignment.session) != (weekday, session)):
-            raise ValueError("The assignment must use the selected half-day.")
-        previous = next(item for item in schedule.attending_work if item.key == key)
-        replacement = [] if assignment is None else [AssignedAttendingWork(
-            attending_id=attending_id, week=week, **assignment.model_dump(),
-            locked=False,
-            automatic_lock_exempt=previous.automatic_lock_exempt,
-            manual_override=True,
-        )]
-        draft = attending_working_draft(instance, schedule)
-        return instance, draft.revised(attending_work=[
-            *(item for item in draft.attending_work if item.key != key), *replacement,
-        ])
-    updated = set_attending_work_half_day(
-        instance, attending_id, week=week, weekday=weekday, session=session, assignment=assignment,
+    if schedule is None:
+        return set_attending_work_half_day(
+            instance, attending_id, week=week, weekday=weekday, session=session,
+            assignment=assignment,
+        ), None
+    _validate_attending_work_slot(instance, attending_id, week, weekday, session)
+    if assignment is not None and (assignment.weekday, assignment.session) != (weekday, session):
+        raise ValueError("The assignment must use the selected half-day.")
+    # Edited work keeps its provenance: work a solve placed stays schedule
+    # work, keeping an explicit unlock so a past-date edit does not acquire
+    # the automatic lock again, and anything else is hand-entered.
+    scheduled = _in_schedule(schedule, previous)
+    replacement = [] if assignment is None else [AssignedAttendingWork(
+        attending_id=attending_id, week=week, **assignment.model_dump(),
+        locked=False,
+        automatic_lock_exempt=bool(scheduled and previous.automatic_lock_exempt),
+        manual_override=True,
+        hand_entered=not scheduled or previous.hand_entered,
+    )]
+    # Clearing the half-day in both places also drops schedule work hidden
+    # under the case work being replaced, so it cannot reappear.
+    return _store_attending_work(
+        instance, schedule, attending_id,
+        cleared={(attending_id, week, weekday, session)}, placed=replacement,
+        working_draft=True,
     )
-    return updated, attending_working_draft(updated, schedule) if schedule is not None else None
 
 
 def move_attending_schedule_half_day(
@@ -681,21 +766,22 @@ def move_attending_schedule_half_day(
     target_session: Session,
     today: date | None = None,
 ) -> tuple[SchedulerInput, Schedule | None]:
-    """Move or swap combined work while protecting both source and destination locks."""
+    """Move or swap combined work while protecting both source and destination locks.
+
+    Moved work keeps its provenance: hand-entered work stays a hard input for
+    the next solve, and work a solve placed stays a stability preference.
+    """
+    visible = {}
     for weekday, session in ((source_weekday, source_session), (target_weekday, target_session)):
         _validate_attending_work_slot(instance, attending_id, week, weekday, session)
-        _require_unlocked_attending_work(
+        visible[weekday, session] = _require_unlocked_attending_work(
             instance, schedule, attending_id,
             week=week, weekday=weekday, session=session, today=today,
         )
     if (source_weekday, source_session) == (target_weekday, target_session):
         return instance, schedule
-    source = attending_schedule_work_on(
-        instance, schedule, attending_id, week=week, weekday=source_weekday, session=source_session,
-    )
-    target = attending_schedule_work_on(
-        instance, schedule, attending_id, week=week, weekday=target_weekday, session=target_session,
-    )
+    source = visible[source_weekday, source_session]
+    target = visible[target_weekday, target_session]
     if source is None:
         raise ValueError("The work block being moved no longer exists.")
     if schedule is None:
@@ -712,33 +798,22 @@ def move_attending_schedule_half_day(
             target_weekday=target_weekday, target_session=target_session,
         )
         return updated, attending_working_draft(updated, schedule)
-    weeks = [
-        weekly.revised(half_days=[
-            item for item in weekly.half_days
-            if (attending_id, weekly.week, item.weekday, item.session) not in keys
-        ])
-        for weekly in instance.attending_schedule_weeks(attending_id)
-    ]
-    updated = replace_attending_schedule(instance, attending_id, weeks)
-    replacements = [source.revised(
-        weekday=target_weekday, session=target_session, locked=False,
-        automatic_lock_exempt=clinic_slot_is_in_automatic_lock_window(
-            instance, source.revised(weekday=target_weekday), week, today=today,
-        ),
-        manual_override=True,
-    )]
-    if target is not None:
-        replacements.append(target.revised(
-            weekday=source_weekday, session=source_session, locked=False,
+
+    def moved(item: AssignedAttendingWork, weekday: Weekday, session: Session):
+        return item.revised(
+            weekday=weekday, session=session, locked=False,
             automatic_lock_exempt=clinic_slot_is_in_automatic_lock_window(
-                instance, target.revised(weekday=source_weekday), week, today=today,
+                instance, item.revised(weekday=weekday), week, today=today,
             ),
             manual_override=True,
-        ))
-    draft = attending_working_draft(updated, schedule)
-    return updated, draft.revised(attending_work=[
-        *(item for item in draft.attending_work if item.key not in keys), *replacements,
-    ])
+        )
+
+    placed = [moved(source, target_weekday, target_session)]
+    if target is not None:
+        placed.append(moved(target, source_weekday, source_session))
+    return _store_attending_work(
+        instance, schedule, attending_id, cleared=keys, placed=placed, working_draft=True,
+    )
 
 
 PreceptingHalfDay = tuple[str, Weekday, Session]
@@ -748,6 +823,8 @@ def precepting_over_maximum(
     instance: SchedulerInput,
     schedule: Schedule | None,
     week: int,
+    *,
+    work_by_week: ScheduledWorkByWeek | None = None,
 ) -> dict[PreceptingHalfDay, tuple[int, int]]:
     """Clinic half-days in one week where more attendings precept than allowed.
 
@@ -755,18 +832,13 @@ def precepting_over_maximum(
     work, the schedule's work around it, dates, and vacation. Values are the
     number of attendings precepting and the clinic's maximum for that date.
     """
-    scheduled: dict[str, list[AssignedAttendingWork]] = defaultdict(list)
-    if schedule is not None and schedule.meta.academic_year == instance.academic_year:
-        for item in schedule.attending_work:
-            if item.week == week:
-                scheduled[item.attending_id].append(item)
+    if work_by_week is None:
+        work_by_week = instance.scheduled_attending_work(schedule)
     site_ids = set(instance.clinic_policy.site_ids)
     counts: Counter[PreceptingHalfDay] = Counter()
     for attending in instance.attendings:
-        effective = instance.effective_attending_week(
-            attending,
-            week,
-            scheduled_work=scheduled.get(attending.id, ()),
+        effective = effective_attending_schedule_week(
+            instance, attending, week, work_by_week=work_by_week,
         )
         for assignment in effective.assignments:
             if (
@@ -852,12 +924,13 @@ def precepting_maximum_warning(
     allow = None if site.is_closed(calendar_day) else (
         f"raise {site.name}'s {coverage} for that date with an exception in the Clinic tab"
     )
-    in_schedule = schedule is not None and any(
-        existing.key == item.key for existing in schedule.attending_work
-    )
-    if in_schedule and not attending_work_is_locked(instance, item):
-        # Unlocked schedule work only guides the next solve, which keeps
-        # every clinic within its maximum.
+    if (
+        _in_schedule(schedule, item)
+        and not item.hand_entered
+        and not attending_work_is_locked(instance, item)
+    ):
+        # Unlocked work a solve placed only guides the next solve, which keeps
+        # every clinic within its maximum. Hand-entered work is always kept.
         keep = "Lock this work half-day to keep it through the next solve"
         return f"{message} {keep}, or {allow} to allow it." if allow else f"{message} {keep}."
     return f"{message} To allow it, {allow}." if allow else message

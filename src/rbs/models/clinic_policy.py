@@ -361,14 +361,6 @@ class ClinicPolicy(StrictModel):
     ) -> int:
         return self.site(site_id).max_capacity(weekday, session)
 
-    def max_capacity_on(
-        self,
-        site_id: str,
-        calendar_day: date,
-        session: Session,
-    ) -> int:
-        return self.site(site_id).max_capacity_on(calendar_day, session)
-
     def min_capacity(
         self,
         site_id: str,
@@ -377,14 +369,6 @@ class ClinicPolicy(StrictModel):
     ) -> int:
         half_day = self.site(site_id).half_day(weekday, session)
         return half_day.min_residents if half_day is not None else 0
-
-    def min_capacity_on(
-        self,
-        site_id: str,
-        calendar_day: date,
-        session: Session,
-    ) -> int:
-        return self.site(site_id).min_capacity_on(calendar_day, session)
 
     def available_site_ids(
         self,

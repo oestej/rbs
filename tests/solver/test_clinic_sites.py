@@ -594,8 +594,7 @@ def test_allocator_applies_specific_date_capacity_override() -> None:
 
     assert assignment.clinic_slots[0].site == "cedar"
     assert policy.max_capacity("maple", Weekday.TUESDAY, Session.MORNING) == 4
-    assert policy.max_capacity_on(
-        "maple",
+    assert policy.site("maple").max_capacity_on(
         date(2026, 7, 7),
         Session.MORNING,
     ) == 0

@@ -12,6 +12,7 @@ from rbs.models.attending import (
     AttendingClinicCoverage,
     AttendingSchedule,
     AttendingWeeklyWorkSchedule,
+    AttendingWorkAssignment,
     AttendingWorkHalfDay,
     AttendingWorkType,
     EffectiveAttendingWeek,
@@ -51,6 +52,7 @@ from rbs.models.problem_checks import SolverIntegrityMixin
 from rbs.models.problem_electives import ElectiveQueriesMixin
 from rbs.models.resident import ElectivePreferenceRequest, Resident
 from rbs.models.rotation import DEFAULT_ROTATION_COLOR, Rotation
+from rbs.models.schedule import AssignedAttendingWork, Schedule
 from rbs.models.solver_options import ObjectiveWeights, SolverConfig
 from rbs.models.special import SpecialRotation, SpecialRotationKind
 
@@ -82,6 +84,12 @@ def _migrate_nested_attending_schedules(value: object) -> object:
     protects schedules created before they moved out of attending setup.
     """
     if not isinstance(value, dict) or not isinstance(value.get("attendings"), list):
+        return value
+    # Every revised() call validates again, so leave current shapes untouched.
+    if not any(
+        isinstance(attending, dict) and "weekly_work_schedules" in attending
+        for attending in value["attendings"]
+    ):
         return value
 
     migrated = dict(value)
@@ -368,15 +376,10 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
     ) -> int:
         """Return effective scheduled preceptors for one managed clinic slot."""
         site = self.clinic_policy.site(site_id)
+        if site.staffing_mode is ClinicStaffingMode.CAPACITY_MANAGED:
+            return site.max_attendings_on(calendar_day, session)
         if site.is_closed(calendar_day):
             return 0
-        if site.staffing_mode is ClinicStaffingMode.CAPACITY_MANAGED:
-            override = site.capacity_override(calendar_day, session)
-            if override is not None:
-                return override.attendings
-            weekday = tuple(Weekday)[calendar_day.weekday()]
-            half_day = site.half_day(weekday, session)
-            return half_day.attendings if half_day is not None else 0
         return self._attending_coverage_by_slot.get(
             (site.id, calendar_day, session),
             0,
@@ -600,17 +603,62 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
                         f"{attending.id}: Precepting Clinic work references unknown clinic "
                         f"{assignment.clinic_id!r}"
                     )
-        self.attending_coverage = attending_clinic_coverage(
-            self.effective_attending_weeks(),
-            managed_clinic_ids=self.attending_managed_clinic_ids,
-            closed_dates_by_clinic={
-                site.id: {closure.date for closure in site.closure_days}
-                for site in self.clinic_policy.sites
-                if site.staffing_mode is ClinicStaffingMode.ATTENDING_MANAGED
-            },
+        self.attending_coverage = self.attending_coverage_for(
+            self.effective_attending_weeks()
         )
         self.__dict__.pop("_attending_coverage_by_slot", None)
         return self
+
+    def attending_coverage_for(
+        self,
+        effective_weeks: Iterable[EffectiveAttendingWeek],
+        *,
+        scheduled_only: bool = False,
+        base: Iterable[AttendingClinicCoverage] = (),
+    ) -> list[AttendingClinicCoverage]:
+        """Count effective Precepting Clinic work at attending-managed clinics.
+
+        Closed dates count nobody. ``scheduled_only`` and ``base`` add the
+        work a schedule filled to coverage that was already counted.
+        """
+        managed = self.attending_managed_clinic_ids
+        return attending_clinic_coverage(
+            effective_weeks,
+            managed_clinic_ids=managed,
+            closed_dates_by_clinic={
+                site.id: {closure.date for closure in site.closure_days}
+                for site in self.clinic_policy.sites
+                if site.id in managed
+            },
+            scheduled_only=scheduled_only,
+            base=base,
+        )
+
+    def scheduled_attending_work(
+        self,
+        schedule: Schedule | None,
+    ) -> dict[tuple[str, int], tuple[AssignedAttendingWork, ...]]:
+        """Group a schedule's attending work by attending and academic week.
+
+        Only work this problem can show is kept: a schedule for another
+        academic year, an unknown attending, a week outside the calendar, or
+        an unknown clinic contributes nothing. Callers that look at many
+        weeks group once instead of scanning the schedule for each one.
+        """
+        if schedule is None or schedule.meta.academic_year != self.academic_year:
+            return {}
+        known = {attending.id for attending in self.attendings}
+        site_ids = set(self.clinic_policy.site_ids)
+        grouped: dict[tuple[str, int], list[AssignedAttendingWork]] = {}
+        for item in schedule.attending_work:
+            if (
+                item.attending_id not in known
+                or not 1 <= item.week <= self.calendar.weeks
+                or (item.clinic_id is not None and item.clinic_id not in site_ids)
+            ):
+                continue
+            grouped.setdefault((item.attending_id, item.week), []).append(item)
+        return {key: tuple(items) for key, items in grouped.items()}
 
     @property
     def attending_managed_clinic_ids(self) -> set[str]:
@@ -665,7 +713,7 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
         attending: Attending,
         week: int,
         *,
-        scheduled_work: Iterable[AttendingWorkHalfDay] = (),
+        scheduled_work: Iterable[AttendingWorkAssignment] = (),
     ) -> EffectiveAttendingWeek:
         """Return one authoritative week after dates, vacation, and Academic.
 

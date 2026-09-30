@@ -537,7 +537,7 @@ def test_solve_does_not_start_search_when_configuration_is_provably_blocked(
     # Deliberately omit workspace_host: reaching search would fail this test.
     session = SimpleNamespace(
         solving=False,
-        workspace=lambda: SimpleNamespace(instance=blocked),
+        workspace=lambda: SimpleNamespace(instance=blocked, latest_schedule=None),
     )
     opened: list = []
     notifications: list[str] = []

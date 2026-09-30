@@ -454,6 +454,19 @@ def test_schedule_view_counts_scheduled_precepting_where_it_can_happen() -> None
     assert view.clinic_attending_count_on(CLINIC, first + timedelta(days=2), AM) == 0
     assert schedule_capacity_view(problem, _schedule(problem)) is problem
 
+    # The same count the calendar would show: every effective week, with the
+    # schedule's work filling what hand-entered work leaves open.
+    grouped = problem.scheduled_attending_work(schedule)
+    assert view.attending_coverage == problem.attending_coverage_for(
+        problem.effective_attending_week(
+            attending, week, scheduled_work=grouped.get((attending.id, week), ()),
+        )
+        for attending in problem.attendings
+        for week in range(1, problem.calendar.weeks + 1)
+    )
+    # Views are built on demand, never kept between calls.
+    assert schedule_capacity_view(problem, schedule) is not view
+
 
 # Clinic maximums -----------------------------------------------------------
 
@@ -926,6 +939,28 @@ def _managed_sample(attendings: int) -> SolverProblem:
     return SolverProblem.from_instance(SchedulerInput.model_validate(raw))
 
 
+def test_compile_reuses_the_facts_and_readiness_a_solve_already_built(monkeypatch) -> None:
+    from rbs.solver.core import compile as compile_module
+    from rbs.solver.core.compile import compile_problem
+    from rbs.solver.readiness import check_solve_readiness
+
+    problem = _managed_sample(3)
+    facts = attending_week_facts(problem)
+    readiness = check_solve_readiness(problem)
+
+    def recomputed(*_args, **_kwargs):
+        raise AssertionError("compile recomputed what the solve passed in")
+
+    monkeypatch.setattr(compile_module, "attending_week_facts", recomputed)
+    monkeypatch.setattr(compile_module, "check_solve_readiness", recomputed)
+
+    compiled = compile_problem(
+        problem, sample_instance().solver, cp_model,
+        attending_facts=facts, readiness=readiness,
+    )
+    assert compiled.context.attending_envelope.facts_by_week is facts
+
+
 def test_block_model_grows_with_attending_setups_not_headcount() -> None:
     from rbs.solver.core.compile import compile_problem
 
@@ -965,3 +1000,125 @@ def test_solve_schedules_attendings_who_cover_an_attending_managed_clinic() -> N
                     weeks=slot.week - 1, days=list(Weekday).index(slot.weekday)
                 )
                 assert view.clinic_max_capacity_on("maple", day, slot.session) > 0
+
+
+# Search budgets and rule parity ---------------------------------------------
+
+
+class _ScriptedCpModel:
+    """A stand-in for ``cp_model`` whose solver returns scripted statuses."""
+
+    OPTIMAL, FEASIBLE, INFEASIBLE, MODEL_INVALID, UNKNOWN = range(5)
+
+    def __init__(self, statuses) -> None:
+        self.statuses = list(statuses)
+        self.budgets: list[float] = []
+
+    def CpSolver(self):  # noqa: N802 - mirrors the OR-Tools name
+        scripted = self
+
+        class _Solver:
+            def __init__(self) -> None:
+                self.parameters = type("Parameters", (), {})()
+
+            def Solve(self, _model):  # noqa: N802
+                scripted.budgets.append(self.parameters.max_deterministic_time)
+                return scripted.statuses.pop(0)
+
+            def ObjectiveValue(self):  # noqa: N802
+                return 0
+
+            def Value(self, _variable):  # noqa: N802
+                return 0
+
+        return _Solver()
+
+
+class _Model:
+    def __getattr__(self, _name):
+        return lambda *_args, **_kwargs: None
+
+
+@pytest.mark.parametrize(
+    ("statuses", "found", "budgets"),
+    [
+        # A first search that only ran out of budget is retried with more.
+        (["UNKNOWN", "FEASIBLE"], True, [0.1, 1.0]),
+        (["UNKNOWN", "UNKNOWN", "OPTIMAL"], True, [0.1, 1.0, 10.0]),
+        # Proof that nothing exists ends the search at once.
+        (["INFEASIBLE"], False, [0.1]),
+        (["UNKNOWN", "UNKNOWN", "UNKNOWN"], False, [0.1, 1.0, 10.0]),
+    ],
+)
+def test_tiered_search_does_not_mistake_a_spent_budget_for_infeasibility(
+    statuses, found, budgets,
+) -> None:
+    from rbs.solver.core.lexicographic import solve_in_tiers
+
+    scripted = _ScriptedCpModel([getattr(_ScriptedCpModel, name) for name in statuses])
+    solver = solve_in_tiers(_Model(), [[1]], [], scripted)
+
+    assert (solver is not None) is found
+    assert scripted.budgets == pytest.approx(budgets)
+
+
+def test_a_week_the_search_cannot_finish_is_reported_instead_of_aborting(monkeypatch) -> None:
+    from rbs.solver.core import attending_assignment
+
+    attending = _one_week("attending-001", "Ada Lovelace", weekly_shift_targets=[_target(PC, 0, 4)])
+    problem = _problem([attending])
+    facts = attending_week_facts(problem)[1]
+    need = {(CLINIC, MON, AM): 1}
+    monkeypatch.setattr(attending_assignment, "_build_and_solve", lambda *_a, **_k: None)
+
+    work, violated, short = _solve_week(problem, 1, facts, need, cp_model)
+
+    assert work == [] and violated and short == need
+
+
+def test_attending_clinic_day_minimum_holds_in_a_week_with_only_weekend_vacation() -> None:
+    from rbs.attending_schedule import attending_schedule_report
+
+    first = _first_day()
+    # Ada prefers Inpatient Service everywhere, so only the clinic-day rule
+    # makes the weekly pass place Attending Clinic on three different days.
+    attending = _one_week(
+        "attending-001",
+        "Ada Lovelace",
+        weekly_shift_targets=[_target(AC, 0, 3), _target(IS, 0, 10)],
+        minimum_attending_clinic_days_per_week=3,
+        preferred_weekly_schedule_half_days=[
+            _work(weekday, session, IS) for weekday in WEEKDAYS_MF for session in Session
+        ],
+        vacation_ranges=[AttendingVacation(
+            start_date=first + timedelta(days=5), end_date=first + timedelta(days=5),
+        )],
+    )
+    instance = _configured([attending], managed=False)
+    problem = SolverProblem.from_instance(instance)
+    (facts,) = attending_week_facts(problem)[1]
+    assert not facts.full_week and facts.clinic_day_minimum == 3
+
+    result = schedule_attending_work(problem, _schedule(problem), {1: [facts]}, cp_model)
+
+    clinic_days = {item.weekday for item in result.work if item.work_type is AC}
+    assert len(clinic_days) >= 3
+    assert result.relaxed_weeks == ()
+    report = attending_schedule_report(instance, schedule=_schedule(problem, result.work))
+    assert not [issue for issue in report.errors if issue.code == "attending_clinic_day_minimum"]
+
+
+def test_a_draft_holding_only_locked_attending_work_still_guides_the_solve() -> None:
+    from rbs.solver.core.cp_sat import _compatible_reference
+
+    attending = _one_week("attending-001", "Ada Lovelace")
+    problem = _problem([attending])
+    locked = AssignedAttendingWork(
+        attending_id=attending.id, week=1, weekday=MON, session=AM,
+        work_type=ADMIN, locked=True, manual_override=True, hand_entered=True,
+    )
+    draft = _schedule(problem, work=[locked])
+
+    assert draft.is_empty()
+    assert _compatible_reference(problem, draft) is draft
+    assert _compatible_reference(problem, _schedule(problem)) is None
