@@ -62,8 +62,17 @@ def test_dump_sample(tmp_path: Path) -> None:
     assert main(["dump-sample", "-o", str(output)]) == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert len(payload["residents"]) == 24
-    assert len(payload["attendings"]) == 4
-    assert any(attending["half_days_per_week"] == 0 for attending in payload["attendings"])
+    assert len(payload["attendings"]) == 8
+    assert all(
+        {
+            "work_type": "precepting_clinic",
+            "minimum_shifts_per_week": 3,
+            "maximum_shifts_per_week": 3,
+            "mode": "fixed",
+        }
+        in attending["weekly_shift_targets"]
+        for attending in payload["attendings"]
+    )
     assert any(
         week["half_days_override"] is not None
         for schedule in payload["attending_schedules"]

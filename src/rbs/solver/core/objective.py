@@ -103,9 +103,15 @@ class _ClinicObjectiveState:
     attending_variables: list[Any] = field(default_factory=list)
     attending_upper_bound: int = 0
     attending_by_week: dict = field(default_factory=lambda: defaultdict(list))
+    managed_primary_bound: dict = field(default_factory=lambda: defaultdict(int))
     pgy_mix_variables: list[Any] = field(default_factory=list)
     clinic_kind_week: dict = field(default_factory=lambda: defaultdict(list))
     within_week: list[Any] = field(default_factory=list)
+    pinned_to_managed: dict = field(default_factory=lambda: defaultdict(list))
+    """This week's sessions pinned to an attending-managed clinic, by half-day."""
+    flexible_share: dict = field(default_factory=lambda: defaultdict(list))
+    """This week's flexible sessions weighted by target percent, by half-day and clinic."""
+    resident_managed_shares: dict = field(default_factory=dict)
 
 
 def add_clinic_objective(
@@ -162,7 +168,13 @@ def add_clinic_objective(
         grouped, surviving = _available_week_entries(context, week, entries)
         slot_groups = _materialize_week_entries(context, week, grouped, state)
         _add_occupancy_floor(context.model, surviving, slot_groups[0])
-        _add_half_day_capacity(context, week, slot_groups[4])
+        _add_half_day_capacity(
+            context,
+            week,
+            slot_groups[4],
+            state.pinned_to_managed,
+            state,
+        )
         _add_week_objective_terms(
             context,
             week,
@@ -172,6 +184,7 @@ def add_clinic_objective(
             state,
         )
 
+    _add_scheduled_preceptors(context, state)
     return _finish_clinic_objective(
         context,
         decisions,
@@ -181,6 +194,30 @@ def add_clinic_objective(
         pgys,
         reference_schedule,
     )
+
+
+def _add_scheduled_preceptors(context: PlanningContext, state: _ClinicObjectiveState) -> None:
+    """Count preceptors the solve schedules as attending load.
+
+    At an attending-managed clinic the preceptor count is a decision, not an
+    estimate, so it replaces the estimated primary-site staffing wherever it
+    applies. Only attendings the solve adds are counted; hand-entered and
+    locked precepting is fixed either way.
+    """
+    envelope = getattr(context, "attending_envelope", None)
+    weights = context.options.weights
+    if envelope is None or not envelope.generated:
+        return
+    if not (weights.attending_sessions or weights.primary_site_week_evenness):
+        return
+    primary = context.instance.clinic_policy.primary_site_id
+    for key, variable in envelope.generated.items():
+        clinic_id, week, _weekday, _session = key
+        state.attending_variables.append(variable)
+        state.attending_upper_bound += envelope.generated_upper_bounds[key]
+        if clinic_id == primary:
+            state.attending_by_week[week].append(variable)
+            state.managed_primary_bound[week] += envelope.generated_upper_bounds[key]
 
 
 def _include_honored_occurrences(context, occurrences, viable_locks):
@@ -253,6 +290,7 @@ def _finish_clinic_objective(
     )
     weekly_attending_bound = max(
         policy.attendings_needed(max(capacity_points, 1)) * (len(Weekday) * 2 - 1),
+        *state.managed_primary_bound.values(),
         1,
     )
     primary_evenness = (

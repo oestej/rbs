@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from rbs.models.clinic import clinic_slot_date
+from rbs.models.clinic import ClinicStaffingMode, clinic_slot_date
 from rbs.models.enums import Session, Weekday
-from rbs.models.instance import SchedulerInput
+from rbs.models.instance import SchedulerInput, SolverProblem
 from rbs.models.schedule import Assignment
 from rbs.ui.clinic.projection import ClinicOccupant
 
@@ -16,6 +16,8 @@ def clinic_details(
     week: int,
     weekday: Weekday,
     session: Session,
+    *,
+    capacity_view: SolverProblem | None = None,
 ) -> list[tuple[str, str]]:
     """Describe current input rules, without claiming whole-schedule feasibility."""
     resident = instance.residents_by_id[person.resident_id]
@@ -32,6 +34,16 @@ def clinic_details(
         rows.append(("Placement", "Manual override"))
     if person.admin:
         rows.append(("Clinic attendance", "Reserved for Admin in this half-day"))
+    elif person.site is not None:
+        site = instance.clinic_policy.site(person.site)
+        if site.staffing_mode is ClinicStaffingMode.ATTENDING_MANAGED:
+            capacity = capacity_view or instance
+            preceptors = capacity.clinic_attending_count_on(site.id, day, session)
+            maximum = capacity.clinic_max_capacity_on(site.id, day, session)
+            rows.extend([
+                ("Preceptors", f"{preceptors} scheduled at {site.name}"),
+                ("Clinic capacity", f"{maximum} capacity points"),
+            ])
 
     reasons = []
     if week in resident.vacation_weeks:

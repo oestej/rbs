@@ -13,9 +13,11 @@ from rbs.models.attending import (
     AttendingWorkType,
 )
 from rbs.models.enums import Session, Weekday
+from rbs.models.instance import AcademicHalfDayOverride
 from rbs.ui.attendings.tab import (
     NEW_ATTENDING_ID,
     _attending_form,
+    _attending_schedule_calendar,
     _attending_view,
     _confirm_remove_attending,
     render_attendings_tab,
@@ -34,11 +36,14 @@ def _created_elements(before: set[int]) -> list:
 
 
 def _click(button) -> None:
-    next(
+    from nicegui.events import handle_event
+
+    listener = next(
         listener
         for listener in button._event_listeners.values()
         if listener.type == "click"
-    ).handler(None)
+    )
+    handle_event(listener.handler, None)
 
 
 def _element_texts(element) -> list[str]:
@@ -148,7 +153,6 @@ def test_new_attending_form_is_limited_to_basic_schedule_details() -> None:
     )
 
     created = _created_elements(before)
-    labels = {getattr(element, "_text", None) for element in created}
     inputs = {
         element._props.get("label"): element
         for element in created
@@ -164,11 +168,6 @@ def test_new_attending_form_is_limited_to_basic_schedule_details() -> None:
         for element in created
         if element.__class__.__name__ == "Number"
     }
-    assert (
-        "After adding this attending, use their editor to configure category targets, "
-        "a preferred weekly schedule, weekly work, a reusable template, and vacation."
-        in labels
-    )
     assert {"Full name", "Schedule start date", "Schedule end date"} <= set(inputs)
     assert "Work date" not in inputs
     assert "Vacation start date" not in inputs
@@ -205,7 +204,7 @@ def test_new_attending_form_is_limited_to_basic_schedule_details() -> None:
     assert added.vacation_ranges == []
 
 
-def test_attending_form_overrides_a_zero_baseline_with_the_assigned_count() -> None:
+def test_attending_calendar_overrides_a_zero_baseline_with_the_assigned_count() -> None:
     from nicegui import ui
 
     attending = Attending(
@@ -216,31 +215,24 @@ def test_attending_form_overrides_a_zero_baseline_with_the_assigned_count() -> N
     instance = blank_instance().revised(attendings=[attending])
     saved: list[tuple] = []
     before = set(ui.context.client.elements)
-    _attending_form(
+    _attending_schedule_calendar(
         instance,
-        attending=attending,
-        on_cancel=lambda: None,
+        attending,
+        editing=True,
         on_save=lambda *args: saved.append(args),
     )
 
     created = _created_elements(before)
-    buttons = {
-        element._props.get("label"): element
-        for element in created
-        if element.__class__.__name__ == "Button"
-        and element._props.get("label") is not None
-    }
     weekly_cell = next(
         element
         for element in created
         if element._props.get("aria-label")
         == "Assign Monday Morning (AM) in week 1"
     )
-    assigned_badge = next(
-        element
-        for element in created
-        if element.__class__.__name__ == "Badge"
+    assert any(
+        element.__class__.__name__ == "Badge"
         and getattr(element, "_text", None) == "1 of 0 half-days assigned"
+        for element in created
     )
 
     before_dialog = set(ui.context.client.elements)
@@ -268,8 +260,18 @@ def test_attending_form_overrides_a_zero_baseline_with_the_assigned_count() -> N
     description.value = "Credentialing committee"
     _click(assign)
 
-    assert assigned_badge._text == "2 of 0 half-days assigned"
-    _click(buttons["Override"])
+    assert len(saved) == 1
+    assert any(
+        element.__class__.__name__ == "Badge"
+        and getattr(element, "_text", None) == "2 of 0 half-days assigned"
+        for element in _created_elements(before)
+    )
+    override = next(
+        element
+        for element in _created_elements(before)
+        if element._props.get("aria-label") == "Override half-day total for week 1"
+    )
+    _click(override)
     assert any(
         element.__class__.__name__ == "Badge"
         and getattr(element, "_text", None) == "2 of 2 half-days assigned"
@@ -280,10 +282,8 @@ def test_attending_form_overrides_a_zero_baseline_with_the_assigned_count() -> N
         and getattr(element, "_text", None) == "Week override"
         for element in _created_elements(before)
     )
-    _click(buttons["Save changes"])
-
-    assert len(saved) == 1
-    saved_instance = saved[0][0]
+    assert len(saved) == 2
+    saved_instance = saved[-1][0]
     attending = saved_instance.attendings[0]
     assert attending.half_days_per_week == 0
     accepted_schedule = saved_instance.attending_schedule_for(attending.id)
@@ -376,7 +376,7 @@ def test_attending_form_saves_custom_dates_and_arbitrary_vacation_days() -> None
     ]
 
 
-def test_vacation_removes_and_restores_automatic_academic_admin_in_editor() -> None:
+def test_attending_form_restores_academic_admin_after_saving_removed_vacation() -> None:
     from nicegui import ui
 
     instance = blank_instance()
@@ -389,23 +389,20 @@ def test_vacation_removes_and_restores_automatic_academic_admin_in_editor() -> N
         ],
     )
     instance = instance.revised(attendings=[attending])
+    assert instance.effective_attending_week(attending, 1).automatic_admin_half_day is None
+    saved: list[tuple] = []
     before = set(ui.context.client.elements)
     _attending_form(
         instance,
         attending=attending,
         on_cancel=lambda: None,
-        on_save=lambda _instance, _attending_id: None,
+        on_save=lambda *args: saved.append(args),
     )
 
     created = _created_elements(before)
     assert "Admin Time · Academic half-day" not in {
         getattr(element, "_text", None) for element in created
     }
-    assert any(
-        element.__class__.__name__ == "Badge"
-        and getattr(element, "_text", None) == "0 of 10 half-days assigned"
-        for element in created
-    )
     remove_vacation = next(
         element
         for element in created
@@ -415,7 +412,20 @@ def test_vacation_removes_and_restores_automatic_academic_admin_in_editor() -> N
     )
     _click(remove_vacation)
 
-    updated = _created_elements(before)
+    save = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Save changes"
+    )
+    _click(save)
+    assert len(saved) == 1
+    updated_instance = saved[0][0]
+    saved_attending = updated_instance.attendings[0]
+    assert saved_attending.vacation_ranges == []
+    before_calendar = set(ui.context.client.elements)
+    _attending_schedule_calendar(updated_instance, saved_attending)
+    updated = _created_elements(before_calendar)
     assert "Admin Time · Academic half-day" in {
         getattr(element, "_text", None) for element in updated
     }
@@ -513,40 +523,27 @@ def test_attending_form_saves_fixed_and_flexible_target_ranges() -> None:
     ]
 
 
-def test_attending_form_assigns_typed_work_to_one_academic_week() -> None:
+def test_attending_calendar_assigns_typed_work_to_one_academic_week() -> None:
     from nicegui import ui
 
     attending = Attending(id="attending-001", name="Ada Lovelace")
     instance = blank_instance().revised(attendings=[attending])
     saved: list[tuple] = []
     before = set(ui.context.client.elements)
-    _attending_form(
+    _attending_schedule_calendar(
         instance,
-        attending=attending,
-        on_cancel=lambda: None,
+        attending,
+        editing=True,
         on_save=lambda *args: saved.append(args),
     )
 
     created = _created_elements(before)
-    name = next(
-        element
-        for element in created
-        if element.__class__.__name__ == "Input"
-        and element._props.get("label") == "Full name"
-    )
     weekly_cell = next(
         element
         for element in created
         if element._props.get("aria-label")
         == "Assign Monday Morning (AM) in week 1"
     )
-    add = next(
-        element
-        for element in created
-        if element.__class__.__name__ == "Button"
-        and element._props.get("label") == "Save changes"
-    )
-    name.value = "Ada Lovelace"
 
     before_dialog = set(ui.context.client.elements)
     _click(weekly_cell)
@@ -565,8 +562,6 @@ def test_attending_form_assigns_typed_work_to_one_academic_week() -> None:
     )
     weekly_work_type.value = AttendingWorkType.PRECEPTING_CLINIC.value
     _click(assign)
-
-    _click(add)
 
     assert len(saved) == 1
     saved_instance = saved[0][0]
@@ -640,11 +635,31 @@ def test_attending_form_saves_a_soft_preferred_weekly_schedule() -> None:
     ]
 
 
-def test_schedule_template_applies_independent_copies_to_a_week_range() -> None:
+def test_attending_form_preserves_saved_work_and_templates_when_updating_details() -> None:
     from nicegui import ui
 
-    attending = Attending(id="attending-001", name="Ada Lovelace")
-    instance = blank_instance().revised(attendings=[attending])
+    template = AttendingWorkHalfDay(
+        weekday=Weekday.FRIDAY,
+        session=Session.AFTERNOON,
+        description="Faculty meeting",
+    )
+    attending = Attending(
+        id="attending-001", name="Ada Lovelace", half_days_per_week=1,
+        schedule_template_half_days=[template],
+    )
+    instance = blank_instance().revised(
+        attendings=[attending],
+        attending_schedules=[AttendingSchedule(
+            attending_id=attending.id,
+            weeks=[AttendingWeeklyWorkSchedule(
+                week=2, half_days_override=2,
+                half_days=[AttendingWorkHalfDay(
+                    weekday=Weekday.MONDAY, session=Session.MORNING,
+                    work_type=AttendingWorkType.ADMIN_TIME,
+                )],
+            )],
+        )],
+    )
     saved: list[tuple] = []
     before = set(ui.context.client.elements)
     _attending_form(
@@ -661,62 +676,23 @@ def test_schedule_template_applies_independent_copies_to_a_week_range() -> None:
         if element.__class__.__name__ == "Input"
         and element._props.get("label") == "Full name"
     )
-    template_cell = next(
+    save = next(
         element
-        for element in created
-        if element._props.get("aria-label")
-        == "Assign Monday Morning (AM) in schedule template"
-    )
-    week_selects = {
-        element._props.get("label"): element
-        for element in created
-        if element.__class__.__name__ == "Select"
-        and element._props.get("label") in {"First week", "Last week"}
-    }
-    buttons = {
-        element._props.get("label"): element
         for element in created
         if element.__class__.__name__ == "Button"
-        and element._props.get("label") is not None
-    }
-    name.value = "Ada Lovelace"
-
-    before_dialog = set(ui.context.client.elements)
-    _click(template_cell)
-    dialog_elements = _created_elements(before_dialog)
-    template_work_type = next(
-        element
-        for element in dialog_elements
-        if element.__class__.__name__ == "Select"
-        and element._props.get("label") == "Work type"
+        and element._props.get("label") == "Save changes"
     )
-    assign = next(
-        element
-        for element in dialog_elements
-        if element.__class__.__name__ == "Button"
-        and element._props.get("label") == "Assign half-day"
-    )
-    template_work_type.value = AttendingWorkType.ADMIN_TIME.value
-    _click(assign)
-    week_selects["First week"].value = 2
-    week_selects["Last week"].value = 3
+    name.value = "Ada Byron"
+    _click(save)
 
-    _click(buttons["Apply template to range"])
-    _click(buttons["Save changes"])
-
+    assert len(saved) == 1
     saved_instance = saved[0][0]
-    attending = saved_instance.attendings[0]
-    assert len(attending.schedule_template_half_days) == 1
-    accepted_schedule = saved_instance.attending_schedule_for(attending.id)
-    assert accepted_schedule is not None
-    assert [week.week for week in accepted_schedule.weeks] == [2, 3]
-    assert all(
-        week.half_days == attending.schedule_template_half_days
-        for week in accepted_schedule.weeks
-    )
+    assert saved_instance.attendings[0].name == "Ada Byron"
+    assert saved_instance.attendings[0].schedule_template_half_days == [template]
+    assert saved_instance.attending_schedules == instance.attending_schedules
 
 
-def test_attending_work_boards_reuse_clickable_draggable_resident_grid() -> None:
+def test_attending_setup_keeps_preferences_and_leaves_weekly_edits_in_the_calendar() -> None:
     from nicegui import ui
 
     weekly = AttendingWorkHalfDay(
@@ -779,37 +755,24 @@ def test_attending_work_boards_reuse_clickable_draggable_resident_grid() -> None
         if element.__class__.__name__ == "Tab"
     }
 
-    assert len(cells) == 42
+    assert len(cells) == 14
     assert tabs == {
         "Details",
-        "Schedule",
         "Targets",
         "Preferences",
-        "Template",
         "Vacation",
     }
     assert any(element.__class__.__name__ == "TabPanels" for element in created)
     assert {event._props.get("data-scope") for event in events} == {
-        "attending-week-1",
         "attending-preference",
-        "attending-template",
     }
-    assert [event._props.get("draggable") for event in events].count("false") == 1
-    assert [event._props.get("draggable") for event in events].count("true") == 3
-    assert "Special/Other · Faculty meeting" in [
-        getattr(element, "_text", None) for element in created
-    ]
-    assert "Admin Time · Academic half-day" in [
-        getattr(element, "_text", None) for element in created
-    ]
+    assert [event._props.get("draggable") for event in events] == ["true"]
     assert {
         element._props.get("aria-label")
         for element in cells
         if element._props.get("aria-label")
     } >= {
-        "Assign Tuesday Morning (AM) in week 1",
         "Assign Monday Morning (AM) in preferred weekly schedule",
-        "Assign Monday Morning (AM) in schedule template",
     }
 
 
@@ -915,6 +878,240 @@ def test_attending_view_shows_configured_category_targets_and_modes() -> None:
     assert "1 of 10 preferred half-days" in labels
     assert "Thursday · Morning (AM)" in labels
     assert "Attending Clinic" in labels
+
+
+def test_attending_view_shows_the_full_effective_schedule_and_keeps_editing_separate() -> None:
+    from nicegui import ui
+
+    instance = blank_instance()
+    first_day = instance.calendar.first_week_start
+    attending = Attending(
+        id="attending-001",
+        name="Ada Lovelace",
+        schedule_start_date=first_day + timedelta(days=1),
+        schedule_end_date=first_day + timedelta(days=20),
+        vacation_ranges=[
+            AttendingVacation(
+                start_date=first_day + timedelta(days=3),
+                end_date=first_day + timedelta(days=3),
+            ),
+            AttendingVacation(
+                start_date=first_day + timedelta(days=7),
+                end_date=first_day + timedelta(days=13),
+            ),
+        ],
+    )
+    other_attending = Attending(id="attending-002", name="Grace Hopper")
+    instance = instance.revised(
+        attendings=[attending, other_attending],
+        attending_schedules=[
+            AttendingSchedule(
+                attending_id=attending.id,
+                weeks=[
+                    AttendingWeeklyWorkSchedule(
+                        week=1,
+                        half_days_override=6,
+                        half_days=[
+                            AttendingWorkHalfDay(
+                                weekday=Weekday.MONDAY,
+                                session=Session.MORNING,
+                                description="Before schedule dates",
+                            ),
+                            AttendingWorkHalfDay(
+                                weekday=Weekday.TUESDAY,
+                                session=Session.MORNING,
+                                work_type=AttendingWorkType.PRECEPTING_CLINIC,
+                                clinic_id=instance.clinic_policy.sites[0].id,
+                            ),
+                            AttendingWorkHalfDay(
+                                weekday=Weekday.WEDNESDAY,
+                                session=Session.MORNING,
+                                work_type=AttendingWorkType.ATTENDING_CLINIC,
+                            ),
+                            AttendingWorkHalfDay(
+                                weekday=Weekday.WEDNESDAY,
+                                session=Session.AFTERNOON,
+                                description="Replaced by academic Admin Time",
+                            ),
+                            AttendingWorkHalfDay(
+                                weekday=Weekday.THURSDAY,
+                                session=Session.MORNING,
+                                description="Work during vacation",
+                            ),
+                            AttendingWorkHalfDay(
+                                weekday=Weekday.FRIDAY,
+                                session=Session.AFTERNOON,
+                                description="Faculty meeting & planning",
+                            ),
+                            AttendingWorkHalfDay(
+                                weekday=Weekday.SATURDAY,
+                                session=Session.MORNING,
+                                work_type=AttendingWorkType.INPATIENT_SERVICE,
+                            ),
+                            AttendingWorkHalfDay(
+                                weekday=Weekday.SUNDAY,
+                                session=Session.AFTERNOON,
+                                work_type=AttendingWorkType.ADMIN_TIME,
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            AttendingSchedule(
+                attending_id=other_attending.id,
+                weeks=[
+                    AttendingWeeklyWorkSchedule(
+                        week=1,
+                        half_days=[
+                            AttendingWorkHalfDay(
+                                weekday=Weekday.MONDAY,
+                                session=Session.MORNING,
+                                description="Other attending work",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+        academic_half_day_overrides=[
+            AcademicHalfDayOverride(
+                week=3,
+                weekday=Weekday.FRIDAY,
+                session=Session.MORNING,
+            ),
+        ],
+    )
+    snapshot = instance.model_dump(mode="json")
+    saved: list[tuple] = []
+    before = set(ui.context.client.elements)
+
+    render_attendings_tab(
+        instance,
+        selected_attending_id=attending.id,
+        on_select=lambda _attending_id: None,
+        on_save=lambda *args: saved.append(args),
+    )
+
+    created = _created_elements(before)
+    weeks = [element for element in created if "rbs-resident-clinic-week" in element._classes]
+    assert len(weeks) == instance.calendar.weeks
+    assert _element_texts(weeks[0])[0] == "Week 1"
+    assert f"{first_day:%b} {first_day.day}" in _element_texts(weeks[0])[1]
+    assert "Week 52" in _element_texts(weeks[-1])
+    first_week = _element_texts(weeks[0])
+    assert "6 of 6 half-days assigned" in first_week
+    assert "Week override" in first_week
+    assert {
+        f"Precepting Clinic · {instance.clinic_policy.sites[0].name}",
+        "Attending Clinic",
+        "Inpatient Service",
+        "Admin Time",
+        "Admin Time · Academic half-day",
+        "Special/Other · Faculty meeting & planning",
+        "Vacation",
+        "Outside schedule dates",
+        "sat",
+        "sun",
+    } <= set(first_week)
+    assert not any(
+        text in " ".join(first_week)
+        for text in (
+            "Before schedule dates",
+            "Replaced by academic Admin Time",
+            "Work during vacation",
+            "Other attending work",
+        )
+    )
+    assert _element_texts(weeks[1]).count("Vacation") == 14
+    assert "Admin Time · Academic half-day" not in _element_texts(weeks[1])
+    third_week = _element_texts(weeks[2])
+    assert "1 of 10 half-days assigned" in third_week
+    moved_admin_cell = next(
+        element
+        for element in created
+        if element._props.get("aria-label", "").startswith(
+            f"{first_day + timedelta(days=18):%A, %B %d, %Y}"
+        )
+        and "Morning (AM)" in element._props["aria-label"]
+    )
+    assert "Admin Time · Academic half-day" in _element_texts(moved_admin_cell)
+    assert "Outside schedule dates" in _element_texts(weeks[-1])
+    cells = [
+        element for element in created if "rbs-resident-clinic-session-cell" in element._classes
+    ]
+    events = [element for element in created if "rbs-resident-clinic-event" in element._classes]
+    assert len(cells) == instance.calendar.weeks * 14
+    assert all(element._props.get("draggable") == "false" for element in events)
+    assert all(not element._event_listeners for element in cells + events)
+    assert instance.model_dump(mode="json") == snapshot
+    assert not saved
+
+    edit = next(
+        element
+        for element in created
+        if element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Edit attending"
+    )
+    _click(edit)
+
+    assert all(week._deleted for week in weeks)
+    edited = _created_elements(before)
+    assert {
+        element._props.get("label")
+        for element in edited
+        if element.__class__.__name__ == "Tab"
+    } == {"Details", "Targets", "Preferences", "Vacation"}
+    assert any(
+        element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Save changes"
+        for element in edited
+    )
+    assert not saved
+
+
+def test_attending_view_keeps_unconfigured_weeks_blank_when_automatic_admin_is_disabled() -> None:
+    from nicegui import ui
+
+    attending = Attending(
+        id="attending-001",
+        name="Ada Lovelace",
+        preferred_weekly_schedule_half_days=[
+            AttendingWorkHalfDay(
+                weekday=Weekday.MONDAY,
+                session=Session.MORNING,
+                work_type=AttendingWorkType.ATTENDING_CLINIC,
+            ),
+        ],
+        schedule_template_half_days=[
+            AttendingWorkHalfDay(
+                weekday=Weekday.TUESDAY,
+                session=Session.AFTERNOON,
+                description="Template work",
+            ),
+        ],
+    )
+    instance = blank_instance().revised(attendings=[attending])
+    instance = instance.revised(
+        clinic_policy=instance.clinic_policy.revised(
+            academic_half_day_is_attending_admin_time=False,
+        ),
+    )
+    before = set(ui.context.client.elements)
+
+    _attending_view(
+        instance,
+        attending,
+        on_edit=lambda: None,
+        on_save=lambda _instance, _attending_id: None,
+    )
+
+    created = _created_elements(before)
+    cells = [
+        element for element in created if "rbs-resident-clinic-session-cell" in element._classes
+    ]
+    assert len(cells) == instance.calendar.weeks * 14
+    assert all(element._props["aria-label"].endswith("No scheduled work") for element in cells)
+    assert not any("rbs-resident-clinic-event" in element._classes for element in created)
 
 
 def test_zero_baseline_attending_shows_its_weekly_override() -> None:

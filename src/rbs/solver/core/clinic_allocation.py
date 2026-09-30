@@ -164,6 +164,19 @@ def assign_clinic_sites(
             target_by_clinic[clinic_id] += count
 
     filled: dict[tuple[str, int, object, object], int] = defaultdict(int)
+    # Allocation asks the same seat question millions of times on a large
+    # year; the answer never changes within one allocation.
+    seats: dict[tuple[str, date, object], int] = {}
+
+    def under_capacity(clinic_id: str, candidate: _Candidate) -> bool:
+        key = (clinic_id, candidate.calendar_day, candidate.slot.session)
+        maximum = seats.get(key)
+        if maximum is None:
+            maximum = instance.clinic_max_capacity_on(*key)
+            seats[key] = maximum
+        week, weekday, session = candidate.key
+        return filled[clinic_id, week, weekday, session] + candidate.capacity_points <= maximum
+
     assigned_by_resident: dict[tuple[str, str], int] = defaultdict(int)
     assigned_by_resident_day: dict[tuple[str, int, object, str], int] = defaultdict(int)
     assigned_by_resident_week: dict[tuple[str, int, str], int] = defaultdict(int)
@@ -206,17 +219,15 @@ def assign_clinic_sites(
     # with more primary-clinic demand smooths attending needs.
     for rule in ordered_rules:
         clinic_id = rule.clinic_id
-        while True:
-            eligible = [
-                candidate
-                for candidate in unassigned
-                if clinic_id in candidate.clinic_ids
-                and _under_capacity(instance, clinic_id, candidate, filled)
-                and assigned_by_resident[candidate.resident_id, clinic_id]
-                < targets.get((candidate.resident_id, clinic_id), 0)
-            ]
-            if not eligible:
-                break
+        eligible = [
+            candidate
+            for candidate in unassigned
+            if clinic_id in candidate.clinic_ids
+            and under_capacity(clinic_id, candidate)
+            and assigned_by_resident[candidate.resident_id, clinic_id]
+            < targets.get((candidate.resident_id, clinic_id), 0)
+        ]
+        while eligible:
             best = min(
                 eligible,
                 key=lambda candidate: _target_assignment_key(
@@ -242,7 +253,19 @@ def assign_clinic_sites(
                 assigned_by_clinic,
                 weekly_by_clinic,
             )
-            unassigned.remove(best)
+            _remove_identical(unassigned, best)
+            # Seats only fill and a resident's count only grows while this
+            # clinic's targets are met, so a candidate that drops out never
+            # returns. Filtering the survivors keeps the original order and
+            # therefore the original tie-breaks.
+            eligible = [
+                candidate
+                for candidate in eligible
+                if candidate is not best
+                and under_capacity(clinic_id, candidate)
+                and assigned_by_resident[candidate.resident_id, clinic_id]
+                < targets.get((candidate.resident_id, clinic_id), 0)
+            ]
 
     # Fill every remaining session with the clinic that is furthest below its
     # target, then by the lightest relative half-day load.
@@ -258,7 +281,7 @@ def assign_clinic_sites(
         available = [
             clinic_id
             for clinic_id in candidate.clinic_ids
-            if _under_capacity(instance, clinic_id, candidate, filled)
+            if under_capacity(clinic_id, candidate)
             and _under_allocation_max(
                 policy,
                 candidate.resident_id,
@@ -272,7 +295,7 @@ def assign_clinic_sites(
             available = [
                 clinic_id
                 for clinic_id in candidate.clinic_ids
-                if _under_capacity(instance, clinic_id, candidate, filled)
+                if under_capacity(clinic_id, candidate)
             ]
         if not available:
             # Preserve the required clinic session and make any true staffing
@@ -424,17 +447,13 @@ def _assign(
     weekly_by_clinic[clinic_id, week] += 1
 
 
-def _under_capacity(
-    instance: SolverProblem,
-    clinic_id: str,
-    candidate: _Candidate,
-    filled: dict[tuple[str, int, object, object], int],
-) -> bool:
-    week, weekday, session = candidate.key
-    used = filled[clinic_id, week, weekday, session]
-    return used + candidate.capacity_points <= instance.clinic_max_capacity_on(
-        clinic_id, candidate.calendar_day, session
-    )
+def _remove_identical(candidates: list[_Candidate], target: _Candidate) -> None:
+    """Remove ``target`` itself, not the first equal-looking candidate."""
+    for index, candidate in enumerate(candidates):
+        if candidate is target:
+            del candidates[index]
+            return
+    raise ValueError("candidate is not unassigned")
 
 
 def _under_allocation_max(

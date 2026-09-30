@@ -15,6 +15,7 @@ from rbs.models.schedule import Schedule
 from rbs.models.workspace import Workspace, WorkspaceConflictError
 from rbs.product import ProductConfig
 from rbs.repository import WorkspaceRepository
+from rbs.ui.clinic.projection import ClinicScheduleView
 from rbs.ui.host import LocalHost, Principal, WorkspaceHost
 from rbs.ui.locks import refresh_locks_through_today
 from rbs.workspaces import InstanceEditImpact, WorkspaceController
@@ -82,10 +83,12 @@ class WorkspaceSession:
     workspace_id: int | None = None
     resident_id: str | None = None
     attending_id: str | None = None
+    attending_schedule_editing: bool = False
     rotation_id: str | None = None
     show_past_block_weeks: bool = False
     show_past_clinic_weeks: bool = False
     clinic_site: str = "all"
+    clinic_schedule_view: ClinicScheduleView = "residents"
     clinic_section: str = "clinic_sites"
     rotation_section: str = "rotation_summary"
     settings_section: str = "settings_general"
@@ -180,10 +183,12 @@ class WorkspaceSession:
         self._select_resident_in_directory = None
         self.resident_id = None
         self.attending_id = None
+        self.attending_schedule_editing = False
         self.rotation_id = None
         self.show_past_block_weeks = False
         self.show_past_clinic_weeks = False
         self.clinic_site = "all"
+        self.clinic_schedule_view = "residents"
         self.clinic_section = "clinic_sites"
         self.rotation_section = "rotation_summary"
         self.settings_section = "settings_general"
@@ -202,12 +207,16 @@ class WorkspaceSession:
         impact: InstanceEditImpact = InstanceEditImpact.SOLVER_INPUT,
         draft_schedule: Schedule | None = None,
         region: str | None = None,
+        refresh: bool = True,
     ) -> Workspace:
         """Save an instance edit and redraw what it can have changed.
 
         ``region`` names a registered sub-panel that already covers the edit, so
         the rest of its tab is left standing. Pass it only when nothing outside
         that region can render the fields being edited.
+
+        With ``refresh=False``, the caller updates the affected UI itself after
+        this returns. Other panels and status chrome still reflect the edit.
         """
         self._require_active_snapshot(workspace)
         try:
@@ -227,8 +236,9 @@ class WorkspaceSession:
         with self.render_snapshot(saved):
             self.touch()
             self.mark_stale()
-            if region is None or not self.refresh_region(region):
-                self.refresh_visible()
+            if refresh:
+                if region is None or not self.refresh_region(region):
+                    self.refresh_visible()
         return saved
 
     def persist_schedule(

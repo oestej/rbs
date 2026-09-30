@@ -910,17 +910,23 @@ def test_academic_admin_time_respects_schedule_dates_and_vacation() -> None:
     )
 
 
-def test_attendings_round_trip_through_workspace_case_but_not_solver_problem() -> None:
+def test_attendings_round_trip_through_workspace_case_and_solver_problem() -> None:
     instance = sample_instance()
 
     case = instance.scheduling_case()
     restored = instance.constraint_catalog().apply(case)
-    solver_problem = SolverProblem.from_instance(instance)
+    projected = SolverProblem.from_instance(instance).model_dump(mode="json")
 
     assert case.attendings == instance.attendings
     assert restored.attendings == instance.attendings
-    assert "attendings" not in solver_problem.model_dump(mode="json")
-    assert "attendings" not in SolverProblem.model_json_schema()["properties"]
+    # The solve schedules attendings, so their rules cross the solver
+    # boundary; the reusable template only copies work when applied.
+    assert [item["id"] for item in projected["attendings"]] == [
+        attending.id for attending in instance.attendings
+    ]
+    assert all("schedule_template_half_days" not in item for item in projected["attendings"])
+    assert "attendings" in SolverProblem.model_json_schema()["properties"]
+    assert "attending_coverage" not in SolverProblem.model_json_schema()["properties"]
     assert "attending_coverage" not in SchedulerInput.model_json_schema()["properties"]
 
 
@@ -1058,18 +1064,25 @@ def test_attending_managed_capacity_uses_effective_precepting_assignments() -> N
         Session.MORNING,
     ) == 0
 
+    # The weekly grid and dated overrides cap how many attendings may precept.
     projected = SolverProblem.from_instance(configured)
-    assert configured.clinic_policy.site(clinic_id).half_days
-    assert projected.clinic_policy.site(clinic_id).half_days == []
-    assert projected.clinic_policy.site(clinic_id).capacity_overrides == []
+    assert projected.clinic_policy.site(clinic_id).half_days == (
+        configured.clinic_policy.site(clinic_id).half_days
+    )
+    assert projected.clinic_policy.site(clinic_id).capacity_overrides == (
+        configured.clinic_policy.site(clinic_id).capacity_overrides
+    )
     assert all(coverage.date != closed_day for coverage in projected.attending_coverage)
     assert projected.clinic_max_capacity_on(
         clinic_id,
         first_day,
         Session.MORNING,
     ) == 8
+    # Coverage is derived on both sides of the solver boundary; the attending
+    # records it comes from cross the boundary instead.
     assert "attending_coverage" not in configured.model_dump(mode="json")
-    assert "attending_coverage" in projected.model_dump(mode="json")
+    assert "attending_coverage" not in projected.model_dump(mode="json")
+    assert projected.model_dump(mode="json")["attending_schedules"]
 
 
 def test_academic_admin_time_removes_precepting_coverage_until_disabled() -> None:
@@ -1132,13 +1145,17 @@ def test_academic_admin_time_removes_precepting_coverage_until_disabled() -> Non
         instance_edit_impact(automatic_admin, disabled)
         is InstanceEditImpact.SOLVER_INPUT
     )
+    # The solve schedules attendings, so the rule crosses the solver boundary.
     projected = SolverProblem.from_instance(disabled)
-    assert "academic_half_day_is_attending_admin_time" not in projected.model_dump(
-        mode="json"
-    )["clinic_policy"]
+    assert (
+        projected.model_dump(mode="json")["clinic_policy"][
+            "academic_half_day_is_attending_admin_time"
+        ]
+        is False
+    )
     assert (
         "academic_half_day_is_attending_admin_time"
-        not in SolverProblem.model_json_schema()["$defs"]["SolverClinicPolicy"][
+        in SolverProblem.model_json_schema()["$defs"]["SolverClinicPolicy"][
             "properties"
         ]
     )
@@ -1461,16 +1478,13 @@ def test_attending_work_half_days_move_to_open_slots_and_swap_occupied_slots() -
         )
 
 
-def test_nonprecepting_attending_setup_preserves_current_resident_schedule() -> None:
+def test_attending_setup_is_solver_input_because_the_solve_schedules_attendings() -> None:
     instance = blank_instance()
     edited = instance.revised(
         attendings=[Attending(id="attending-001", name="Ada Lovelace")]
     )
 
-    assert (
-        instance_edit_impact(instance, edited)
-        is InstanceEditImpact.COMPATIBLE_CONFIGURATION
-    )
+    assert instance_edit_impact(instance, edited) is InstanceEditImpact.SOLVER_INPUT
 
     academic_admin_disabled = replace_academic_half_day(
         instance,
@@ -1480,11 +1494,11 @@ def test_nonprecepting_attending_setup_preserves_current_resident_schedule() -> 
     )
     assert (
         instance_edit_impact(instance, academic_admin_disabled)
-        is InstanceEditImpact.COMPATIBLE_CONFIGURATION
+        is InstanceEditImpact.SOLVER_INPUT
     )
 
 
-def test_precepting_change_stales_schedule_only_for_attending_managed_clinic() -> None:
+def test_hand_entered_work_is_solver_input_but_a_template_is_not() -> None:
     instance = blank_instance()
     clinic_id = instance.clinic_policy.primary_site_id
     precepting = AttendingWorkHalfDay(
@@ -1515,31 +1529,24 @@ def test_precepting_change_stales_schedule_only_for_attending_managed_clinic() -
     )
     site["staffing_mode"] = "attending_managed"
     attending_managed = SchedulerInput.model_validate(raw)
-    template_only_edit = attending_managed.revised(
-        attendings=[
-            Attending(
-                id="attending-001",
-                name="Ada Lovelace",
-                half_days_per_week=1,
-                schedule_template_half_days=[precepting],
-            )
-        ]
+    with_attending = attending_managed.revised(attendings=[attending])
+    template_only_edit = with_attending.revised(
+        attendings=[attending.revised(schedule_template_half_days=[precepting])]
     )
-    attending_managed_edit = attending_managed.revised(
-        attendings=[attending],
-        attending_schedules=[schedule],
-    )
+    attending_managed_edit = with_attending.revised(attending_schedules=[schedule])
 
+    # Hand-entered work fixes part of the attending schedule the solve
+    # places, at any clinic, so the current schedule becomes stale.
     assert (
         instance_edit_impact(instance, capacity_managed_edit)
+        is InstanceEditImpact.SOLVER_INPUT
+    )
+    assert (
+        instance_edit_impact(with_attending, template_only_edit)
         is InstanceEditImpact.COMPATIBLE_CONFIGURATION
     )
     assert (
-        instance_edit_impact(attending_managed, template_only_edit)
-        is InstanceEditImpact.COMPATIBLE_CONFIGURATION
-    )
-    assert (
-        instance_edit_impact(attending_managed, attending_managed_edit)
+        instance_edit_impact(with_attending, attending_managed_edit)
         is InstanceEditImpact.SOLVER_INPUT
     )
 

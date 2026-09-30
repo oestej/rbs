@@ -5,13 +5,20 @@ CP-SAT search, so they stay outside the ``solve`` marker group.
 """
 
 from rbs.catalog import sample_instance
+from rbs.models.attending import AttendingClinicCoverage
+from rbs.models.clinic import clinic_slot_date
+from rbs.models.clinic_site import ClinicStaffingMode
 from rbs.models.elective import ElectiveRotationOption
+from rbs.models.enums import Session, Weekday
 from rbs.models.instance import SchedulerInput, SolverProblem
 from rbs.models.locks import LockedPlacement
+from rbs.solver.clinic_requirements import CODE as UNCOVERABLE_CLINIC_SESSION
+from rbs.solver.clinic_requirements import uncoverable_clinic_sessions
 from rbs.solver.core.diagnostics import (
     _locked_capacity_conflicts,
     _locked_elective_repeats,
 )
+from rbs.solver.planning import expand_occurrences
 
 
 def _problem(instance: SchedulerInput) -> SolverProblem:
@@ -152,3 +159,107 @@ def test_repeatable_elective_locked_twice_is_silent() -> None:
         ]
     )
     assert _locked_elective_repeats(_problem(instance)) == []
+
+
+def _attending_managed_instance(**updates) -> SchedulerInput:
+    """Stock sample with Cedar on attending-managed staffing (no coverage)."""
+    instance = sample_instance()
+    sites = [
+        site.model_copy(update={"staffing_mode": ClinicStaffingMode.ATTENDING_MANAGED})
+        if site.id == "cedar"
+        else site
+        for site in instance.clinic_policy.sites
+    ]
+    policy = instance.clinic_policy.model_copy(update={"sites": sites})
+    return instance.revised(clinic_policy=policy, **updates)
+
+
+def _probe(instance: SchedulerInput):
+    return uncoverable_clinic_sessions(_problem(instance), allow_boundary_spans=False)
+
+
+def test_managed_site_nobody_can_precept_names_the_unplaceable_block() -> None:
+    instance = _attending_managed_instance(attendings=[], attending_schedules=[])
+    diagnostics = _probe(instance)
+
+    assert len(diagnostics) == 1
+    (diagnostic,) = diagnostics
+    assert diagnostic.code == UNCOVERABLE_CLINIC_SESSION
+    assert "Inpatient Peds Metro" in diagnostic.message
+    assert "no attending is available to precept at Cedar" in diagnostic.message
+    expected_residents = sorted(
+        {
+            occurrence.resident_id
+            for occurrence in expand_occurrences(_problem(instance))
+            if occurrence.rotation_id == "inpatient_peds_metro"
+        }
+    )
+    assert diagnostic.resident_ids == expected_residents
+    assert any("can precept at Cedar" in item for item in diagnostic.suggestions)
+    assert any("capacity-managed" in item for item in diagnostic.suggestions)
+
+
+def test_managed_site_with_attendings_who_could_precept_stays_silent() -> None:
+    # The solve schedules attendings, so hand-entered precepting is optional.
+    instance = _attending_managed_instance()
+    assert instance.attendings
+    assert not any(
+        schedule.weeks for schedule in instance.attending_schedules
+        if any(
+            half_day.clinic_id == "cedar"
+            for week in schedule.weeks
+            for half_day in week.half_days
+        )
+    )
+    assert _probe(instance) == []
+
+
+def test_stock_sample_has_no_uncoverable_clinic_session() -> None:
+    assert _probe(sample_instance()) == []
+
+
+def test_managed_site_with_coverage_stays_silent() -> None:
+    instance = _attending_managed_instance(attendings=[], attending_schedules=[])
+    problem = _problem(instance)
+    first = problem.calendar.first_week_start
+    coverage = [
+        AttendingClinicCoverage(
+            clinic_id="cedar",
+            date=clinic_slot_date(first, week, Weekday.FRIDAY),
+            session=Session.AFTERNOON,
+            attendings=2,
+        )
+        for week in range(1, problem.calendar.weeks + 1)
+    ]
+    covered = problem.model_copy(update={"attending_coverage": coverage})
+    assert uncoverable_clinic_sessions(covered, allow_boundary_spans=False) == []
+
+
+def test_smaller_pick_escapes_through_the_live_site() -> None:
+    instance = sample_instance()
+    metro = next(
+        rotation for rotation in instance.rotations if rotation.id == "inpatient_peds_metro"
+    )
+    rule = metro.clinic.model_copy(update={"half_days_per_week": 1})
+    rotations = [
+        rotation.model_copy(update={"clinic": rule})
+        if rotation.id == "inpatient_peds_metro"
+        else rotation
+        for rotation in instance.rotations
+    ]
+    managed = _attending_managed_instance()
+    escaped = managed.revised(rotations=rotations)
+    assert _probe(escaped) == []
+
+
+def test_probe_floor_matches_the_compiler_formula() -> None:
+    from rbs.solver.clinic_requirements import _occupancy_floor as probe_floor
+    from rbs.solver.core.objective_slots import _occupancy_floor as compiler_floor
+
+    for pick in range(0, 5):
+        for domain_size in range(1, 7):
+            for surviving in range(0, 7):
+                for negated in (False, True):
+                    assert probe_floor(surviving, pick, domain_size, negated) == (
+                        compiler_floor(surviving, pick, domain_size, negated)
+                    )

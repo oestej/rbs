@@ -12,6 +12,8 @@ from dataclasses import dataclass
 
 from rbs.models.enums import RotationKind
 from rbs.models.instance import SolverProblem
+from rbs.solver.clinic_requirements import CODE as UNCOVERABLE_CLINIC_SESSION
+from rbs.solver.clinic_requirements import uncoverable_clinic_sessions
 from rbs.solver.planning import expand_occurrences
 
 __all__ = [
@@ -105,6 +107,7 @@ def check_solve_readiness(instance: SolverProblem) -> ReadinessResult:
 
     issues.extend(_missing_elective_fallbacks(instance, staffed))
     issues.extend(_rotation_rule_conflicts(instance, staffed))
+    issues.extend(_uncoverable_clinic_sessions(instance))
     return ReadinessResult(
         errors=tuple(issue.message for issue in issues),
         issues=tuple(issues),
@@ -324,6 +327,26 @@ def _rotation_rule_conflicts(
                     pgy=curriculum.pgy,
                 )
             )
+    return issues
+
+
+def _uncoverable_clinic_sessions(instance: SolverProblem) -> list[ReadinessIssue]:
+    """Flag required clinic sessions no site has seats for, before searching.
+
+    The probe mirrors the compiler's session requirements, so a hit proves
+    the model infeasible and the solve must not start. Boundary spans are
+    over-approximated on purpose: wider start domains can only clear weeks,
+    never invent a contradiction.
+    """
+    issues: list[ReadinessIssue] = []
+    for diagnostic in uncoverable_clinic_sessions(instance, allow_boundary_spans=True):
+        issues.append(
+            ReadinessIssue(
+                code=UNCOVERABLE_CLINIC_SESSION,
+                message=diagnostic.message,
+                suggestions=tuple(diagnostic.suggestions),
+            )
+        )
     return issues
 
 

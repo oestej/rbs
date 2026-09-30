@@ -142,7 +142,7 @@ def test_failed_preload_leaves_current_editor_usable_and_can_retry_on_selection(
     assert page.loaded == ["first", "second"]
 
 
-@pytest.mark.parametrize("tab", ["rotations", "settings"])
+@pytest.mark.parametrize("tab", ["rotations", "settings", "clinic_schedule"])
 @pytest.mark.parametrize("invalidate", [None, "edit", "switch_workspace"])
 def test_workspace_changes_cancel_hidden_section_preloads(tmp_path, tab, invalidate):
     from nicegui import ui
@@ -184,7 +184,8 @@ def test_workspace_changes_cancel_hidden_section_preloads(tmp_path, tab, invalid
         root.delete()
 
 
-def test_saving_replaces_the_page_before_a_queued_preload_can_use_old_data(tmp_path):
+@pytest.mark.parametrize("tab", ["settings", "clinic_schedule"])
+def test_saving_replaces_the_page_before_a_queued_preload_can_use_old_data(tmp_path, tab):
     from nicegui import ui
 
     from rbs.catalog import sample_instance
@@ -195,11 +196,11 @@ def test_saving_replaces_the_page_before_a_queued_preload_can_use_old_data(tmp_p
     store = Store(tmp_path / "edit.sqlite")
     store.init()
     workspace = store.create("Preloading", sample_instance())
-    session = WorkspaceSession(store=store, workspace_id=workspace.id, active_tab="settings")
+    session = WorkspaceSession(store=store, workspace_id=workspace.id, active_tab=tab)
     session._render_tab = _render_tab
     root = ui.column()
     try:
-        session.panels["settings"] = root
+        session.panels[tab] = root
         before = set(root.client.elements)
         session.refresh_visible()
         loader = next(

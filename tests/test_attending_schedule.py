@@ -272,9 +272,12 @@ def test_effective_coverage_is_the_only_attending_data_sent_to_solver() -> None:
 
     projected = SolverProblem.from_instance(configured)
     payload = projected.model_dump(mode="json")
-    assert "attendings" not in payload
-    assert "attending_schedules" not in payload
-    assert payload["attending_coverage"] == [coverage.model_dump(mode="json")]
+    # The solve schedules attendings from their records and derives the same
+    # hand-entered coverage from them.
+    assert [item["id"] for item in payload["attendings"]] == [attending.id]
+    assert payload["attending_schedules"] == [schedule.model_dump(mode="json")]
+    assert "attending_coverage" not in payload
+    assert projected.attending_coverage == configured.attending_coverage
 
 
 def test_attending_schedule_references_are_strict_but_completion_is_not() -> None:

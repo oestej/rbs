@@ -4,10 +4,24 @@
 
 ### Added
 
+- **Scheduling:** Solving now schedules attendings. Each attending's open
+  half-days are filled from their weekly half-day total, Fixed and Flexible
+  category ranges, Attending Clinic day minimum, and preferred weekly schedule,
+  around hand-entered work and the academic half-day's Admin Time. Every
+  attending-managed clinic gets the Precepting Clinic coverage its residents
+  need, is open whenever residents with a target share there are in clinic, and
+  keeps its allocation targets. Attendings are never booked to precept without
+  residents unless a Fixed range requires it. On the next solve, locked
+  attending work and work through today (when that option is on) is kept, and
+  other work stays put where the rules still allow it.
+- **Scheduling:** Failed solves now explain each blocking conflict with ways to resolve it, both in the workspace dialog and in `rbs schedule` output. When no single conflict can be isolated, the report says so in plain language instead of repeating internal solver notes.
+- **Clinic schedule:** Switch between Residents and Attendings in the calendar.
+  The attending view shows effective week-by-week work with category labels;
+  site and date filters and CSV/PDF exports follow the selected view.
 - **Attendings:** A new Attendings tab starts each attending with a lightweight
   form for their name, weekly half-day total, and optional schedule dates. The
-  full editor separates details, weekly category targets, schedule, template,
-  and vacation into tabs. Each recurring work category can have no target, a
+  full editor separates details, weekly category targets, preferences, and
+  vacation into tabs. Each recurring work category can have no target, a
   Fixed required minimum/maximum range, or a Flexible preferred minimum/maximum
   range. Special/Other work is placed manually and can include a free-text
   description. The weekly total defaults to 10, missing schedule dates are shown
@@ -16,8 +30,7 @@
   independently editable AM/PM schedule whose blocks can be clicked to edit or
   dragged to move and swap. An attending with a zero-half-day default can be
   assigned work in a particular week and then use Override to make the current
-  assignment count that week's total. A reusable template can replace a selected
-  week or range without remaining linked to it. Schedule and template shifts can
+  assignment count that week's total. Schedule shifts can
   be assigned as Inpatient Service, Attending Clinic, Precepting Clinic, Admin
   Time, or Special/Other; Precepting Clinic work selects a clinic site.
   Attendings can also set a soft preferred weekly schedule and a minimum number
@@ -37,13 +50,46 @@
 
 ### Changed
 
+- **Attendings:** The full-year schedule and manual editor now match the
+  resident schedule's spacing and controls, with clearer work labels and locks,
+  a tidier edit toolbar, and dated half-day dialogs that work at narrow widths.
+- **Attendings:** Changing an attending's weekly total, category ranges,
+  preferences, vacation, schedule dates, or week-by-week work now marks the
+  current schedule out of date, because the next solve schedules attendings from
+  them. Renaming an attending does not.
+- **Scheduling:** Assigning clinic sites after a solve takes about half as long
+  on a full academic year.
+- **Attendings:** Lock individual work half-days or use Lock all work and Unlock
+  all work in Edit schedule. Locks protect placements from edits and future
+  solves, and automatic locking through today also covers attending work.
+- **Attendings:** Selecting an attending now shows their full academic-year AM/PM
+  schedule, including vacation, schedule dates, and automatic Admin Time.
+- **Attendings:** Edit schedule now works directly in the full-year calendar,
+  like resident schedules. Add, change, remove, or drag work half-days with
+  changes saved immediately, then select Return to view when finished. Edit
+  attending now focuses on details, targets, preferences, and vacation.
+- **Clinic schedule:** Switching between Residents and Attendings is faster,
+  preserves each view's scroll position, and uses less HTML for hover details.
 - **Data compatibility:** Version 11 `.rbsc` files migrate dated attending work
   into separate, week-specific attending schedules and convert single category
   targets into exact minimum/maximum ranges. Versions 9 and 10 `.rbsc` files
   migrate with an empty attending directory. Version 8 and 9 catalogs migrate
   with capacity-managed staffing and automatic attending Admin Time enabled
   for the academic half-day. Files saved by this version use `.rbsc` schema
-  12 and catalog schema 10 and cannot be opened by older builds.
+  12 and catalog schema 10 and cannot be opened by older builds. Solved
+  schedules now include the attending work the solve placed, and solver
+  protocol 7 requires matching solver binaries.
+
+### Fixed
+
+- **Clinic schedule:** Attending-managed clinic coverage and resident hover
+  details now include preceptors placed by the solve, alongside hand-entered
+  work, so displayed capacity matches the schedule's staffing. Locking
+  hand-entered precepting work also preserves its placement.
+- **Scheduling:** An attending-managed clinic that no attending can precept at
+  no longer ends in an unexplained infeasible result. Solve readiness now names
+  the rotations that cannot be placed and links to the clinic configuration,
+  before any search starts.
 
 ## [0.1.14] - 2026-09-29
 

@@ -268,7 +268,10 @@ def test_v11_file_migrates_attending_work_and_target_ranges(tmp_path) -> None:
             "mode": "flexible",
         },
     ]
-    attending = next(item for item in attendings if item["half_days_per_week"] == 0)
+    # A version 11 attending with a zero weekly total and only dated work.
+    attending = next(item for item in attendings if item["id"] == "attending-004")
+    attending["half_days_per_week"] = 0
+    attending["weekly_shift_targets"] = []
     attending["weekly_work_schedules"] = []
     attending["ad_hoc_work_half_days"] = [
         {

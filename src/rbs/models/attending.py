@@ -473,10 +473,15 @@ class EffectiveAttendingWeek:
     is_full_schedule_week: bool
     has_vacation: bool
     attending_clinic_day_minimum: int
+    scheduled_half_days: frozenset[tuple[Weekday, Session]] = frozenset()
 
     @property
     def assigned_half_days(self) -> int:
         return len(self.assignments)
+
+    def is_scheduled(self, weekday: Weekday, session: Session) -> bool:
+        """Whether a solve, rather than hand entry, placed this half-day."""
+        return (weekday, session) in self.scheduled_half_days
 
     def assignment_on(
         self,
@@ -515,8 +520,15 @@ def effective_attending_week(
     last_day: date,
     academic_half_day: tuple[Weekday, Session] | None,
     automatic_academic_admin: bool,
+    scheduled_work: Iterable[AttendingWorkAssignment] = (),
 ) -> EffectiveAttendingWeek:
-    """Project stored work through dates, vacation, and the academic rule."""
+    """Project stored work through dates, vacation, and the academic rule.
+
+    ``scheduled_work`` holds the half-days a solve placed in this week. They
+    fill only half-days that hand-entered work and the automatic academic
+    Admin Time leave open, and like all work they vanish on vacation days and
+    outside the attending's schedule dates.
+    """
     weeks = (last_day - first_day).days // 7 + 1
     if not 1 <= week <= weeks:
         raise ValueError(f"academic week must be between 1 and {weeks}")
@@ -535,6 +547,17 @@ def effective_attending_week(
         if saved_week is not None
         else {}
     )
+    scheduled_by_slot = {
+        (item.weekday, item.session): AttendingWorkHalfDay(
+            weekday=item.weekday,
+            session=item.session,
+            work_type=item.work_type,
+            clinic_id=item.clinic_id,
+            description=item.description,
+        )
+        for item in scheduled_work
+    }
+    scheduled_slots: set[tuple[Weekday, Session]] = set()
     assignments: list[AttendingWorkHalfDay] = []
     automatic_admin: AttendingWorkHalfDay | None = None
     scheduled_days: list[bool] = []
@@ -566,6 +589,11 @@ def effective_attending_week(
             assignment = stored_by_slot.get((weekday, session))
             if assignment is not None:
                 assignments.append(assignment)
+                continue
+            scheduled = scheduled_by_slot.get((weekday, session))
+            if scheduled is not None:
+                assignments.append(scheduled)
+                scheduled_slots.add((weekday, session))
 
     weekday_vacation = any(vacation_days[:5])
     active_weekdays = any(scheduled_days[:5])
@@ -603,6 +631,7 @@ def effective_attending_week(
             if not active_weekdays or not full_weekdays or weekday_vacation
             else attending.minimum_attending_clinic_days_per_week
         ),
+        scheduled_half_days=frozenset(scheduled_slots),
     )
 
 

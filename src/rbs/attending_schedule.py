@@ -8,10 +8,12 @@ from enum import StrEnum
 from rbs.models.attending import (
     Attending,
     AttendingWeeklyTargetMode,
+    AttendingWorkHalfDay,
     AttendingWorkType,
     EffectiveAttendingWeek,
 )
 from rbs.models.instance import SchedulerInput
+from rbs.models.schedule import Schedule
 
 
 class AttendingScheduleIssueSeverity(StrEnum):
@@ -72,10 +74,37 @@ _WORK_TYPE_LABELS = {
 }
 
 
+def effective_attending_schedule_week(
+    instance: SchedulerInput,
+    attending: Attending,
+    week: int,
+    schedule: Schedule | None = None,
+) -> EffectiveAttendingWeek:
+    """Combine accepted case work and compatible generated work for a calendar week."""
+    compatible = schedule is not None and schedule.meta.academic_year == instance.academic_year
+    return instance.effective_attending_week(
+        attending,
+        week,
+        scheduled_work=(
+            AttendingWorkHalfDay(
+                weekday=item.weekday,
+                session=item.session,
+                work_type=item.work_type,
+                clinic_id=item.clinic_id,
+                description=item.description,
+            )
+            for item in (schedule.attending_work if compatible else ())
+            if item.attending_id == attending.id and item.week == week
+            and (item.clinic_id is None or item.clinic_id in instance.clinic_policy.site_ids)
+        ),
+    )
+
+
 def attending_schedule_report(
     instance: SchedulerInput,
     *,
     attending_id: str | None = None,
+    schedule: Schedule | None = None,
 ) -> AttendingScheduleReport:
     """Check actual weeks against totals, targets, clinic days, and preferences.
 
@@ -96,7 +125,7 @@ def attending_schedule_report(
     issues: list[AttendingScheduleIssue] = []
     for attending in attendings:
         for week in range(1, instance.calendar.weeks + 1):
-            effective = instance.effective_attending_week(attending, week)
+            effective = effective_attending_schedule_week(instance, attending, week, schedule)
             if not effective.is_active_week:
                 continue
             minimums_apply = (

@@ -1,4 +1,5 @@
 from collections import Counter
+from collections.abc import Iterable
 from datetime import date, timedelta
 from functools import cached_property
 from typing import Any, Self
@@ -140,6 +141,44 @@ class SolverCase(StrictModel):
             "Dated Conference/Multi-Day rotations and Half/Single Day events assigned to residents."
         ),
     )
+    attendings: list[Attending] = Field(default_factory=list)
+    attending_schedules: list[AttendingSchedule] = Field(
+        default_factory=list,
+        description=(
+            "Hand-entered week-by-week attending work and weekly half-day totals. "
+            "A solve keeps this work and schedules each attending around it."
+        ),
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_nested_attending_schedules(cls, value: object) -> object:
+        return _migrate_nested_attending_schedules(value)
+
+    @field_validator("attendings")
+    @classmethod
+    def unique_attendings(cls, attendings: list[Attending]) -> list[Attending]:
+        return normalize_attendings(attendings)
+
+    @field_validator("attending_schedules")
+    @classmethod
+    def unique_attending_schedules(
+        cls,
+        schedules: list[AttendingSchedule],
+    ) -> list[AttendingSchedule]:
+        return normalize_attending_schedules(schedules)
+
+    @model_validator(mode="after")
+    def attending_dates_fit_calendar(self) -> Self:
+        first_day = self.calendar.first_week_start
+        last_day = first_day + timedelta(days=self.calendar.weeks * 7 - 1)
+        validate_attending_academic_year(
+            self.attendings,
+            attending_schedules=self.attending_schedules,
+            first_day=first_day,
+            last_day=last_day,
+        )
+        return self
 
     @cached_property
     def residents_by_id(self) -> dict[str, Resident]:
@@ -194,41 +233,9 @@ class SolverCase(StrictModel):
 class SchedulingCase(SolverCase):
     """Persisted workspace case, including presentation and UI workflow state."""
 
-    attendings: list[Attending] = Field(default_factory=list)
-    attending_schedules: list[AttendingSchedule] = Field(default_factory=list)
     color_scheme: ColorScheme = Field(default_factory=ColorScheme)
     solver: SolverConfig = Field(default_factory=SolverConfig)
     lock_through_today: bool = False
-
-    @model_validator(mode="before")
-    @classmethod
-    def migrate_nested_attending_schedules(cls, value: object) -> object:
-        return _migrate_nested_attending_schedules(value)
-
-    @field_validator("attendings")
-    @classmethod
-    def unique_attendings(cls, attendings: list[Attending]) -> list[Attending]:
-        return normalize_attendings(attendings)
-
-    @field_validator("attending_schedules")
-    @classmethod
-    def unique_attending_schedules(
-        cls,
-        schedules: list[AttendingSchedule],
-    ) -> list[AttendingSchedule]:
-        return normalize_attending_schedules(schedules)
-
-    @model_validator(mode="after")
-    def attending_dates_fit_calendar(self) -> Self:
-        first_day = self.calendar.first_week_start
-        last_day = first_day + timedelta(days=self.calendar.weeks * 7 - 1)
-        validate_attending_academic_year(
-            self.attendings,
-            attending_schedules=self.attending_schedules,
-            first_day=first_day,
-            last_day=last_day,
-        )
-        return self
 
     @classmethod
     def from_instance(cls, instance: "SchedulerInput") -> "SchedulingCase":
@@ -258,25 +265,31 @@ class SolverRotation(Rotation):
 
 
 class SolverClinicSiteConfig(ClinicSiteConfig):
-    """Clinic scheduling facts without the calendar presentation color."""
+    """Clinic scheduling facts without the calendar presentation color.
+
+    An attending-managed clinic keeps its weekly grid and dated overrides:
+    they cap how many attendings the solve may schedule to precept there.
+    """
 
     color: SkipJsonSchema[str] = Field(default="#000000", exclude=True)
 
-    @model_validator(mode="after")
-    def omit_dormant_capacity_configuration(self) -> Self:
-        if self.staffing_mode is ClinicStaffingMode.ATTENDING_MANAGED:
-            self.half_days = []
-            self.capacity_overrides = []
-        return self
-
 
 class SolverClinicPolicy(ClinicPolicy):
-    academic_half_day_is_attending_admin_time: SkipJsonSchema[bool] = Field(
-        default=True,
-        exclude=True,
-    )
     sites: list[SolverClinicSiteConfig] = Field(min_length=1)
     notes: SkipJsonSchema[str] = Field(default="", exclude=True)
+
+
+class SolverAttending(Attending):
+    """Attending scheduling rules without the editor's reusable template.
+
+    A template only copies work into weeks when someone applies it, so it
+    never constrains a solve and must not make one stale.
+    """
+
+    schedule_template_half_days: SkipJsonSchema[list[AttendingWorkHalfDay]] = Field(
+        default_factory=list,
+        exclude=True,
+    )
 
 
 class SolverElectiveConfiguration(ElectiveConfiguration):
@@ -291,11 +304,14 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
     rotation_groups: list[RotationGroup] = Field(default_factory=list)
     electives: SolverElectiveConfiguration
     clinic_policy: SolverClinicPolicy
-    attending_coverage: list[AttendingClinicCoverage] = Field(
+    attendings: list[SolverAttending] = Field(default_factory=list)
+    attending_coverage: SkipJsonSchema[list[AttendingClinicCoverage]] = Field(
         default_factory=list,
+        exclude=True,
         description=(
-            "Derived dated preceptor counts for attending-managed clinics; "
-            "full attending records remain outside the solver boundary."
+            "Derived dated preceptor counts at attending-managed clinics. By default "
+            "they come from hand-entered Precepting Clinic work; a schedule-aware view "
+            "adds the work a solve placed (see ``with_attending_coverage``)."
         ),
     )
     clinic_lock_cutoff_date: date | None = Field(
@@ -305,21 +321,6 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
             "derived from workspace workflow state before crossing the solver boundary."
         ),
     )
-
-    @field_validator("attending_coverage")
-    @classmethod
-    def ordered_attending_coverage(
-        cls,
-        coverage: list[AttendingClinicCoverage],
-    ) -> list[AttendingClinicCoverage]:
-        return sorted(
-            coverage,
-            key=lambda item: (
-                item.date,
-                list(Session).index(item.session),
-                item.clinic_id,
-            ),
-        )
 
     @classmethod
     def from_instance(
@@ -333,11 +334,6 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
             mode="json",
             include=set(cls.model_fields),
         )
-        if hasattr(instance, "attending_schedules"):
-            payload["attending_coverage"] = [
-                item.model_dump(mode="json")
-                for item in instance.attending_coverage
-            ]
         if getattr(instance, "lock_through_today", False):
             payload["clinic_lock_cutoff_date"] = today or date.today()
         projected = cls.model_validate(payload)
@@ -385,6 +381,15 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
             (site.id, calendar_day, session),
             0,
         )
+
+    def clinic_max_attendings_on(
+        self,
+        site_id: str,
+        calendar_day: date,
+        session: Session,
+    ) -> int:
+        """Most attendings who may precept at one clinic on one date and session."""
+        return self.clinic_policy.site(site_id).max_attendings_on(calendar_day, session)
 
     def clinic_max_capacity_on(
         self,
@@ -447,28 +452,6 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
 
         first_day = self.calendar.first_week_start
         last_day = first_day + timedelta(days=self.calendar.weeks * 7 - 1)
-        known_clinic_ids = set(self.clinic_policy.site_ids)
-        coverage_slots: set[tuple[str, date, Session]] = set()
-        for coverage in self.attending_coverage:
-            if coverage.clinic_id not in known_clinic_ids:
-                raise ValueError(
-                    "attending coverage references unknown clinic "
-                    f"{coverage.clinic_id!r}"
-                )
-            clinic = self.clinic_policy.site(coverage.clinic_id)
-            if clinic.staffing_mode is not ClinicStaffingMode.ATTENDING_MANAGED:
-                raise ValueError(
-                    f"attending coverage references capacity-managed clinic {clinic.name!r}"
-                )
-            if not first_day <= coverage.date <= last_day:
-                raise ValueError(
-                    f"attending coverage {coverage.date.isoformat()} is outside academic "
-                    f"year {first_day.isoformat()}..{last_day.isoformat()}"
-                )
-            slot = coverage.clinic_id, coverage.date, coverage.session
-            if slot in coverage_slots:
-                raise ValueError("attending coverage must use unique clinic date sessions")
-            coverage_slots.add(slot)
         for clinic in self.clinic_policy.sites:
             for override in clinic.capacity_overrides:
                 if not first_day <= override.date <= last_day:
@@ -593,6 +576,168 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
         self._check_resident_rotation_waivers(known)
         self._check_resident_replacement_inventory()
         return self
+
+    @model_validator(mode="after")
+    def derive_hand_entered_attending_coverage(self) -> Self:
+        """Check Precepting Clinic references and derive hand-entered coverage."""
+        known_clinic_ids = set(self.clinic_policy.site_ids)
+        for attending in self.attendings:
+            assignments = [
+                *attending.preferred_weekly_schedule_half_days,
+                *attending.schedule_template_half_days,
+                *(
+                    half_day
+                    for schedule in self.attending_schedule_weeks(attending.id)
+                    for half_day in schedule.half_days
+                ),
+            ]
+            for assignment in assignments:
+                if (
+                    assignment.work_type is AttendingWorkType.PRECEPTING_CLINIC
+                    and assignment.clinic_id not in known_clinic_ids
+                ):
+                    raise ValueError(
+                        f"{attending.id}: Precepting Clinic work references unknown clinic "
+                        f"{assignment.clinic_id!r}"
+                    )
+        self.attending_coverage = attending_clinic_coverage(
+            self.effective_attending_weeks(),
+            managed_clinic_ids=self.attending_managed_clinic_ids,
+            closed_dates_by_clinic={
+                site.id: {closure.date for closure in site.closure_days}
+                for site in self.clinic_policy.sites
+                if site.staffing_mode is ClinicStaffingMode.ATTENDING_MANAGED
+            },
+        )
+        self.__dict__.pop("_attending_coverage_by_slot", None)
+        return self
+
+    @property
+    def attending_managed_clinic_ids(self) -> set[str]:
+        return {
+            site.id
+            for site in self.clinic_policy.sites
+            if site.staffing_mode is ClinicStaffingMode.ATTENDING_MANAGED
+        }
+
+    def with_attending_coverage(
+        self,
+        coverage: Iterable[AttendingClinicCoverage],
+    ) -> Self:
+        """Return a view whose attending-managed capacity uses ``coverage``.
+
+        Capacity at an attending-managed clinic depends on who precepts there,
+        and the solve places that work. Allocation, validation, and editors
+        evaluate a particular schedule through this view instead of the
+        hand-entered coverage derived when the problem was validated.
+        """
+        ordered = sorted(
+            coverage,
+            key=lambda item: (
+                item.date,
+                list(Session).index(item.session),
+                item.clinic_id,
+            ),
+        )
+        return self.model_copy(update={"attending_coverage": ordered})
+
+    def attending_schedule_for(self, attending_id: str) -> AttendingSchedule | None:
+        """Return the hand-entered schedule for one attending, if it has any weeks."""
+        return next(
+            (
+                schedule
+                for schedule in self.attending_schedules
+                if schedule.attending_id == attending_id
+            ),
+            None,
+        )
+
+    def attending_schedule_weeks(
+        self,
+        attending_id: str,
+    ) -> tuple[AttendingWeeklyWorkSchedule, ...]:
+        """Return one attending's hand-entered weeks without exposing a mutable default."""
+        schedule = self.attending_schedule_for(attending_id)
+        return tuple(schedule.weeks) if schedule is not None else ()
+
+    def effective_attending_week(
+        self,
+        attending: Attending,
+        week: int,
+        *,
+        scheduled_work: Iterable[AttendingWorkHalfDay] = (),
+    ) -> EffectiveAttendingWeek:
+        """Return one authoritative week after dates, vacation, and Academic.
+
+        ``scheduled_work`` adds half-days a solve placed in this week; hand-entered
+        work and the automatic academic Admin Time take precedence over it.
+        """
+        first_day = self.calendar.first_week_start
+        last_day = first_day + timedelta(days=self.calendar.weeks * 7 - 1)
+        return effective_attending_week(
+            attending,
+            self.attending_schedule_for(attending.id),
+            week=week,
+            first_day=first_day,
+            last_day=last_day,
+            academic_half_day=self.academic_half_day_for_week(week),
+            automatic_academic_admin=(
+                self.clinic_policy.academic_half_day_is_attending_admin_time
+            ),
+            scheduled_work=scheduled_work,
+        )
+
+    def effective_attending_weeks(self) -> tuple[EffectiveAttendingWeek, ...]:
+        """Return every hand-entered attending week used by reports and coverage."""
+        return tuple(
+            self.effective_attending_week(attending, week)
+            for attending in self.attendings
+            for week in range(1, self.calendar.weeks + 1)
+        )
+
+    def attending_work_half_day_on(
+        self,
+        attending: Attending,
+        calendar_day: date,
+        session: Session,
+    ) -> AttendingWorkHalfDay | None:
+        """Resolve saved work plus the program's automatic academic Admin Time."""
+        first_day = self.calendar.first_week_start
+        last_day = first_day + timedelta(days=self.calendar.weeks * 7 - 1)
+        if not first_day <= calendar_day <= last_day:
+            return None
+        week = (calendar_day - first_day).days // 7 + 1
+        return self.effective_attending_week(attending, week).assignment_on(
+            tuple(Weekday)[calendar_day.weekday()],
+            session,
+        )
+
+    def attending_clinic_days_for_week(
+        self,
+        attending: Attending,
+        week: int,
+    ) -> frozenset[Weekday]:
+        """Return distinct effective Attending Clinic weekdays in one week."""
+        if not 1 <= week <= self.calendar.weeks:
+            raise ValueError(
+                f"academic week must be between 1 and {self.calendar.weeks}"
+            )
+        return self.effective_attending_week(attending, week).attending_clinic_days
+
+    def attending_clinic_day_minimum_for_week(
+        self,
+        attending: Attending,
+        week: int,
+    ) -> int:
+        """Return the minimum, excluding partial, inactive, and vacation weeks."""
+        if not 1 <= week <= self.calendar.weeks:
+            raise ValueError(
+                f"academic week must be between 1 and {self.calendar.weeks}"
+            )
+        return self.effective_attending_week(
+            attending,
+            week,
+        ).attending_clinic_day_minimum
 
     def constraint_catalog(self) -> ConstraintCatalog:
         return ConstraintCatalog.from_instance(self)
@@ -983,11 +1128,6 @@ class SchedulerInput(SolverProblem):
     """Workspace instance: solver problem plus presentation/workflow settings."""
 
     attendings: list[Attending] = Field(default_factory=list)
-    attending_schedules: list[AttendingSchedule] = Field(default_factory=list)
-    attending_coverage: SkipJsonSchema[list[AttendingClinicCoverage]] = Field(
-        default_factory=list,
-        exclude=True,
-    )
     rotations: list[Rotation]
     electives: ElectiveConfiguration
     clinic_policy: ClinicPolicy
@@ -995,161 +1135,6 @@ class SchedulerInput(SolverProblem):
     color_scheme: ColorScheme = Field(default_factory=ColorScheme)
     solver: SolverConfig = Field(default_factory=SolverConfig)
     lock_through_today: bool = False
-
-    @model_validator(mode="before")
-    @classmethod
-    def migrate_nested_attending_schedules(cls, value: object) -> object:
-        return _migrate_nested_attending_schedules(value)
-
-    @field_validator("attendings")
-    @classmethod
-    def unique_attendings(cls, attendings: list[Attending]) -> list[Attending]:
-        return normalize_attendings(attendings)
-
-    @field_validator("attending_schedules")
-    @classmethod
-    def unique_attending_schedules(
-        cls,
-        schedules: list[AttendingSchedule],
-    ) -> list[AttendingSchedule]:
-        return normalize_attending_schedules(schedules)
-
-    @model_validator(mode="after")
-    def attending_dates_fit_calendar(self) -> Self:
-        first_day = self.calendar.first_week_start
-        last_day = first_day + timedelta(days=self.calendar.weeks * 7 - 1)
-        validate_attending_academic_year(
-            self.attendings,
-            attending_schedules=self.attending_schedules,
-            first_day=first_day,
-            last_day=last_day,
-        )
-        known_clinic_ids = set(self.clinic_policy.site_ids)
-        for attending in self.attendings:
-            assignments = [
-                *attending.preferred_weekly_schedule_half_days,
-                *attending.schedule_template_half_days,
-                *(
-                    half_day
-                    for schedule in self.attending_schedule_weeks(attending.id)
-                    for half_day in schedule.half_days
-                ),
-            ]
-            for assignment in assignments:
-                if (
-                    assignment.work_type is AttendingWorkType.PRECEPTING_CLINIC
-                    and assignment.clinic_id not in known_clinic_ids
-                ):
-                    raise ValueError(
-                        f"{attending.id}: Precepting Clinic work references unknown clinic "
-                        f"{assignment.clinic_id!r}"
-                    )
-        self.attending_coverage = attending_clinic_coverage(
-            self.effective_attending_weeks(),
-            managed_clinic_ids={
-                site.id
-                for site in self.clinic_policy.sites
-                if site.staffing_mode is ClinicStaffingMode.ATTENDING_MANAGED
-            },
-            closed_dates_by_clinic={
-                site.id: {closure.date for closure in site.closure_days}
-                for site in self.clinic_policy.sites
-                if site.staffing_mode is ClinicStaffingMode.ATTENDING_MANAGED
-            },
-        )
-        self.__dict__.pop("_attending_coverage_by_slot", None)
-        return self
-
-    def attending_schedule_for(self, attending_id: str) -> AttendingSchedule | None:
-        """Return the accepted schedule for one attending, if it has any weeks."""
-        return next(
-            (
-                schedule
-                for schedule in self.attending_schedules
-                if schedule.attending_id == attending_id
-            ),
-            None,
-        )
-
-    def attending_schedule_weeks(
-        self,
-        attending_id: str,
-    ) -> tuple[AttendingWeeklyWorkSchedule, ...]:
-        """Return one attending's accepted weeks without exposing a mutable default."""
-        schedule = self.attending_schedule_for(attending_id)
-        return tuple(schedule.weeks) if schedule is not None else ()
-
-    def effective_attending_week(
-        self,
-        attending: Attending,
-        week: int,
-    ) -> EffectiveAttendingWeek:
-        """Return one authoritative week after dates, vacation, and Academic."""
-        first_day = self.calendar.first_week_start
-        last_day = first_day + timedelta(days=self.calendar.weeks * 7 - 1)
-        return effective_attending_week(
-            attending,
-            self.attending_schedule_for(attending.id),
-            week=week,
-            first_day=first_day,
-            last_day=last_day,
-            academic_half_day=self.academic_half_day_for_week(week),
-            automatic_academic_admin=(
-                self.clinic_policy.academic_half_day_is_attending_admin_time
-            ),
-        )
-
-    def effective_attending_weeks(self) -> tuple[EffectiveAttendingWeek, ...]:
-        """Return every attending week used by reports and coverage projection."""
-        return tuple(
-            self.effective_attending_week(attending, week)
-            for attending in self.attendings
-            for week in range(1, self.calendar.weeks + 1)
-        )
-
-    def attending_work_half_day_on(
-        self,
-        attending: Attending,
-        calendar_day: date,
-        session: Session,
-    ) -> AttendingWorkHalfDay | None:
-        """Resolve saved work plus the program's automatic academic Admin Time."""
-        first_day = self.calendar.first_week_start
-        last_day = first_day + timedelta(days=self.calendar.weeks * 7 - 1)
-        if not first_day <= calendar_day <= last_day:
-            return None
-        week = (calendar_day - first_day).days // 7 + 1
-        return self.effective_attending_week(attending, week).assignment_on(
-            tuple(Weekday)[calendar_day.weekday()],
-            session,
-        )
-
-    def attending_clinic_days_for_week(
-        self,
-        attending: Attending,
-        week: int,
-    ) -> frozenset[Weekday]:
-        """Return distinct effective Attending Clinic weekdays in one week."""
-        if not 1 <= week <= self.calendar.weeks:
-            raise ValueError(
-                f"academic week must be between 1 and {self.calendar.weeks}"
-            )
-        return self.effective_attending_week(attending, week).attending_clinic_days
-
-    def attending_clinic_day_minimum_for_week(
-        self,
-        attending: Attending,
-        week: int,
-    ) -> int:
-        """Return the minimum, excluding partial, inactive, and vacation weeks."""
-        if not 1 <= week <= self.calendar.weeks:
-            raise ValueError(
-                f"academic week must be between 1 and {self.calendar.weeks}"
-            )
-        return self.effective_attending_week(
-            attending,
-            week,
-        ).attending_clinic_day_minimum
 
     def scheduling_case(self) -> SchedulingCase:
         """Project the workspace instance onto its separately persisted case."""

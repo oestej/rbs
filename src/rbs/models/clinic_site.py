@@ -278,6 +278,23 @@ class ClinicSiteConfig(StrictModel):
         weekday = tuple(Weekday)[calendar_day.weekday()]
         return self.max_capacity(weekday, session)
 
+    def max_attendings_on(self, calendar_day: date, session: Session) -> int:
+        """Most attendings who may precept here on one date and session.
+
+        The weekly half-day grid and dated overrides mean the same thing in
+        both staffing modes: a capacity-managed clinic is staffed by exactly
+        this many attendings, while an attending-managed clinic may have up
+        to this many scheduled to precept. Zero means nobody precepts then.
+        """
+        if self.is_closed(calendar_day):
+            return 0
+        override = self.capacity_override(calendar_day, session)
+        if override is not None:
+            return override.attendings
+        weekday = tuple(Weekday)[calendar_day.weekday()]
+        half_day = self.half_day(weekday, session)
+        return half_day.attendings if half_day is not None else 0
+
     def min_capacity_on(self, calendar_day: date, session: Session) -> int:
         """Return the effective minimum after closures and overrides."""
         if self.is_closed(calendar_day):

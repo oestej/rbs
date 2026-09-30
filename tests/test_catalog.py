@@ -1,3 +1,4 @@
+from collections import Counter
 from datetime import date
 
 import pytest
@@ -15,7 +16,11 @@ from rbs.catalog import (
     monday_of_week_containing,
     sample_instance,
 )
-from rbs.models.attending import AttendingVacation
+from rbs.models.attending import (
+    AttendingVacation,
+    AttendingWeeklyTargetMode,
+    AttendingWorkType,
+)
 from rbs.models.catalog import ConstraintCatalog
 from rbs.models.color_scheme import DEFAULT_COLOR_SCHEME
 from rbs.models.enums import RotationKind, Session, Weekday
@@ -54,10 +59,28 @@ def test_sample_residents_have_four_vacation_weeks() -> None:
         assert len(resident.vacation_weeks) == 4, resident.id
 
 
-def test_sample_attendings_show_default_and_custom_schedule_boundaries() -> None:
+def test_sample_faculty_precepts_three_half_days_a_week_when_clinics_run() -> None:
     instance = sample_instance()
+    policy = instance.clinic_policy
 
-    assert len(instance.attendings) == 4
+    assert len(instance.attendings) == 8
+    for attending in instance.attendings:
+        target = attending.weekly_shift_target_for(AttendingWorkType.PRECEPTING_CLINIC)
+        assert target is not None
+        assert (target.minimum_shifts_per_week, target.maximum_shifts_per_week) == (3, 3)
+        assert target.mode is AttendingWeeklyTargetMode.FIXED
+    # Preferred precepting falls when a clinic runs and within its maximum.
+    preferred = Counter(
+        (half_day.clinic_id, half_day.weekday, half_day.session)
+        for attending in instance.attendings
+        for half_day in attending.preferred_weekly_schedule_half_days
+        if half_day.work_type is AttendingWorkType.PRECEPTING_CLINIC
+    )
+    for (clinic_id, weekday, session), count in preferred.items():
+        capacity = policy.site(clinic_id).half_day(weekday, session)
+        assert capacity is not None
+        assert count <= capacity.attendings
+
     assert any(
         attending.schedule_start_date is None and attending.schedule_end_date is None
         for attending in instance.attendings
@@ -65,21 +88,11 @@ def test_sample_attendings_show_default_and_custom_schedule_boundaries() -> None
     assert any(attending.schedule_start_date is not None for attending in instance.attendings)
     assert any(attending.schedule_end_date is not None for attending in instance.attendings)
     assert any(attending.vacation_ranges for attending in instance.attendings)
-    preferred = next(
-        attending
-        for attending in instance.attendings
-        if attending.preferred_weekly_schedule_half_days
-    )
-    assert preferred.minimum_attending_clinic_days_per_week == 2
-    assert len(preferred.preferred_weekly_schedule_half_days) == 4
-    overridden = next(
-        attending for attending in instance.attendings if attending.half_days_per_week == 0
-    )
-    accepted_schedule = instance.attending_schedule_for(overridden.id)
-    assert accepted_schedule is not None
+    [accepted_schedule] = instance.attending_schedules
     schedule = accepted_schedule.weeks[0]
     assert schedule.week == 11
-    assert schedule.half_days_override == 3
+    # Two meetings, the academic Admin Time, and the usual three precepting.
+    assert schedule.half_days_override == 6
     assert [(half_day.weekday, half_day.session) for half_day in schedule.half_days] == [
         (Weekday.MONDAY, Session.MORNING),
         (Weekday.THURSDAY, Session.AFTERNOON),

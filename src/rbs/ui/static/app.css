@@ -560,6 +560,53 @@
   background: var(--rbs-surface-subtle);
 }
 
+.rbs-attending-summary-title {
+  flex: 1 1 180px;
+  overflow-wrap: anywhere;
+}
+
+.rbs-attending-summary-actions {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.rbs-attending-schedule-actions {
+  margin-left: auto;
+}
+
+.rbs-attending-schedule-edit-tools {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.rbs-attending-schedule-lock-actions {
+  flex-wrap: nowrap;
+}
+
+.rbs-attending-work-dialog {
+  display: flex;
+  width: min(94vw, 560px);
+  max-width: min(94vw, 560px);
+  max-height: 88vh;
+}
+
+.rbs-attending-work-dialog-body {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.rbs-attending-work-dialog .rbs-type-dialog-title {
+  overflow-wrap: anywhere;
+}
+
+.rbs-attending-work-dialog > :not(.rbs-attending-work-dialog-body) {
+  flex-shrink: 0;
+}
+
+.rbs-attending-work-dialog-footer > .nicegui-row {
+  margin-left: auto;
+}
+
 .rbs-attending-boundary-card {
   border: 1px solid var(--rbs-border);
   background: var(--rbs-surface-subtle);
@@ -954,8 +1001,19 @@
   padding: 5px;
 }
 
-.rbs-resident-clinic-session-cell.is-invalid-target {
+.rbs-resident-clinic-session-cell.is-invalid-target,
+.rbs-resident-clinic-session-cell.is-outside-schedule {
   background: var(--rbs-surface-muted);
+}
+
+.rbs-resident-clinic-session-cell.is-vacation {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--rbs-white) 0,
+    var(--rbs-white) 8px,
+    var(--rbs-vacation-tint) 8px,
+    var(--rbs-vacation-tint) 16px
+  );
 }
 
 .rbs-resident-clinic-session-cell.is-invalid-assignment {
@@ -1023,6 +1081,56 @@
 
 .rbs-resident-clinic-event.is-locked {
   cursor: default;
+}
+
+.rbs-attending-schedule-calendar .rbs-resident-clinic-event {
+  padding-right: var(--rbs-space-2);
+}
+
+.rbs-attending-schedule-calendar.is-editing
+  .rbs-resident-clinic-session-cell[role="button"] {
+  cursor: pointer;
+}
+
+.rbs-attending-schedule-calendar.is-editing
+  .rbs-resident-clinic-session-cell[role="button"]:hover {
+  background: var(--rbs-surface-subtle);
+}
+
+.rbs-attending-schedule-calendar.is-editing [role="button"]:focus-visible {
+  outline: none;
+  box-shadow: var(--rbs-effect-secondary-outline);
+}
+
+.rbs-attending-schedule-calendar .rbs-resident-clinic-event.is-locked {
+  padding-right: var(--rbs-space-6);
+}
+
+.rbs-attending-schedule-calendar.is-editing
+  .rbs-resident-clinic-event:has(.rbs-resident-clinic-event-lock) {
+  padding-right: var(--rbs-space-8);
+}
+
+.rbs-attending-work-content {
+  align-items: center;
+  overflow-wrap: anywhere;
+}
+
+.rbs-attending-work-title {
+  overflow-wrap: normal;
+  font-size: var(--rbs-type-schedule-size);
+  font-weight: var(--rbs-weight-bold);
+  line-height: var(--rbs-type-schedule-leading);
+}
+
+.rbs-attending-work-detail {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: var(--rbs-type-schedule-size);
+  font-weight: var(--rbs-weight-regular);
+  line-height: var(--rbs-type-schedule-leading);
 }
 
 .rbs-resident-clinic-event.manual-override {
@@ -2006,6 +2114,14 @@
 }
 
 @media (max-width: 760px) {
+  .rbs-attending-schedule-edit-tools {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rbs-attending-schedule-lock-actions {
+    flex-wrap: wrap;
+  }
+
   .rbs-training-level-editor-grid,
   .rbs-training-level-dialog-grid {
     grid-template-columns: minmax(0, 1fr);

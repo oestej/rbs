@@ -15,6 +15,11 @@ from rbs.solver.contract import (
     SolveResponse,
     SolveSuccess,
 )
+from rbs.solver.failure_report import (
+    SolverFailureReport,
+    describe_solver_failure,
+    format_report_text,
+)
 
 
 def solve_problem(
@@ -51,5 +56,8 @@ __all__ = [
     "SolverProcessClient",
     "SolverProcessError",
     "Schedule",
+    "SolverFailureReport",
+    "describe_solver_failure",
+    "format_report_text",
     "solve_problem",
 ]

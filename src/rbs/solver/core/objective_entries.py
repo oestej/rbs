@@ -238,7 +238,7 @@ def _resident_clinic_entries(
         open_sites = [
             site_id
             for site_id in policy.open_site_ids(calendar_day, allowed)
-            if instance.clinic_max_capacity_on(
+            if _capacity_view(context).clinic_max_capacity_on(
                 site_id,
                 calendar_day,
                 half_day.session,
@@ -375,6 +375,10 @@ def _materialize_week_entries(
     primary_by_slot: dict[tuple, list[Any]] = defaultdict(list)
     present_by_pgy: dict[tuple, list[Any]] = defaultdict(list)
     occupied_by_slot: dict[tuple, list[Any]] = defaultdict(list)
+    envelope = getattr(context, "attending_envelope", None)
+    managed = envelope.managed if envelope is not None else {}
+    state.pinned_to_managed = defaultdict(list)
+    state.flexible_share = defaultdict(list)
 
     for (resident_id, weekday, session, pinned), members in grouped.items():
         pgy = members[0][0].pgy
@@ -391,9 +395,19 @@ def _materialize_week_entries(
             present_by_slot[weekday, session].append(literal)
             present_by_pgy[weekday, session, pgy].append(literal)
         points = context.instance.clinic_capacity_for_pgy(pgy)
+        shares = _managed_shares(context, state, resident_id, pgy) if managed else {}
         for literal in literals:
             if not on_vacation:
                 occupied_by_slot[weekday, session].extend([literal] * points)
+                if pinned in managed:
+                    state.pinned_to_managed[weekday, session, pinned].extend(
+                        [literal] * points
+                    )
+                elif pinned is None:
+                    for clinic_id, percent in shares.items():
+                        state.flexible_share[weekday, session, clinic_id].append(
+                            (percent * points, literal)
+                        )
             if _counts_at_primary_site(context, week, weekday, session, pinned, literal):
                 primary_by_slot[weekday, session].extend([literal] * points)
     return (
@@ -405,10 +419,43 @@ def _materialize_week_entries(
     )
 
 
+def _capacity_view(context: PlanningContext):
+    """Upper-bound capacity for entry filters; plain contexts use the instance."""
+    view = getattr(context, "capacity_view", None)
+    return view if view is not None else context.instance
+
+
+def _managed_shares(
+    context: PlanningContext,
+    state: _ClinicObjectiveState,
+    resident_id: str,
+    pgy: int,
+) -> dict[str, int]:
+    """Whole-percent allocation targets for one resident at attending-managed clinics."""
+    cached = state.resident_managed_shares.get(resident_id)
+    if cached is not None:
+        return cached
+    envelope = context.attending_envelope
+    rules = context.instance.clinic_policy.allocation_rules_for(
+        pgy=pgy,
+        resident_id=resident_id,
+    )
+    total = sum(rule.target_percent for rule in rules)
+    shares = {
+        rule.clinic_id: round(100 * rule.target_percent / total)
+        for rule in rules
+        if total > 0 and rule.clinic_id in envelope.managed and rule.target_percent > 0
+    }
+    state.resident_managed_shares[resident_id] = shares
+    return shares
+
+
 def _add_half_day_capacity(
     context: PlanningContext,
     week: int,
     occupied_by_slot: dict[tuple, list[Any]],
+    pinned_to_managed: dict[tuple, list[Any]] | None = None,
+    state: _ClinicObjectiveState | None = None,
 ) -> None:
     """Cap a half-day at the clinic seats the whole directory opens.
 
@@ -425,12 +472,71 @@ def _add_half_day_capacity(
     overflow: allocation drops those sessions rather than failing, and forcing
     them empty would make a week unplaceable over a schedule the program is
     willing to accept.
+
+    At an attending-managed clinic the seats are the preceptors the solve
+    schedules there times the clinic's capacity points per attending, so the
+    bound links resident placement to the precepting envelope. Sessions
+    pinned to such a clinic are also bounded by its own seats.
     """
     instance = context.instance
     policy = instance.clinic_policy
     first_week_start = context.instance.calendar.first_week_start
+    envelope = getattr(context, "attending_envelope", None)
+    preceptors = (
+        envelope.week_preceptors(week, set(occupied_by_slot))
+        if envelope is not None and envelope.active
+        else {}
+    )
     for (weekday, session), literals in occupied_by_slot.items():
         calendar_day = clinic_slot_date(first_week_start, week, weekday)
+        handles = preceptors.get((weekday, session))
+        if handles:
+            # Attending-managed seats depend on who the solve sends to
+            # precept, so the bound is a constraint on both sides.
+            managed_ids = {handle.clinic_id for handle in handles}
+            fixed_capacity = sum(
+                instance.clinic_max_capacity_on(site_id, calendar_day, session)
+                for site_id in policy.site_ids
+                if site_id not in managed_ids
+            )
+            most = fixed_capacity + sum(
+                handle.ratio * (handle.fixed + handle.generated_upper_bound)
+                for handle in handles
+            )
+            if most <= 0:
+                # Nobody could ever seat these sessions: like a closure, it is
+                # allocation's to drop them, not the search's to forbid them.
+                continue
+            context.model.Add(
+                sum(literals)
+                <= fixed_capacity + sum(handle.capacity_points() for handle in handles)
+            )
+            # The staffing polish after the search re-chooses these counts
+            # for the placement the search settles on; see
+            # AttendingEnvelope.staffed_counts.
+            envelope.record_half_day(
+                week,
+                (weekday, session),
+                occupied=literals,
+                fixed_capacity=fixed_capacity,
+                pinned={
+                    handle.clinic_id: (pinned_to_managed or {}).get(
+                        (weekday, session, handle.clinic_id), []
+                    )
+                    for handle in handles
+                },
+                share=(
+                    {
+                        handle.clinic_id: state.flexible_share.get(
+                            (weekday, session, handle.clinic_id), []
+                        )
+                        for handle in handles
+                    }
+                    if state is not None
+                    else {}
+                ),
+            )
+            continue
         capacity = sum(
             instance.clinic_max_capacity_on(site_id, calendar_day, session)
             for site_id in policy.site_ids
@@ -438,6 +544,18 @@ def _add_half_day_capacity(
         # Below the seat count the bound is arithmetic, not a constraint.
         if 0 < capacity < len(literals):
             context.model.Add(sum(literals) <= capacity)
+    # A session pinned to one attending-managed clinic can only sit there.
+    for (weekday, session, site_id), literals in (pinned_to_managed or {}).items():
+        handle = next(
+            (
+                handle
+                for handle in preceptors.get((weekday, session), ())
+                if handle.clinic_id == site_id
+            ),
+            None,
+        )
+        if handle is not None:
+            context.model.Add(sum(literals) <= handle.capacity_points())
 
 
 def _counts_at_primary_site(
@@ -456,7 +574,7 @@ def _counts_at_primary_site(
         week,
         weekday,
     )
-    if context.instance.clinic_max_capacity_on(pinned, calendar_day, session) <= 0:
+    if _capacity_view(context).clinic_max_capacity_on(pinned, calendar_day, session) <= 0:
         context.model.Add(literal == 0)
     return pinned == policy.primary_site_id
 

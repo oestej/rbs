@@ -1900,7 +1900,7 @@ def test_clinic_editor_is_large_and_keeps_internal_id_hidden() -> None:
     assert dialog_card._style["width"] == "calc(100vw - 48px)"
 
 
-def test_clinic_editor_switches_staffing_source_without_discarding_capacity() -> None:
+def test_clinic_editor_keeps_the_weekly_grid_as_maximums_when_attending_managed() -> None:
     from nicegui import ui
 
     instance = sample_instance()
@@ -1932,13 +1932,19 @@ def test_clinic_editor_switches_staffing_source_without_discarding_capacity() ->
         and element._props.get("label") == "Save clinic"
     )
 
+    def number_labels() -> set[str]:
+        return {
+            element._props.get("label")
+            for element in ui.context.client.elements.values()
+            if element.__class__.__name__ == "Number"
+        }
+
     assert staffing.value == ClinicStaffingMode.CAPACITY_MANAGED.value
-    assert any(
-        getattr(element, "_text", None)
-        == "0 configured preceptor shifts · 0 in the template"
-        for element in created
-    )
+    assert "Attendings" in number_labels()
+    assert "Max attendings" not in number_labels()
     staffing.value = ClinicStaffingMode.ATTENDING_MANAGED.value
+    # The same weekly grid now caps how many attendings may precept.
+    assert "Max attendings" in number_labels()
     next(iter(save._event_listeners.values())).handler(None)
 
     assert len(saved) == 1

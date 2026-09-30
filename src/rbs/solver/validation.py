@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from rbs.models.instance import SolverProblem
 from rbs.models.rotation import RotationBlockConfig
 from rbs.models.schedule import Schedule
+from rbs.solver.attending_availability import schedule_capacity_view
 from rbs.solver.validation_assignments import _validate_assignments
+from rbs.solver.validation_attendings import _validate_attending_work
 from rbs.solver.validation_coverage import (
     _successful_schedule,
     _validate_block_vacation_limits,
@@ -39,7 +41,12 @@ class ScheduleValidationResult:
 
 
 def validate_schedule(instance: SolverProblem, schedule: Schedule) -> ScheduleValidationResult:
-    """Validate a schedule through independent identity, block, and clinic rules."""
+    """Validate a schedule through independent identity, block, and clinic rules.
+
+    Capacity at an attending-managed clinic is whatever the schedule's own
+    attending work staffs there, on top of hand-entered Precepting Clinic work.
+    """
+    instance = schedule_capacity_view(instance, schedule)
     errors: list[str] = []
     warnings: list[str] = []
     expected_weeks = set(range(1, instance.calendar.weeks + 1))
@@ -99,6 +106,7 @@ def validate_schedule(instance: SolverProblem, schedule: Schedule) -> ScheduleVa
         errors,
         successful=successful,
     )
+    _validate_attending_work(instance, schedule, errors)
     return ScheduleValidationResult(tuple(errors), tuple(warnings))
 
 
@@ -150,6 +158,7 @@ def _validate_working_draft_integrity(
         errors,
         successful=False,
     )
+    _validate_attending_work(instance, schedule, errors)
     return ScheduleValidationResult(tuple(errors), tuple(warnings))
 
 

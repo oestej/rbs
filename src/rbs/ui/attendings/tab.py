@@ -12,7 +12,9 @@ from rbs.attending_schedule import (
     AttendingScheduleIssueSeverity,
     AttendingScheduleReport,
     attending_schedule_report,
+    effective_attending_schedule_week,
 )
+from rbs.clinic_locks import attending_work_is_locked
 from rbs.models.attending import (
     ATTENDING_PREFERRED_WORK_TYPES,
     ATTENDING_WEEKLY_TARGET_WORK_TYPES,
@@ -21,7 +23,6 @@ from rbs.models.attending import (
     MAX_ATTENDING_CLINIC_DAYS_PER_WEEK,
     MAX_ATTENDING_HALF_DAYS_PER_WEEK,
     Attending,
-    AttendingSchedule,
     AttendingVacation,
     AttendingWeeklyShiftTarget,
     AttendingWeeklyTargetMode,
@@ -30,26 +31,30 @@ from rbs.models.attending import (
     AttendingWorkType,
     EffectiveAttendingWeek,
     attending_display_sort_key,
-    effective_attending_week,
 )
 from rbs.models.enums import Session, Weekday
 from rbs.models.instance import SchedulerInput
+from rbs.models.schedule import AssignedAttendingWork, Schedule
 from rbs.ui import master_detail, page_shells
 from rbs.ui.attendings.ops import (
     WEEKLY_SHIFT_TARGET_NONE,
     academic_year_date_range,
     add_attending,
     add_vacation_range,
-    apply_schedule_template,
-    clear_weekly_work_schedule,
+    attending_schedule_work_on,
+    attending_working_draft,
+    move_attending_schedule_half_day,
     move_work_half_day,
     next_attending_id,
     override_weekly_half_day_total,
     parse_attending_date,
     remove_attending,
+    replace_attending_schedule,
     replace_attending_with_schedule,
     replace_weekly_shift_target,
-    replace_weekly_work_schedule,
+    set_attending_schedule_half_day,
+    set_attending_schedule_locked,
+    set_attending_work_locked,
     use_default_weekly_half_day_total,
 )
 from rbs.ui.buttons import (
@@ -58,6 +63,7 @@ from rbs.ui.buttons import (
     ICON_BUTTON_PROPS,
     PRIMARY_BUTTON_PROPS,
     SECONDARY_BUTTON_PROPS,
+    TERTIARY_BUTTON_PROPS,
     button_props,
 )
 from rbs.ui.editor_common import _validation_message
@@ -70,6 +76,7 @@ from rbs.ui.half_day_schedule import (
 
 SelectAttending = Callable[[str | None], None]
 SaveAttending = Callable[[SchedulerInput, str | None], None]
+SaveAttendingSchedule = Callable[[SchedulerInput, Schedule | None, str], None]
 NEW_ATTENDING_ID = "__new_attending__"
 
 _WORK_TYPE_OPTIONS = {
@@ -93,6 +100,11 @@ def render_attendings_tab(
     selected_attending_id: str | None,
     on_select: SelectAttending,
     on_save: SaveAttending,
+    on_schedule_save: SaveAttending | None = None,
+    schedule_editing: bool = False,
+    on_schedule_editing_change: Callable[[bool], None] | None = None,
+    schedule: Schedule | None = None,
+    on_work_save: SaveAttendingSchedule | None = None,
 ) -> None:
     guard = EditorGuard()
 
@@ -133,6 +145,11 @@ def render_attendings_tab(
                 ),
                 on_select=on_select,
                 on_save=on_save,
+                on_schedule_save=on_schedule_save,
+                schedule_editing=schedule_editing,
+                on_schedule_editing_change=on_schedule_editing_change,
+                schedule=schedule,
+                on_work_save=on_work_save,
                 guard=guard,
             )
 
@@ -218,9 +235,32 @@ def _attending_detail_panel(
     on_select: SelectAttending,
     on_save: SaveAttending,
     guard: EditorGuard,
+    on_schedule_save: SaveAttending | None = None,
+    schedule_editing: bool = False,
+    on_schedule_editing_change: Callable[[bool], None] | None = None,
+    schedule: Schedule | None = None,
+    on_work_save: SaveAttendingSchedule | None = None,
 ) -> None:
     editing = creating
     panel = master_detail.detail_panel()
+
+    def save_schedule(updated: SchedulerInput, attending_id: str | None) -> None:
+        nonlocal instance
+        (on_schedule_save or on_save)(updated, attending_id)
+        instance = updated
+
+    def save_work(
+        updated: SchedulerInput, updated_schedule: Schedule | None, attending_id: str,
+    ) -> None:
+        nonlocal instance, schedule
+        on_work_save(updated, updated_schedule, attending_id)
+        instance, schedule = updated, updated_schedule
+
+    def set_schedule_editing(value: bool) -> None:
+        nonlocal schedule_editing
+        schedule_editing = value
+        if on_schedule_editing_change is not None:
+            on_schedule_editing_change(value)
 
     def render_panel() -> None:
         nonlocal editing
@@ -253,6 +293,7 @@ def _attending_detail_panel(
 
                 def start_editing() -> None:
                     nonlocal editing
+                    set_schedule_editing(False)
                     editing = True
                     render_panel()
 
@@ -260,7 +301,13 @@ def _attending_detail_panel(
                     instance,
                     attending,
                     on_edit=start_editing,
+                    on_select=on_select,
                     on_save=on_save,
+                    on_schedule_save=save_schedule,
+                    schedule_editing=schedule_editing,
+                    on_schedule_editing_change=set_schedule_editing,
+                    schedule=schedule,
+                    on_work_save=save_work if on_work_save is not None else None,
                 )
             else:
                 guard.clear()
@@ -275,44 +322,79 @@ def _attending_view(
     *,
     on_edit: Callable[[], None],
     on_save: SaveAttending,
+    on_select: SelectAttending | None = None,
+    on_schedule_save: SaveAttending | None = None,
+    schedule_editing: bool = False,
+    on_schedule_editing_change: Callable[[bool], None] | None = None,
+    schedule: Schedule | None = None,
+    on_work_save: SaveAttendingSchedule | None = None,
 ) -> None:
     from nicegui import ui
 
     first_day, last_day = academic_year_date_range(instance)
-    attending_schedule = instance.attending_schedule_for(attending.id)
-    weekly_schedules = attending_schedule.weeks if attending_schedule is not None else []
-    schedule_report = attending_schedule_report(
-        instance,
-        attending_id=attending.id,
-    )
+    def schedule_changed(updated: SchedulerInput, updated_schedule: Schedule | None) -> None:
+        nonlocal instance, schedule
+        instance, schedule = updated, updated_schedule
+        render_checks()
+
+    def render_checks() -> None:
+        report = attending_schedule_report(instance, attending_id=attending.id, schedule=schedule)
+        checks_badge.set_text(_attending_schedule_issue_count_label(
+            len(report.errors), len(report.warnings),
+        ))
+        checks_body.clear()
+        with checks_body:
+            _attending_schedule_issue_list(report)
+
     with ui.column().classes("w-full gap-4"):
         with master_detail.detail_card():
             with ui.row().classes("rbs-attending-summary w-full items-center gap-4 p-4"):
                 _attending_avatar(attending.name)
-                with ui.column().classes("min-w-0 gap-0"):
+                with ui.column().classes("rbs-attending-summary-title min-w-0 gap-0"):
                     ui.label(attending.name).classes("rbs-type-dialog-title")
                     ui.label(_attending_card_summary_label(attending)).classes(
                         "rbs-type-body rbs-text-muted"
                     )
-                ui.space()
-                ui.button("Edit attending", icon="edit", on_click=on_edit).props(
-                    SECONDARY_BUTTON_PROPS
-                )
-                with ui.button(
-                    icon="delete_outline",
-                    on_click=partial(
-                        _confirm_remove_attending,
-                        instance,
-                        attending,
-                        on_save=on_save,
-                    ),
-                ).props(
-                    button_props(
-                        DESTRUCTIVE_ICON_BUTTON_PROPS,
-                        f"aria-label='Remove attending {attending.name}'",
+                with ui.row().classes("rbs-attending-summary-actions items-center gap-2"):
+                    ui.button("Edit attending", icon="edit", on_click=on_edit).props(
+                        SECONDARY_BUTTON_PROPS
                     )
-                ):
-                    ui.tooltip("Remove attending")
+                    if on_select is not None:
+                        with ui.button(icon="arrow_back", on_click=partial(on_select, None)).props(
+                            button_props(
+                                ICON_BUTTON_PROPS,
+                                "aria-label='Back to attending directory'",
+                            )
+                        ):
+                            ui.tooltip("Back to attending directory")
+                    with ui.button(
+                        icon="delete_outline",
+                        on_click=lambda: _confirm_remove_attending(
+                            instance,
+                            attending,
+                            on_save=on_save,
+                        ),
+                    ).props(
+                        button_props(
+                            DESTRUCTIVE_ICON_BUTTON_PROPS,
+                            f"aria-label='Remove attending {attending.name}'",
+                        )
+                    ):
+                        ui.tooltip("Remove attending")
+        with master_detail.detail_card():
+            with ui.column().classes(
+                "rbs-resident-schedule-content w-full min-w-0 gap-3 p-5"
+            ):
+                _attending_schedule_calendar(
+                    instance,
+                    attending,
+                    on_save=on_schedule_save or on_save,
+                    editing=schedule_editing,
+                    on_editing_change=on_schedule_editing_change,
+                    on_change=schedule_changed,
+                    schedule=schedule,
+                    on_work_save=on_work_save,
+                )
         with master_detail.detail_card():
             with ui.column().classes("w-full gap-4 p-5"):
                 with ui.row().classes("w-full items-center justify-between gap-3"):
@@ -397,35 +479,6 @@ def _attending_view(
 
         with master_detail.detail_card():
             with ui.column().classes("w-full gap-3 p-5"):
-                with ui.row().classes("w-full items-center justify-between gap-3"):
-                    with ui.column().classes("gap-0"):
-                        ui.label("Week-by-week schedule").classes("rbs-type-section-title")
-                        ui.label(
-                            "Each academic week is independent. Only Precepting Clinic "
-                            "work supplies resident clinic capacity."
-                        ).classes("rbs-type-caption rbs-text-muted")
-                    ui.badge(
-                        _configured_week_count_label(
-                            len(weekly_schedules),
-                            instance.calendar.weeks,
-                        )
-                    ).props("outline").classes("rbs-muted-badge")
-                if instance.clinic_policy.academic_half_day_is_attending_admin_time:
-                    with ui.row().classes(
-                        "rbs-attending-work-row w-full items-center gap-3 rounded px-4 py-3"
-                    ):
-                        ui.icon("school").classes("rbs-text-primary")
-                        ui.label(
-                            "The effective academic half-day is automatically reserved "
-                            "as Admin Time in active, non-vacation weeks."
-                        ).classes("rbs-type-caption rbs-text-muted")
-                _attending_weekly_work_list(
-                    instance,
-                    attending,
-                )
-
-        with master_detail.detail_card():
-            with ui.column().classes("w-full gap-3 p-5"):
                 with ui.row().classes(
                     "w-full items-center justify-between gap-3"
                 ):
@@ -437,38 +490,9 @@ def _attending_view(
                             "Fixed rules are errors; Flexible targets and preferred "
                             "placements are warnings."
                         ).classes("rbs-type-caption rbs-text-muted")
-                    ui.badge(
-                        _attending_schedule_issue_count_label(
-                            len(schedule_report.errors),
-                            len(schedule_report.warnings),
-                        )
-                    ).props("outline").classes("rbs-muted-badge")
-                _attending_schedule_issue_list(schedule_report)
-
-        with master_detail.detail_card():
-            with ui.column().classes("w-full gap-3 p-5"):
-                with ui.row().classes("w-full items-center justify-between gap-3"):
-                    with ui.column().classes("gap-0"):
-                        ui.label("Schedule template").classes("rbs-type-section-title")
-                        ui.label(
-                            "This reusable pattern changes the schedule only when it is "
-                            "applied to selected weeks."
-                        ).classes("rbs-type-caption rbs-text-muted")
-                    ui.badge(
-                        _template_assignment_count_label(
-                            len(attending.schedule_template_half_days),
-                            attending.half_days_per_week,
-                        )
-                    ).props("outline").classes("rbs-muted-badge")
-                _attending_work_pattern_list(
-                    instance,
-                    attending.schedule_template_half_days,
-                    empty_title="No template pattern assigned.",
-                    empty_description=(
-                        "Open Edit attending to build a pattern, then apply it to the "
-                        "weeks that should use it."
-                    ),
-                )
+                    checks_badge = ui.badge().props("outline").classes("rbs-muted-badge")
+                checks_body = ui.column().classes("w-full gap-3")
+                render_checks()
 
         with master_detail.detail_card():
             with ui.column().classes("w-full gap-3 p-5"):
@@ -578,76 +602,422 @@ def _attending_weekly_shift_target_list(
             ui.badge(_weekly_target_mode_label(target.mode)).props("outline")
 
 
-def _attending_weekly_work_list(
+def _attending_schedule_calendar(
     instance: SchedulerInput,
     attending: Attending,
+    *,
+    editing: bool = False,
+    on_save: SaveAttending | None = None,
+    on_editing_change: Callable[[bool], None] | None = None,
+    on_change: Callable[[SchedulerInput, Schedule | None], None] | None = None,
+    schedule: Schedule | None = None,
+    on_work_save: SaveAttendingSchedule | None = None,
 ) -> None:
     from nicegui import ui
 
-    attending_schedule = instance.attending_schedule_for(attending.id)
-    schedules = attending_schedule.weeks if attending_schedule is not None else []
-    if not schedules:
-        empty_description = (
-            "Automatic academic Admin Time still applies. Add other work by "
-            "editing a week or applying the template."
-            if instance.clinic_policy.academic_half_day_is_attending_admin_time
-            else "Add work by editing a week or applying the template."
+    editing = bool(editing and (on_save is not None or on_work_save is not None))
+    scope = f"attending-{attending.id}"
+    week_containers: dict[int, object] = {}
+
+    def commit(
+        snapshot: tuple[SchedulerInput, Schedule | None],
+        updated: tuple[SchedulerInput, Schedule | None],
+        week: int | None,
+    ) -> None:
+        nonlocal instance, schedule
+        if (calendar.is_deleted or not editing
+                or snapshot[0] is not instance or snapshot[1] is not schedule):
+            raise ValueError("This attending schedule changed. Reopen the half-day and try again.")
+        if updated == (instance, schedule):
+            return
+        if on_work_save is not None:
+            on_work_save(*updated, attending.id)
+        elif on_save is not None and updated[1] == schedule:
+            on_save(updated[0], attending.id)
+        else:
+            raise ValueError("Reopen this attending's schedule before editing it.")
+        instance, schedule = updated
+        if calendar.is_deleted:
+            return
+        if on_change is not None:
+            on_change(*updated)
+        for changed_week in week_containers if week is None else (week,):
+            render_week(changed_week)
+
+    def open_slot(week: int, weekday: Weekday, session: Session) -> None:
+        snapshot = instance, schedule
+        effective = effective_attending_schedule_week(instance, attending, week, schedule)
+        assignment = effective.assignment_on(
+            weekday, session,
         )
-        with ui.row().classes(
-            "rbs-attending-work-empty w-full items-center gap-3 rounded px-4 py-4"
-        ):
-            ui.icon("calendar_view_week").classes("rbs-text-subtle")
-            with ui.column().classes("gap-0"):
-                ui.label("No week-specific work configured.").classes(
-                    "rbs-font-semibold"
+
+        def save(value: AttendingWorkHalfDay | None) -> None:
+            updated = set_attending_schedule_half_day(
+                *snapshot, attending.id, week=week, weekday=weekday, session=session,
+                assignment=value,
+            )
+            commit(snapshot, updated, week)
+
+        _work_half_day_dialog(
+            instance,
+            weekday=weekday,
+            session=session,
+            assignment=assignment,
+            context_label=f"Week {week}",
+            attending_name=attending.name,
+            calendar_day=effective.week_start + timedelta(days=tuple(Weekday).index(weekday)),
+            on_save=save,
+            on_remove=partial(save, None),
+        )
+
+    def remove_slot(week: int, weekday: Weekday, session: Session) -> None:
+        try:
+            updated = set_attending_schedule_half_day(
+                instance, schedule, attending.id, week=week, weekday=weekday, session=session,
+                assignment=None,
+            )
+            commit((instance, schedule), updated, week)
+        except (ValidationError, ValueError) as exc:
+            ui.notify(_validation_message(exc), type="negative", multi_line=True)
+
+    def drop_on(event, *, week: int, weekday: Weekday, session: Session) -> None:
+        payload = event.args if isinstance(event.args, dict) else {}
+        if str(payload.get("scope", "")) != scope:
+            return
+        try:
+            if int(payload.get("week")) != week:
+                raise ValueError("Work half-days can only be moved within the same week.")
+            updated = move_attending_schedule_half_day(
+                instance, schedule, attending.id, week=week,
+                source_weekday=Weekday(str(payload.get("weekday"))),
+                source_session=Session(str(payload.get("session"))),
+                target_weekday=weekday, target_session=session,
+            )
+            commit((instance, schedule), updated, week)
+            ui.notify("Work half-day moved", type="positive")
+        except (TypeError, ValidationError, ValueError) as exc:
+            ui.notify(
+                f"Work half-day not moved: {_validation_message(exc)}",
+                type="warning", multi_line=True,
+            )
+
+    def change_week_total(week: int, *, use_default: bool = False) -> None:
+        try:
+            schedules = list(instance.attending_schedule_weeks(attending.id))
+            assigned = effective_attending_schedule_week(
+                instance, attending, week, schedule,
+            ).assigned_half_days
+            if use_default:
+                schedules = use_default_weekly_half_day_total(
+                    instance, schedules, week=week, default_half_days=attending.half_days_per_week,
+                    assigned_half_days=assigned,
                 )
-                ui.label(empty_description).classes(
-                    "rbs-type-caption rbs-text-muted"
+            else:
+                schedules = override_weekly_half_day_total(
+                    instance, schedules, week=week, assigned_half_days=assigned,
                 )
-        return
-    first_day = instance.calendar.first_week_start
-    for schedule in schedules:
-        week_start = first_day + timedelta(weeks=schedule.week - 1)
-        week_end = week_start + timedelta(days=6)
-        with ui.row().classes(
-            "rbs-attending-work-row w-full items-start gap-3 rounded px-4 py-3"
+            updated = replace_attending_schedule(instance, attending.id, schedules)
+            commit((instance, schedule), (
+                updated,
+                attending_working_draft(updated, schedule) if schedule is not None else None,
+            ), week)
+        except (ValidationError, ValueError) as exc:
+            ui.notify(_validation_message(exc), type="negative", multi_line=True)
+
+    def save_lock(week: int, weekday: Weekday, session: Session, locked: bool) -> None:
+        try:
+            updated = set_attending_work_locked(
+                instance, schedule, attending.id, week=week,
+                weekday=weekday, session=session, locked=locked,
+            )
+            commit((instance, schedule), updated, week)
+        except (ValidationError, ValueError) as exc:
+            ui.notify(_validation_message(exc), type="negative", multi_line=True)
+
+    def save_all_locks(locked: bool) -> None:
+        try:
+            updated = set_attending_schedule_locked(instance, schedule, attending.id, locked=locked)
+            commit((instance, schedule), updated, None)
+        except (ValidationError, ValueError) as exc:
+            ui.notify(_validation_message(exc), type="negative", multi_line=True)
+
+    def toggle_editing() -> None:
+        nonlocal editing
+        editing = not editing
+        if on_editing_change is not None:
+            on_editing_change(editing)
+        edit_button.set_text("Return to view" if editing else "Edit schedule")
+        edit_button._props["icon"] = "visibility" if editing else "edit_calendar"
+        edit_tools.set_visibility(editing)
+        calendar.classes(
+            add="is-editing" if editing else "", remove="" if editing else "is-editing",
+        )
+        for week in week_containers:
+            render_week(week)
+
+    with ui.row().classes(
+        "rbs-attending-schedule-toolbar w-full items-center justify-between gap-3"
+    ):
+        with ui.row().classes("min-w-0 items-baseline gap-2"):
+            ui.label("Week-by-week schedule").classes("rbs-type-section-title")
+            ui.label(instance.academic_year).classes("rbs-type-caption rbs-text-muted")
+        with ui.row().classes("rbs-attending-schedule-actions items-center gap-3"):
+            if on_save is not None or on_work_save is not None:
+                edit_button = ui.button(
+                    "Return to view" if editing else "Edit schedule",
+                    icon="visibility" if editing else "edit_calendar",
+                    on_click=toggle_editing,
+                ).props(button_props(SECONDARY_BUTTON_PROPS, "dense"))
+
+    with ui.row().classes(
+        "rbs-attending-schedule-edit-tools w-full items-center gap-3"
+    ) as edit_tools:
+        ui.label(
+            "Click or right-click to assign, edit, or remove work. Drag unlocked blocks "
+            "to move or swap within a week. Changes are saved immediately."
+        ).classes("rbs-resident-clinic-edit-hint rbs-type-caption rbs-text-muted")
+        if on_work_save is not None:
+            with ui.row().classes("rbs-attending-schedule-lock-actions items-center gap-2"):
+                ui.button(
+                    "Lock all work", icon="lock", on_click=partial(save_all_locks, True),
+                ).props(
+                    button_props(SECONDARY_BUTTON_PROPS, "dense"),
+                )
+                ui.button(
+                    "Unlock all work", icon="lock_open", on_click=partial(save_all_locks, False),
+                ).props(
+                    button_props(SECONDARY_BUTTON_PROPS, "dense"),
+                )
+    edit_tools.set_visibility(editing)
+
+    calendar = ui.column().classes(
+        "rbs-attending-schedule-calendar rbs-resident-clinic-calendar-list w-full min-w-0 gap-4",
+    )
+    if editing:
+        calendar.classes("is-editing")
+
+    def render_week(week: int) -> None:
+        container = week_containers[week]
+        container.clear()
+        effective = effective_attending_schedule_week(instance, attending, week, schedule)
+        case_schedule = instance.attending_schedule_for(attending.id)
+        saved_week = case_schedule.schedule_for_week(week) if case_schedule is not None else None
+        dates = _short_week_range_label(
+            effective.week_start, effective.week_start + timedelta(days=6),
+        )
+
+        def render_cell(weekday: Weekday, session: Session) -> None:
+            _attending_schedule_cell(
+                instance, attending, effective, weekday, session,
+                editing=editing,
+                on_edit=partial(open_slot, week, weekday, session),
+                on_remove=partial(remove_slot, week, weekday, session),
+                on_drop=partial(drop_on, week=week, weekday=weekday, session=session),
+                work=attending_schedule_work_on(
+                    instance, schedule, attending.id, week=week, weekday=weekday, session=session,
+                ),
+                on_lock_change=(
+                    partial(save_lock, week, weekday, session)
+                    if on_work_save is not None else None
+                ),
+            )
+
+        with container, (
+            ui.element("section")
+            .classes("rbs-resident-clinic-week w-full")
+            .props(f"aria-label='Week {week} · {dates}'")
         ):
-            ui.icon("calendar_view_week").classes("rbs-text-primary")
-            with ui.column().classes("min-w-0 flex-1 gap-0"):
-                ui.label(
-                    f"Week {schedule.week} · {_short_week_range_label(week_start, week_end)}"
-                ).classes("rbs-font-semibold")
-                ui.label(
-                    _weekly_assignment_summary(instance, schedule.half_days)
-                ).classes("rbs-type-caption rbs-text-muted")
-            with ui.column().classes("items-end gap-1"):
-                ui.badge(
-                    _assigned_half_day_target_label(
-                        _configured_assignment_count_with_academic_admin(
-                            instance,
-                            attending,
-                            schedule,
-                        ),
-                        schedule.effective_half_days(
-                            attending.half_days_per_week
-                        ),
-                    )
-                ).props("outline").classes("rbs-muted-badge")
-                if schedule.half_days_override is not None:
-                    ui.badge("Week override").props("outline").classes(
-                        "rbs-muted-badge"
-                    )
+            with ui.row().classes(
+                "rbs-resident-clinic-week-header w-full items-center justify-between gap-3"
+            ):
+                with ui.row().classes("items-baseline gap-2"):
+                    ui.label(f"Week {week}").classes("rbs-resident-clinic-week-number")
+                    ui.label(dates).classes("rbs-type-caption rbs-text-muted")
+                with ui.row().classes("items-center gap-2"):
+                    ui.badge(
+                        _assigned_half_day_target_label(
+                            effective.assigned_half_days, effective.target_half_days,
+                        )
+                        if effective.is_active_week else "Outside schedule dates"
+                    ).props("outline").classes("rbs-muted-badge")
+                    if saved_week is not None and saved_week.half_days_override is not None:
+                        ui.badge("Week override").props("outline").classes("rbs-muted-badge")
+                    if editing and effective.is_active_week:
+                        if effective.assigned_half_days != effective.target_half_days:
+                            with ui.button(
+                                "Override", icon="tune", on_click=partial(change_week_total, week),
+                            ).props(button_props(
+                                SECONDARY_BUTTON_PROPS, "dense",
+                                f"aria-label='Override half-day total for week {week}'",
+                            )):
+                                ui.tooltip("Use the assigned count as this week's half-day total")
+                        if saved_week is not None and saved_week.half_days_override is not None:
+                            with ui.button(
+                                "Use default", icon="undo",
+                                on_click=partial(change_week_total, week, use_default=True),
+                            ).props(button_props(
+                                SECONDARY_BUTTON_PROPS, "dense",
+                                f"aria-label='Use default half-day total for week {week}'",
+                            )) as default_button:
+                                default_button.set_enabled(
+                                    effective.assigned_half_days <= attending.half_days_per_week,
+                                )
+                                ui.tooltip("Remove this week's half-day override")
+            render_half_day_grid(
+                tuple(Weekday), render_cell=render_cell,
+                day_details={
+                    weekday: f"{effective.week_start + timedelta(days=index):%b %d}"
+                    for index, weekday in enumerate(Weekday)
+                },
+            )
+
+    with calendar:
+        for week in range(1, instance.calendar.weeks + 1):
+            week_containers[week] = ui.column().classes("w-full gap-0")
+            render_week(week)
 
 
-def _configured_assignment_count_with_academic_admin(
+def _attending_schedule_cell(
     instance: SchedulerInput,
     attending: Attending,
-    schedule: AttendingWeeklyWorkSchedule,
-) -> int:
-    return instance.effective_attending_week(
-        attending,
-        schedule.week,
-    ).assigned_half_days
+    effective: EffectiveAttendingWeek,
+    weekday: Weekday,
+    session: Session,
+    *,
+    editing: bool = False,
+    on_edit: Callable[[], None] | None = None,
+    on_remove: Callable[[], None] | None = None,
+    on_drop: Callable | None = None,
+    work: AssignedAttendingWork | None = None,
+    on_lock_change: Callable[[bool], None] | None = None,
+) -> None:
+    from nicegui import ui
+
+    calendar_day = effective.week_start + timedelta(days=tuple(Weekday).index(weekday))
+    first_day, last_day = academic_year_date_range(instance)
+    outside_schedule = not attending.is_scheduled_on(
+        calendar_day,
+        academic_year_start=first_day,
+        academic_year_end=last_day,
+    )
+    vacation = not outside_schedule and attending.is_on_vacation(calendar_day)
+    assignment = effective.assignment_on(weekday, session)
+    automatic_admin = assignment is not None and assignment == effective.automatic_admin_half_day
+    if outside_schedule:
+        label, classes = "Outside schedule dates", "is-outside-schedule"
+    elif vacation:
+        label, classes = "Vacation", "is-vacation"
+    elif assignment is None:
+        label, classes = "No scheduled work", ""
+    else:
+        label = (
+            "Admin Time · Academic half-day"
+            if automatic_admin
+            else _work_assignment_label(instance, assignment)
+        )
+        classes = "is-occupied"
+
+    locked = work is not None and attending_work_is_locked(instance, work)
+    manageable = editing and not outside_schedule and not vacation and not automatic_admin
+    editable = manageable and not locked
+    accessible_name = (
+        f"{'Assign' if assignment is None else 'Edit'} {weekday.value.title()} "
+        f"{_work_session_label(session)} in week {effective.week}"
+    )
+    cell = create_half_day_cell(
+        classes=classes,
+        on_drop=on_drop if editable else None,
+        on_click=on_edit if editable and assignment is None else None,
+        accessible_name=accessible_name,
+    )
+    if not editable or assignment is not None:
+        cell._props["aria-label"] = (
+            f"{calendar_day:%A, %B %d, %Y} · {_work_session_label(session)} · {label}"
+        )
+    with cell:
+        if manageable:
+            with ui.context_menu().classes("rbs-resident-clinic-context-menu"):
+                ui.label(
+                    f"{weekday.value.title()} · {_work_session_label(session)}"
+                ).classes("rbs-resident-clinic-context-heading")
+                edit_item = ui.menu_item(
+                    "Assign half-day" if assignment is None else "Edit assignment",
+                    on_click=on_edit,
+                )
+                if locked:
+                    edit_item.props("disable")
+                if assignment is not None:
+                    remove_item = ui.menu_item("Remove assignment", on_click=on_remove)
+                    if locked:
+                        remove_item.props("disable")
+                    if on_lock_change is not None:
+                        ui.menu_item(
+                            "Unlock work half-day" if locked else "Lock work half-day",
+                            on_click=partial(on_lock_change, not locked),
+                        )
+        if assignment is None:
+            if editable:
+                ui.icon("add").classes("rbs-resident-clinic-session-empty")
+            else:
+                ui.label("—" if label == "No scheduled work" else label).classes(
+                    "rbs-type-caption rbs-text-muted self-center w-full text-center"
+                )
+            return
+        event = create_draggable_half_day_event(
+            classes=(
+                _work_event_class(assignment)
+                + (" is-locked" if locked or automatic_admin else "")
+            ),
+            draggable=editable,
+            week=effective.week,
+            weekday=weekday,
+            session=session,
+            scope=f"attending-{attending.id}",
+            on_click=on_edit if editable else None,
+            accessible_name=accessible_name,
+        )
+        if assignment.clinic_id is not None:
+            site = instance.clinic_policy.site(assignment.clinic_id)
+            event.style(
+                f"--rbs-clinic-site-color: {site.color}; "
+                f"--rbs-clinic-site-tint: {site.light_color}"
+            )
+        with event:
+            with ui.column().classes("rbs-attending-work-content w-full min-w-0 gap-1"):
+                ui.label(_WORK_TYPE_OPTIONS[assignment.work_type.value]).classes(
+                    "rbs-attending-work-title rbs-resident-clinic-event-location"
+                )
+                detail = (
+                    "Academic half-day" if automatic_admin
+                    else instance.clinic_policy.site_name(assignment.clinic_id)
+                    if assignment.clinic_id is not None else assignment.description
+                )
+                if detail:
+                    ui.label(detail).classes("rbs-attending-work-detail")
+            ui.tooltip(label)
+            if manageable and on_lock_change is not None:
+                action = "Unlock" if locked else "Lock"
+                lock_button = ui.button(icon="lock" if locked else "lock_open").props(
+                    button_props(
+                        ICON_BUTTON_PROPS, "draggable=false",
+                        f"aria-label='{action} work half-day: {weekday.value.title()} "
+                        f"{_work_session_label(session)} in week {effective.week}'",
+                    ),
+                ).classes("rbs-resident-clinic-event-lock")
+                lock_button.on("click", partial(on_lock_change, not locked),
+                               js_handler="(event) => { event.stopPropagation(); emit(event); }")
+                lock_button.on("mousedown", js_handler="(event) => event.stopPropagation()")
+                lock_button.on("keydown", js_handler="(event) => event.stopPropagation()")
+                with lock_button:
+                    ui.tooltip(f"{action} work half-day")
+            elif locked or automatic_admin:
+                with ui.icon("lock").classes(
+                    "rbs-resident-clinic-fixed-lock"
+                ):
+                    ui.tooltip(
+                        "Reserved by the program academic half-day"
+                        if automatic_admin else "Locked work half-day"
+                    )
 
 
 def _attending_vacation_list(vacations: list[AttendingVacation]) -> None:
@@ -745,74 +1115,6 @@ def _attending_form(
         tuple[AttendingWorkType, object, object, object]
     ] = []
     controls: dict[str, object] = {}
-    first_academic_day, last_academic_day = academic_year_date_range(instance)
-
-    def draft_boundary(
-        *,
-        default_control: str,
-        date_control: str,
-        academic_default: date,
-        saved_value: date | None,
-    ) -> date:
-        if bool(getattr(controls.get(default_control), "value", True)):
-            return academic_default
-        try:
-            return date.fromisoformat(
-                str(getattr(controls.get(date_control), "value", "") or "")
-            )
-        except ValueError:
-            return saved_value or academic_default
-
-    def draft_effective_week(week: int) -> EffectiveAttendingWeek:
-        assert attending is not None
-        start_date = draft_boundary(
-            default_control="default_start",
-            date_control="start",
-            academic_default=first_academic_day,
-            saved_value=(attending.schedule_start_date if attending is not None else None),
-        )
-        end_date = draft_boundary(
-            default_control="default_end",
-            date_control="end",
-            academic_default=last_academic_day,
-            saved_value=(attending.schedule_end_date if attending is not None else None),
-        )
-        try:
-            draft_attending = Attending(
-                id=attending.id,
-                name=attending.name,
-                half_days_per_week=getattr(
-                    controls.get("half_days_per_week"),
-                    "value",
-                    attending.half_days_per_week,
-                ),
-                schedule_start_date=start_date,
-                schedule_end_date=end_date,
-                vacation_ranges=list(initial_vacations),
-            )
-        except ValidationError:
-            # Keep the board usable while a date or number control contains an
-            # incomplete draft. Save still reports the precise validation error.
-            draft_attending = attending
-        draft_schedule = (
-            AttendingSchedule(
-                attending_id=attending.id,
-                weeks=list(initial_weekly_schedules),
-            )
-            if initial_weekly_schedules
-            else None
-        )
-        return effective_attending_week(
-            draft_attending,
-            draft_schedule,
-            week=week,
-            first_day=first_academic_day,
-            last_day=last_academic_day,
-            academic_half_day=instance.academic_half_day_for_week(week),
-            automatic_academic_admin=(
-                instance.clinic_policy.academic_half_day_is_attending_admin_time
-            ),
-        )
 
     def configured_weekly_shift_targets() -> list[AttendingWeeklyShiftTarget]:
         if not weekly_shift_target_controls:
@@ -891,8 +1193,7 @@ def _attending_form(
         "Add their basic schedule details. Targets, work, and vacation come next."
         if creating
         else (
-            f"Update {attending.name}'s targets, preferred schedule, weekly work, "
-            "dates, and vacation."
+            f"Update {attending.name}'s dates, targets, preferred schedule, and vacation."
         )
     )
     with master_detail.detail_card():
@@ -925,11 +1226,6 @@ def _attending_form(
                     controls=controls,
                     autofocus=True,
                 )
-                ui.label(
-                    "After adding this attending, use their editor to configure category "
-                    "targets, a preferred weekly schedule, weekly work, a reusable "
-                    "template, and vacation."
-                ).classes("rbs-type-caption rbs-text-muted")
         else:
             with (
                 ui.tabs()
@@ -939,11 +1235,6 @@ def _attending_form(
                 ) as editor_tabs
             ):
                 details_tab = ui.tab("details", label="Details", icon="person")
-                weekly_tab = ui.tab(
-                    "weekly_schedule",
-                    label="Schedule",
-                    icon="calendar_view_week",
-                )
                 targets_tab = ui.tab(
                     "weekly_targets",
                     label="Targets",
@@ -953,11 +1244,6 @@ def _attending_form(
                     "preferences",
                     label="Preferences",
                     icon="favorite_border",
-                )
-                template_tab = ui.tab(
-                    "schedule_template",
-                    label="Template",
-                    icon="content_copy",
                 )
                 vacation_tab = ui.tab("vacation", label="Vacation", icon="beach_access")
             with ui.tab_panels(editor_tabs, value=details_tab).classes(
@@ -969,16 +1255,6 @@ def _attending_form(
                             instance,
                             attending=attending,
                             controls=controls,
-                        )
-
-                with ui.tab_panel(weekly_tab).classes("p-0"):
-                    with ui.column().classes("w-full gap-4 p-5"):
-                        refresh_weekly_editor = _weekly_work_editor(
-                            instance,
-                            initial_weekly_schedules,
-                            initial_schedule_template,
-                            weekly_target=half_days_per_week,
-                            effective_week_for=draft_effective_week,
                         )
 
                 with ui.tab_panel(targets_tab).classes("p-0"):
@@ -1001,33 +1277,12 @@ def _attending_form(
                             weekly_target=half_days_per_week,
                         )
 
-                with ui.tab_panel(template_tab).classes("p-0"):
-                    with ui.column().classes("w-full gap-4 p-5"):
-                        _schedule_template_editor(
-                            instance,
-                            initial_schedule_template,
-                            initial_weekly_schedules,
-                            weekly_target=half_days_per_week,
-                            on_applied=refresh_weekly_editor,
-                        )
-
                 with ui.tab_panel(vacation_tab).classes("p-0"):
                     with ui.column().classes("w-full gap-4 p-5"):
                         _vacation_range_editor(
                             instance,
                             initial_vacations,
-                            on_change=refresh_weekly_editor,
                         )
-
-            for control_name in (
-                "default_start",
-                "start",
-                "default_end",
-                "end",
-            ):
-                controls[control_name].on_value_change(
-                    lambda _event: refresh_weekly_editor()
-                )
 
     def current_editor_state() -> dict[str, object]:
         return {
@@ -1143,9 +1398,6 @@ def _attending_details_editor(
     ):
         with ui.column().classes("gap-0"):
             ui.label("Schedule dates").classes("rbs-type-section-title")
-            ui.label(
-                "Keep a boundary tied to the academic year, or set a custom date."
-            ).classes("rbs-type-caption rbs-text-muted")
         with ui.row().classes("w-full items-start gap-4 flex-wrap"):
             start_default = ui.checkbox(
                 "Use academic year start",
@@ -1315,307 +1567,6 @@ def _weekly_shift_target_editor(
     return minimum_clinic_days
 
 
-def _weekly_work_editor(
-    instance: SchedulerInput,
-    schedules: list[AttendingWeeklyWorkSchedule],
-    template: list[AttendingWorkHalfDay],
-    *,
-    weekly_target: object,
-    effective_week_for: Callable[[int], EffectiveAttendingWeek],
-) -> Callable[[], None]:
-    from nicegui import ui
-
-    def target_value() -> int:
-        value = getattr(weekly_target, "value", DEFAULT_ATTENDING_HALF_DAYS_PER_WEEK)
-        return int(value if value is not None else DEFAULT_ATTENDING_HALF_DAYS_PER_WEEK)
-
-    with ui.row().classes("w-full items-center justify-between gap-3"):
-        with ui.column().classes("gap-0"):
-            ui.label("Week-by-week schedule").classes("rbs-type-section-title")
-            ui.label(
-                "Edit each academic week independently. Override can make the current "
-                "assignment count this week's half-day total."
-            ).classes("rbs-type-caption rbs-text-muted")
-        count_badge = (
-            ui.badge(
-                _configured_week_count_label(len(schedules), instance.calendar.weeks)
-            )
-            .props("outline")
-            .classes("rbs-muted-badge")
-        )
-
-    week_select = (
-        ui.select(
-            _academic_week_options(instance),
-            value=1,
-            label="Academic week",
-        )
-        .props("outlined options-dense")
-        .classes("w-full md:w-80")
-    )
-    week_container = ui.column().classes("w-full gap-3")
-
-    def selected_week() -> int:
-        return int(getattr(week_select, "value", 1) or 1)
-
-    def schedule_for(week: int) -> AttendingWeeklyWorkSchedule | None:
-        return next((schedule for schedule in schedules if schedule.week == week), None)
-
-    def refresh_count() -> None:
-        count_badge.set_text(
-            _configured_week_count_label(len(schedules), instance.calendar.weeks)
-        )
-
-    def render_week() -> None:
-        week = selected_week()
-        week_container.clear()
-        schedule = schedule_for(week)
-        half_days = list(schedule.half_days) if schedule is not None else []
-        reserved_admin = effective_week_for(week).automatic_admin_half_day
-        week_start = instance.calendar.first_week_start + timedelta(weeks=week - 1)
-        week_end = week_start + timedelta(days=6)
-
-        def effective_target() -> int:
-            return effective_week_for(week).target_half_days
-
-        def assigned_count() -> int:
-            return effective_week_for(week).assigned_half_days
-
-        with week_container:
-            with ui.row().classes("w-full items-center justify-between gap-3 flex-wrap"):
-                with ui.column().classes("gap-0"):
-                    ui.label(
-                        f"Week {week} · {_short_week_range_label(week_start, week_end)}"
-                    ).classes("rbs-font-semibold")
-                    status_label = ui.label(
-                        "Not configured — no work is scheduled in this week."
-                    ).classes("rbs-type-caption rbs-text-muted")
-                with ui.row().classes("items-center gap-2"):
-                    assigned_badge = (
-                        ui.badge(
-                            _assigned_half_day_target_label(
-                                assigned_count(),
-                                effective_target(),
-                            )
-                        )
-                        .props("outline")
-                        .classes("rbs-muted-badge")
-                    )
-                    override_badge = ui.badge("Week override").props("outline").classes(
-                        "rbs-muted-badge"
-                    )
-            with ui.row().classes("w-full items-center gap-2 flex-wrap"):
-
-                def apply_to_week() -> None:
-                    def replace() -> None:
-                        try:
-                            schedules[:] = replace_weekly_work_schedule(
-                                instance,
-                                schedules,
-                                week=week,
-                                half_days=template,
-                                half_days_override=(
-                                    current.half_days_override
-                                    if current is not None
-                                    else None
-                                ),
-                            )
-                            refresh_count()
-                            render_week()
-                            ui.notify(f"Applied the template to week {week}", type="positive")
-                        except (ValidationError, ValueError) as exc:
-                            ui.notify(
-                                _validation_message(exc),
-                                type="negative",
-                                multi_line=True,
-                            )
-
-                    current = schedule_for(week)
-                    if current is not None and current.half_days != template:
-                        _confirm_draft_schedule_replacement(
-                            title=f"Replace week {week}?",
-                            description=(
-                                "Applying the template replaces every AM and PM assignment "
-                                "in this week. Its half-day override is preserved."
-                            ),
-                            confirm_label="Replace week",
-                            on_confirm=replace,
-                        )
-                    else:
-                        replace()
-
-                ui.button(
-                    "Apply template to this week",
-                    icon="content_copy",
-                    on_click=apply_to_week,
-                ).props(SECONDARY_BUTTON_PROPS)
-
-                def override_week() -> None:
-                    try:
-                        schedules[:] = override_weekly_half_day_total(
-                            instance,
-                            schedules,
-                            week=week,
-                            assigned_half_days=assigned_count(),
-                        )
-                        current = schedule_for(week)
-                        assert current is not None
-                        assert current.half_days_override is not None
-                        override_label = _half_days_per_week_label(
-                            current.half_days_override
-                        )
-                        ui.notify(
-                            f"Week {week} now uses {override_label}",
-                            type="positive",
-                        )
-                        render_week()
-                    except (ValidationError, ValueError) as exc:
-                        ui.notify(
-                            _validation_message(exc),
-                            type="negative",
-                            multi_line=True,
-                        )
-
-                with ui.button(
-                    "Override",
-                    icon="tune",
-                    on_click=override_week,
-                ).props(SECONDARY_BUTTON_PROPS) as override_button:
-                    ui.tooltip(
-                        "Use the number currently assigned as this week's half-day total"
-                    )
-
-                def use_default() -> None:
-                    try:
-                        schedules[:] = use_default_weekly_half_day_total(
-                            instance,
-                            schedules,
-                            week=week,
-                            default_half_days=target_value(),
-                            assigned_half_days=assigned_count(),
-                        )
-                        ui.notify(
-                            f"Week {week} now uses the attending default",
-                            type="positive",
-                        )
-                        render_week()
-                    except (ValidationError, ValueError) as exc:
-                        ui.notify(
-                            _validation_message(exc),
-                            type="negative",
-                            multi_line=True,
-                        )
-
-                with ui.button(
-                    "Use default",
-                    icon="undo",
-                    on_click=use_default,
-                ).props(SECONDARY_BUTTON_PROPS) as default_button:
-                    ui.tooltip("Remove this week's half-day override")
-
-                def clear_week() -> None:
-                    current = schedule_for(week)
-                    if current is None:
-                        return
-
-                    def clear() -> None:
-                        schedules[:] = clear_weekly_work_schedule(
-                            instance,
-                            schedules,
-                            week=week,
-                        )
-                        refresh_count()
-                        render_week()
-                        ui.notify(f"Cleared week {week}", type="positive")
-
-                    _confirm_draft_schedule_replacement(
-                        title=f"Clear week {week}?",
-                        description=(
-                            "Every AM and PM assignment and this week's half-day override "
-                            "will be removed from the draft."
-                        ),
-                        confirm_label="Clear week",
-                        on_confirm=clear,
-                    )
-
-                clear_button = ui.button(
-                    "Clear this week",
-                    icon="event_busy",
-                    on_click=clear_week,
-                ).props(DESTRUCTIVE_BUTTON_PROPS)
-
-            def refresh_week_controls() -> None:
-                current = schedule_for(week)
-                assigned = assigned_count()
-                target = effective_target()
-                status_label.set_text(
-                    "Academic half-day is automatically reserved as Admin Time."
-                    if current is None and reserved_admin is not None
-                    else "Not configured — no work is scheduled in this week."
-                    if current is None
-                    else (
-                        "This week uses its own half-day total."
-                        if current.half_days_override is not None
-                        else "This week uses the attending's default half-day total."
-                    )
-                )
-                assigned_badge.set_text(
-                    _assigned_half_day_target_label(assigned, target)
-                )
-                has_override = (
-                    current is not None and current.half_days_override is not None
-                )
-                override_badge.set_visibility(has_override)
-                override_button.set_visibility(assigned != target)
-                default_button.set_visibility(has_override)
-                default_button.set_enabled(assigned <= target_value())
-                clear_button.set_enabled(current is not None)
-                refresh_count()
-
-            def save_half_days(updated: list[AttendingWorkHalfDay]) -> None:
-                current = schedule_for(week)
-                schedules[:] = replace_weekly_work_schedule(
-                    instance,
-                    schedules,
-                    week=week,
-                    half_days=updated,
-                    half_days_override=(
-                        current.half_days_override if current is not None else None
-                    ),
-                )
-                refresh_week_controls()
-
-            ui.label(
-                "Click a half-day to assign or edit it. Drag work blocks to move "
-                "or swap them within this week. If the assigned count differs from "
-                "the total, Override adopts the current count for this week."
-            ).classes("rbs-type-caption rbs-text-muted")
-            _work_schedule_grid(
-                instance,
-                half_days,
-                on_change=save_half_days,
-                scope=f"attending-week-{week}",
-                week=week,
-                day_details={
-                    weekday: (
-                        f"{week_start + timedelta(days=index):%b} "
-                        f"{(week_start + timedelta(days=index)).day}"
-                    )
-                    for index, weekday in enumerate(Weekday)
-                },
-                context_label=f"week {week}",
-                reserved_half_days=(
-                    [reserved_admin] if reserved_admin is not None else []
-                ),
-            )
-            refresh_week_controls()
-
-    week_select.on_value_change(lambda _event: render_week())
-    weekly_target.on_value_change(lambda _event: render_week())
-    render_week()
-    return render_week
-
-
 def _preferred_weekly_schedule_editor(
     instance: SchedulerInput,
     preferred_schedule: list[AttendingWorkHalfDay],
@@ -1676,132 +1627,6 @@ def _preferred_weekly_schedule_editor(
         context_label="preferred weekly schedule",
         allowed_work_types=ATTENDING_PREFERRED_WORK_TYPES,
     )
-
-
-def _schedule_template_editor(
-    instance: SchedulerInput,
-    template: list[AttendingWorkHalfDay],
-    schedules: list[AttendingWeeklyWorkSchedule],
-    *,
-    weekly_target: object,
-    on_applied: Callable[[], None],
-) -> None:
-    from nicegui import ui
-
-    def target_value() -> int:
-        value = getattr(weekly_target, "value", DEFAULT_ATTENDING_HALF_DAYS_PER_WEEK)
-        return int(value if value is not None else DEFAULT_ATTENDING_HALF_DAYS_PER_WEEK)
-
-    with ui.row().classes("w-full items-center justify-between gap-3"):
-        with ui.column().classes("gap-0"):
-            ui.label("Schedule template").classes("rbs-type-section-title")
-            ui.label(
-                "Build a reusable pattern, then copy it into a week range. Applied "
-                "weeks remain independent when this template changes later."
-            ).classes("rbs-type-caption rbs-text-muted")
-        template_badge = (
-            ui.badge(_template_assignment_count_label(len(template), target_value()))
-            .props("outline")
-            .classes("rbs-muted-badge")
-        )
-
-    def template_changed(updated: list[AttendingWorkHalfDay]) -> None:
-        template[:] = updated
-        template_badge.set_text(
-            _template_assignment_count_label(len(template), target_value())
-        )
-
-    weekly_target.on_value_change(
-        lambda _event: template_badge.set_text(
-            _template_assignment_count_label(len(template), target_value())
-        )
-    )
-    ui.label(
-        "Click a half-day to assign or edit it. Drag work blocks to move or swap "
-        "them within the template."
-    ).classes("rbs-type-caption rbs-text-muted")
-    _work_schedule_grid(
-        instance,
-        template,
-        on_change=template_changed,
-        scope="attending-template",
-        week=0,
-        context_label="schedule template",
-    )
-
-    ui.separator()
-    with ui.column().classes("w-full gap-3"):
-        ui.label("Apply template").classes("rbs-font-semibold")
-        ui.label(
-            "Applying replaces the saved schedule in every selected week. It makes "
-            "copies, not a continuing link to the template."
-        ).classes("rbs-type-caption rbs-text-muted")
-        week_options = _academic_week_options(instance)
-        with ui.row().classes("w-full items-end gap-3 flex-wrap"):
-            first_week = (
-                ui.select(week_options, value=1, label="First week")
-                .props("outlined options-dense")
-                .classes("w-full md:flex-1")
-            )
-            last_week = (
-                ui.select(
-                    week_options,
-                    value=instance.calendar.weeks,
-                    label="Last week",
-                )
-                .props("outlined options-dense")
-                .classes("w-full md:flex-1")
-            )
-
-            def apply_range() -> None:
-                def apply() -> None:
-                    try:
-                        schedules[:] = apply_schedule_template(
-                            instance,
-                            schedules,
-                            template,
-                            first_week=first_week.value,
-                            last_week=last_week.value,
-                        )
-                        on_applied()
-                        first = int(first_week.value)
-                        last = int(last_week.value)
-                        ui.notify(
-                            _template_applied_label(first, last),
-                            type="positive",
-                        )
-                    except (TypeError, ValidationError, ValueError) as exc:
-                        ui.notify(
-                            _validation_message(exc),
-                            type="negative",
-                            multi_line=True,
-                        )
-
-                try:
-                    first = int(first_week.value)
-                    last = int(last_week.value)
-                except (TypeError, ValueError):
-                    apply()
-                    return
-                replaced = sum(first <= schedule.week <= last for schedule in schedules)
-                if replaced:
-                    _confirm_draft_schedule_replacement(
-                        title="Replace configured weeks?",
-                        description=(
-                            f"This replaces {replaced} already-configured "
-                            f"{'week' if replaced == 1 else 'weeks'} in the selected range."
-                        ),
-                        confirm_label="Apply and replace",
-                        on_confirm=apply,
-                    )
-                else:
-                    apply()
-
-            ui.button(
-                "Apply template to range",
-                icon="content_copy",
-                on_click=apply_range,
-            ).props(PRIMARY_BUTTON_PROPS)
 
 
 def _work_schedule_grid(
@@ -2005,6 +1830,8 @@ def _work_half_day_dialog(
     on_save: Callable[[AttendingWorkHalfDay], None],
     on_remove: Callable[[], None],
     allowed_work_types: tuple[AttendingWorkType, ...] = tuple(AttendingWorkType),
+    attending_name: str | None = None,
+    calendar_day: date | None = None,
 ) -> None:
     from nicegui import ui
 
@@ -2021,13 +1848,18 @@ def _work_half_day_dialog(
     )
     initial_description = assignment.description if assignment is not None else None
     title = "Edit work half-day" if assignment is not None else "Assign work half-day"
-    with ui.dialog() as dialog, ui.card().classes("w-[min(92vw,520px)] p-0 gap-0"):
+    with ui.dialog() as dialog, ui.card().classes(
+        "rbs-attending-work-dialog rbs-popout-dialog p-0 gap-0"
+    ):
         with ui.row().classes("w-full items-center justify-between gap-3 px-5 py-4"):
-            with ui.column().classes("gap-0"):
-                ui.label(title).classes("rbs-type-dialog-title")
+            with ui.column().classes("min-w-0 flex-1 gap-1"):
+                ui.label(f"{title} · {attending_name}" if attending_name else title).classes(
+                    "rbs-type-dialog-title"
+                )
                 ui.label(
-                    f"{weekday.value.title()} · {_work_session_label(session)} · "
-                    f"{context_label}"
+                    f"{context_label} · {weekday.value.title()}"
+                    + (f", {_date_label(calendar_day)}" if calendar_day is not None else "")
+                    + f" · {_work_session_label(session)}"
                 ).classes("rbs-type-caption rbs-text-muted")
             with ui.button(icon="close", on_click=dialog.close).props(
                 button_props(
@@ -2037,7 +1869,7 @@ def _work_half_day_dialog(
             ):
                 ui.tooltip("Close work half-day dialog")
         ui.separator()
-        with ui.column().classes("w-full gap-4 p-5"):
+        with ui.column().classes("rbs-attending-work-dialog-body w-full gap-4 p-5"):
             work_type = (
                 ui.select(
                     work_type_options,
@@ -2052,6 +1884,7 @@ def _work_half_day_dialog(
                     clinic_options,
                     value=initial_clinic,
                     label="Clinic",
+                    with_input=True,
                 )
                 .props("outlined options-dense")
                 .classes("w-full")
@@ -2087,64 +1920,70 @@ def _work_half_day_dialog(
 
             work_type.on_value_change(change_work_type)
 
-            with ui.row().classes("w-full items-center justify-between gap-3 pt-1"):
-                if assignment is not None:
+        ui.separator()
+        with ui.row().classes(
+            "rbs-attending-work-dialog-footer w-full items-center justify-between gap-3 p-4"
+        ):
+            if assignment is not None:
 
-                    def remove() -> None:
-                        dialog.close()
+                def remove() -> None:
+                    try:
                         on_remove()
+                        dialog.close()
+                    except (ValidationError, ValueError) as exc:
+                        ui.notify(_validation_message(exc), type="negative", multi_line=True)
 
-                    ui.button(
-                        "Remove assignment",
-                        icon="delete_outline",
-                        on_click=remove,
-                    ).props(DESTRUCTIVE_BUTTON_PROPS)
-                else:
-                    ui.element("span")
+                ui.button(
+                    "Remove assignment",
+                    icon="delete_outline",
+                    on_click=remove,
+                ).props(button_props(SECONDARY_BUTTON_PROPS, "color=negative"))
+            else:
+                ui.element("span")
 
-                with ui.row().classes("items-center gap-2"):
-                    ui.button("Cancel", on_click=dialog.close).props("flat no-caps")
+            with ui.row().classes("items-center gap-2"):
+                ui.button("Cancel", on_click=dialog.close).props(TERTIARY_BUTTON_PROPS)
 
-                    def save() -> None:
-                        try:
-                            if work_type.value in (None, ""):
-                                raise ValueError("select a work type")
-                            selected_type = AttendingWorkType(work_type.value)
-                            if selected_type not in allowed_work_types:
-                                raise ValueError(
-                                    "select an available work type for this schedule"
-                                )
-                            saved = AttendingWorkHalfDay(
-                                weekday=weekday,
-                                session=session,
-                                work_type=selected_type,
-                                clinic_id=(
-                                    str(clinic.value)
-                                    if selected_type
-                                    is AttendingWorkType.PRECEPTING_CLINIC
-                                    and clinic.value not in (None, "")
-                                    else None
-                                ),
-                                description=(
-                                    str(description.value or "")
-                                    if selected_type is AttendingWorkType.SPECIAL_OTHER
-                                    else None
-                                ),
+                def save() -> None:
+                    try:
+                        if work_type.value in (None, ""):
+                            raise ValueError("select a work type")
+                        selected_type = AttendingWorkType(work_type.value)
+                        if selected_type not in allowed_work_types:
+                            raise ValueError(
+                                "select an available work type for this schedule"
                             )
-                            dialog.close()
-                            on_save(saved)
-                        except (ValidationError, ValueError) as exc:
-                            ui.notify(
-                                _validation_message(exc),
-                                type="negative",
-                                multi_line=True,
-                            )
+                        saved = AttendingWorkHalfDay(
+                            weekday=weekday,
+                            session=session,
+                            work_type=selected_type,
+                            clinic_id=(
+                                str(clinic.value)
+                                if selected_type
+                                is AttendingWorkType.PRECEPTING_CLINIC
+                                and clinic.value not in (None, "")
+                                else None
+                            ),
+                            description=(
+                                str(description.value or "")
+                                if selected_type is AttendingWorkType.SPECIAL_OTHER
+                                else None
+                            ),
+                        )
+                        on_save(saved)
+                        dialog.close()
+                    except (ValidationError, ValueError) as exc:
+                        ui.notify(
+                            _validation_message(exc),
+                            type="negative",
+                            multi_line=True,
+                        )
 
-                    ui.button(
-                        "Save assignment" if assignment is not None else "Assign half-day",
-                        icon="save" if assignment is not None else "add",
-                        on_click=save,
-                    ).props(PRIMARY_BUTTON_PROPS)
+                ui.button(
+                    "Save assignment" if assignment is not None else "Assign half-day",
+                    icon="save" if assignment is not None else "add",
+                    on_click=save,
+                ).props(PRIMARY_BUTTON_PROPS)
     dialog.open()
 
 
@@ -2156,34 +1995,6 @@ def _work_event_class(assignment: AttendingWorkHalfDay) -> str:
     if assignment.work_type is AttendingWorkType.INPATIENT_SERVICE:
         return "academic"
     return "attending-work"
-
-
-def _confirm_draft_schedule_replacement(
-    *,
-    title: str,
-    description: str,
-    confirm_label: str,
-    on_confirm: Callable[[], None],
-) -> None:
-    from nicegui import ui
-
-    with ui.dialog() as dialog, ui.card().classes("w-[min(92vw,480px)] p-5"):
-        ui.label(title).classes("rbs-type-dialog-title")
-        ui.label(description).classes("rbs-type-body rbs-text-muted")
-        ui.label(
-            "You can still cancel the attending editor to discard this draft change."
-        ).classes("rbs-type-caption rbs-text-muted")
-        with ui.row().classes("w-full justify-end gap-3 pt-2"):
-            ui.button("Keep current schedule", on_click=dialog.close).props("flat no-caps")
-
-            def confirm() -> None:
-                dialog.close()
-                on_confirm()
-
-            ui.button(confirm_label, on_click=confirm).props(
-                DESTRUCTIVE_BUTTON_PROPS
-            )
-    dialog.open()
 
 
 def _vacation_range_editor(
@@ -2299,7 +2110,7 @@ def _confirm_remove_attending(
     with ui.dialog() as dialog, ui.card().classes("w-[min(92vw,480px)] p-5"):
         ui.label(f"Remove {attending.name}?").classes("rbs-type-dialog-title")
         ui.label(
-            "Their category targets, weekly schedules, overrides, template, schedule "
+            "Their category targets, weekly schedules, overrides, schedule "
             "dates, and vacation ranges will be removed from this workspace. This "
             "cannot be undone."
         ).classes("rbs-type-body rbs-text-muted")
@@ -2380,16 +2191,8 @@ def _half_days_per_week_label(count: int) -> str:
     return f"{count} half-days per week"
 
 
-def _configured_week_count_label(count: int, total: int) -> str:
-    return f"{count} of {total} weeks configured"
-
-
 def _assigned_half_day_target_label(count: int, target: int) -> str:
     return f"{count} of {target} half-days assigned"
-
-
-def _template_assignment_count_label(count: int, target: int) -> str:
-    return f"{count} of {target} template half-days"
 
 
 def _preferred_schedule_count_label(count: int, target: int) -> str:
@@ -2430,19 +2233,6 @@ def _weekly_target_mode_label(mode: AttendingWeeklyTargetMode) -> str:
     return "Fixed" if mode is AttendingWeeklyTargetMode.FIXED else "Flexible"
 
 
-def _academic_week_options(instance: SchedulerInput) -> dict[int, str]:
-    first_day = instance.calendar.first_week_start
-    return {
-        week: f"Week {week} · {_academic_week_date_range_label(first_day, week)}"
-        for week in range(1, instance.calendar.weeks + 1)
-    }
-
-
-def _academic_week_date_range_label(first_day: date, week: int) -> str:
-    week_start = first_day + timedelta(weeks=week - 1)
-    return _short_week_range_label(week_start, week_start + timedelta(days=6))
-
-
 def _short_week_range_label(first_day: date, last_day: date) -> str:
     if first_day.year == last_day.year:
         return (
@@ -2453,26 +2243,6 @@ def _short_week_range_label(first_day: date, last_day: date) -> str:
         f"{first_day:%b} {first_day.day}, {first_day:%Y}–"
         f"{last_day:%b} {last_day.day}, {last_day:%Y}"
     )
-
-
-def _weekly_assignment_summary(
-    instance: SchedulerInput,
-    half_days: list[AttendingWorkHalfDay],
-) -> str:
-    if not half_days:
-        return "No scheduled work"
-    return "; ".join(
-        f"{half_day.weekday.value[:3].title()} "
-        f"{'AM' if half_day.session is Session.MORNING else 'PM'} · "
-        f"{_work_assignment_label(instance, half_day)}"
-        for half_day in half_days
-    )
-
-
-def _template_applied_label(first_week: int, last_week: int) -> str:
-    if first_week == last_week:
-        return f"Applied the template to week {first_week}"
-    return f"Applied the template to weeks {first_week}–{last_week}"
 
 
 def _work_session_label(session: Session) -> str:

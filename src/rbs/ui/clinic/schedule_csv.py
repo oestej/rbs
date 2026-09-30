@@ -12,6 +12,8 @@ from rbs.ui.clinic.projection import (
     ACADEMIC_LABEL,
     SESSION_SHORT,
     WEEKDAY_SHORT,
+    ClinicScheduleView,
+    attending_occupancy,
     clinic_closure_view,
     half_days,
     is_academic_week,
@@ -26,6 +28,9 @@ from rbs.ui.schedule_projection import visible_week_numbers, week_monday
 
 def clinic_schedule_csv_columns(
     instance: SchedulerInput,
+    *,
+    view: ClinicScheduleView = "residents",
+    schedule: Schedule | None = None,
 ) -> tuple[tuple[str, str], ...]:
     """Columns for every weekday shown by the configured Clinic calendar."""
     return (
@@ -36,7 +41,7 @@ def clinic_schedule_csv_columns(
                 _slot_key(weekday.value, session.value),
                 f"{WEEKDAY_SHORT[weekday]} {SESSION_SHORT[session]}",
             )
-            for weekday, session in half_days(instance)
+            for weekday, session in half_days(instance, view=view, schedule=schedule)
         ),
     )
 
@@ -48,9 +53,13 @@ def clinic_schedule_csv_rows(
     show_past_weeks: bool = True,
     today: date | None = None,
     site: str | None = None,
+    view: ClinicScheduleView = "residents",
 ) -> list[dict[str, str]]:
     """Return the visible clinic schedule as one flat row per academic week."""
-    board = occupancy(instance, schedule)
+    board = occupancy(instance, schedule) if view == "residents" else {}
+    attending_board = (
+        attending_occupancy(instance, schedule, site=site) if view == "attendings" else None
+    )
     policy = instance.clinic_policy
     visible_sites = (site,) if site is not None else policy.site_ids
     weeks = visible_week_numbers(
@@ -66,7 +75,7 @@ def clinic_schedule_csv_rows(
             "week": str(week),
             "week_of": _date_label(monday),
         }
-        for weekday, session in half_days(instance):
+        for weekday, session in half_days(instance, view=view, schedule=schedule):
             key = _slot_key(weekday.value, session.value)
             calendar_day = clinic_slot_date(
                 instance.calendar.first_week_start,
@@ -74,6 +83,12 @@ def clinic_schedule_csv_rows(
                 weekday,
             )
             closure = clinic_closure_view(policy, calendar_day, site)
+            if attending_board is not None:
+                row[key] = "\n".join([
+                    *([closure.label()] if closure.is_closed else []),
+                    *[person.label() for person in attending_board[(week, weekday, session)]],
+                ])
+                continue
             event_labels = [
                 f"{special.name}: "
                 + ", ".join(
@@ -127,15 +142,17 @@ def build_clinic_schedule_csv(
     show_past_weeks: bool = True,
     today: date | None = None,
     site: str | None = None,
+    view: ClinicScheduleView = "residents",
 ) -> str:
     """Build a spreadsheet-friendly CSV matching the former clinic sheet."""
-    columns = clinic_schedule_csv_columns(instance)
+    columns = clinic_schedule_csv_columns(instance, view=view, schedule=schedule)
     rows = clinic_schedule_csv_rows(
         instance,
         schedule,
         show_past_weeks=show_past_weeks,
         today=today,
         site=site,
+        view=view,
     )
     return build_spreadsheet_csv(
         [label for _field, label in columns],
@@ -148,11 +165,13 @@ def clinic_schedule_csv_filename(
     *,
     site: str | None,
     exported_on: date | None = None,
+    view: ClinicScheduleView = "residents",
 ) -> str:
     year_slug = re.sub(r"[^0-9a-z]+", "-", academic_year.lower()).strip("-")
     site_slug = site.replace("_", "-") if site is not None else "all-sites"
     export_date = (exported_on or date.today()).isoformat()
-    return f"clinic-schedule-{year_slug}-{site_slug}-exported-{export_date}.csv"
+    prefix = "attending-schedule" if view == "attendings" else "clinic-schedule"
+    return f"{prefix}-{year_slug}-{site_slug}-exported-{export_date}.csv"
 
 
 def _slot_key(weekday: str, session: str) -> str:

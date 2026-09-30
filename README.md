@@ -30,20 +30,26 @@ weeks, an independent schedule for every academic week, schedule dates, and
 day-level vacation ranges. A preferred weekly schedule records soft placement
 preferences without creating work. Special/Other work is scheduled manually
 and can carry a free-text description. Adding an attending starts with only
-their name, schedule dates, and weekly half-day total; the full tabbed editor
-holds targets, preferences, schedules, and vacation tools. Weekly, preferred,
-and template half-days use the same click-to-edit and drag-to-move grid as
-resident clinic schedules. A week's half-day total can be overridden with its
+their name, schedule dates, and weekly half-day total. Edit attending contains
+Details, Targets, Preferences, and Vacation. Edit schedule works directly in the
+full academic-year calendar, with changes saved immediately. Work half-days can
+be locked individually or together to protect their placement during editing
+and future solves. Automatic locking through today also covers attending work;
+explicit unlocks allow those half-days to be edited. Weekly and preferred
+half-days use the same click-to-edit and drag-to-move grid as resident clinic
+schedules. A week's half-day total can be overridden with its
 current assignment count, including for attendings whose usual total is zero.
 The program's effective academic half-day is automatically reserved as Admin
 Time for active attendings unless that option is disabled in Academic settings.
-A reusable schedule template can be copied into selected weeks, but it is not a
-live default and later template changes do not rewrite those weeks. Schedule
-checks distinguish required weekly totals, Fixed ranges, and Attending Clinic
+Schedule checks distinguish required weekly totals, Fixed ranges, and Attending Clinic
 day minimums from Flexible ranges and preferred placements, while accounting
 for vacation and partial schedule-boundary weeks.
 Clinics can use their own configured capacity or derive resident capacity from
-attendings assigned to Precepting Clinic work.
+attendings assigned to Precepting Clinic work. Solving schedules attendings as
+well: each attending's open half-days are filled from their weekly total,
+category ranges, Attending Clinic day minimum, and preferred weekly schedule,
+around hand-entered work and the academic half-day's Admin Time, and every
+attending-managed clinic gets the precepting its residents need.
 
 Closing a workspace in the browser build deletes it permanently. Clean
 workspaces close at once; unsaved changes get a confirmation dialog whose
@@ -118,8 +124,16 @@ already exist in `rbs.cloud` and surface in the UI behind `rbs ui --cloud`.
 
 The UI never calls CP-SAT directly. It shells out to `rbs-solver` with one
 JSON document on stdin and reads one back on stdout
-(`protocol: "rbs.solve"`, version 6). Set `RBS_SOLVER_COMMAND` to swap the
+(`protocol: "rbs.solve"`, version 7). Set `RBS_SOLVER_COMMAND` to swap the
 executable; the desktop bundle ships its own so no system Python is needed.
+
+Attendings reach the block search only as preceptor counts per
+attending-managed clinic half-day. Attendings who are interchangeable in a week
+share one availability class, so the model grows with how differently
+attendings are configured rather than with how many there are. After the
+search, a small model per academic week names who precepts and fills the rest
+of each attending's week (`rbs.solver.core.attending_envelope` and
+`attending_assignment`).
 
 ```text
 UI / CLI / hosted adapters

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from collections import Counter
 
+from rbs.models.attending import AttendingClinicCoverage
+from rbs.models.clinic import clinic_slot_date
 from rbs.models.enums import RotationKind, SolverEngineName, SolverStatus
+from rbs.models.instance import SolverProblem
 from rbs.models.schedule import (
     AssignedClinic,
     Assignment,
@@ -34,7 +37,9 @@ def decode_solution(
     solver_best_bound: float | None,
 ) -> Schedule:
     context = problem.context
-    instance = context.instance
+    # Allocation and validation must see the preceptors this solution
+    # schedules at attending-managed clinics, not only hand-entered ones.
+    instance = solved_capacity_view(problem, solver)
     chosen: list[tuple[Occurrence, int]] = []
     for occurrence in context.occurrences:
         selected = [
@@ -218,6 +223,28 @@ def decode_solution(
         }
     )
     return schedule
+
+
+def solved_capacity_view(problem: CompiledProblem, solver) -> SolverProblem:
+    """Return the problem staffed with the preceptor counts this solution chose."""
+    instance = problem.context.instance
+    envelope = problem.context.attending_envelope
+    if envelope is None or not envelope.active:
+        return instance
+    counts = dict(envelope.fixed)
+    for key, count in envelope.staffed_counts(solver).items():
+        counts[key] = counts.get(key, 0) + count
+    first_week_start = instance.calendar.first_week_start
+    return instance.with_attending_coverage(
+        AttendingClinicCoverage(
+            clinic_id=clinic_id,
+            date=clinic_slot_date(first_week_start, week, weekday),
+            session=session,
+            attendings=count,
+        )
+        for (clinic_id, week, weekday, session), count in counts.items()
+        if count > 0
+    )
 
 
 def _elective_preference_rank_counts(
