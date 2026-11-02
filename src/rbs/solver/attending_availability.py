@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 
 from rbs.clinic_locks import attending_work_is_locked
@@ -159,7 +159,49 @@ def attending_week_facts(
             )
             if facts is not None:
                 by_week[week].append(facts)
-    return dict(by_week)
+    return {
+        week: _with_kept_overrides_recorded(problem, weekly)
+        for week, weekly in by_week.items()
+    }
+
+
+def _with_kept_overrides_recorded(
+    problem: SolverProblem,
+    weekly: list[AttendingWeekFacts],
+) -> list[AttendingWeekFacts]:
+    """Mark work kept over a clinic's maximum as an override, on the work itself.
+
+    Lowering Max attendings can leave more kept preceptors on a half-day than it
+    now allows. They stay because a lock kept them, but that lock may not last:
+    through-today locking is not part of a saved document, and any lock can be
+    removed. The schedule stays valid only if the work carries the fact with it.
+    """
+    kept: Counter[tuple[str, date, Session]] = Counter()
+    for facts in weekly:
+        for assignment in facts.fixed:
+            if assignment.work_type is AttendingWorkType.PRECEPTING_CLINIC:
+                assert assignment.clinic_id is not None
+                kept[
+                    assignment.clinic_id, facts.date_of(assignment.weekday), assignment.session
+                ] += 1
+    over = {
+        key for key, count in kept.items() if count > problem.clinic_max_attendings_on(*key)
+    }
+    if not over:
+        return weekly
+    return [
+        replace(
+            facts,
+            locked_work=tuple(
+                item.revised(manual_override=True)
+                if item.work_type is AttendingWorkType.PRECEPTING_CLINIC
+                and (item.clinic_id, facts.date_of(item.weekday), item.session) in over
+                else item
+                for item in facts.locked_work
+            ),
+        )
+        for facts in weekly
+    ]
 
 
 def _week_facts(

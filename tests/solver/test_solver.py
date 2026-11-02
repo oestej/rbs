@@ -1737,7 +1737,8 @@ def test_portfolio_compiles_once_and_isolates_search_models(monkeypatch) -> None
         original_protos.append(str(problem.context.model.Proto()))
         return problem
 
-    def search(self, problem, *, started, workers, seed):
+    def search(self, problem, *, started, workers, seed, deadline):
+        assert deadline == 123.0
         model = problem.context.model
         assert str(model.Proto()) == original_protos[0]
         literal = next(iter(problem.context.placements.values()))
@@ -1758,7 +1759,7 @@ def test_portfolio_compiles_once_and_isolates_search_models(monkeypatch) -> None
     monkeypatch.setattr(cp_sat, "compile_problem", compile_once)
     monkeypatch.setattr(cp_sat.CpSatEngine, "_solve_once", search)
     result = cp_sat.CpSatEngine()._solve_portfolio(
-        instance, options=options, reference_schedule=None,
+        instance, options=options, reference_schedule=None, deadline=123.0,
     )
 
     assert len(compiled) == 1

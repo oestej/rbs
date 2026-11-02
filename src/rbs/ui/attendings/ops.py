@@ -23,7 +23,8 @@ from rbs.models.attending import (
 from rbs.models.clinic import clinic_slot_date
 from rbs.models.enums import Session, SolverStatus, Weekday
 from rbs.models.instance import SchedulerInput
-from rbs.models.schedule import AssignedAttendingWork, Schedule, ScheduleMeta, ScheduleMetrics
+from rbs.models.schedule import AssignedAttendingWork, Schedule, ScheduleMeta
+from rbs.solver.working_draft import working_draft_for_inputs
 
 WEEKLY_SHIFT_TARGET_NONE = "none"
 
@@ -500,42 +501,7 @@ def attending_working_draft(instance: SchedulerInput, schedule: Schedule | None)
             status=SolverStatus.UNKNOWN,
             solver_status=SolverStatus.UNKNOWN,
         ))
-    if schedule.meta.academic_year != instance.academic_year:
-        raise ValueError("This schedule belongs to a different academic year. Reopen the schedule.")
-    attendings = {person.id: person for person in instance.attendings}
-    weeks = {}
-    compatible = []
-    for item in schedule.attending_work:
-        attending = attendings.get(item.attending_id)
-        if attending is None or item.week > instance.calendar.weeks:
-            continue
-        key = item.attending_id, item.week
-        if key not in weeks:
-            weeks[key] = instance.effective_attending_week(attending, item.week)
-        effective = weeks[key]
-        if (item.weekday in effective.available_weekdays
-                and effective.assignment_on(item.weekday, item.session) is None
-                and (item.clinic_id is None or item.clinic_id in instance.clinic_policy.site_ids)):
-            compatible.append(item)
-    notes = list(schedule.meta.notes)
-    if len(compatible) != len(schedule.attending_work):
-        note = (
-            "Attending work that no longer fits schedule dates, vacation, or other "
-            "assigned work was left out of this working draft."
-        )
-        if note not in notes:
-            notes.append(note)
-    return schedule.revised(attending_work=compatible, meta=schedule.meta.revised(
-        status=SolverStatus.UNKNOWN,
-        solver_status=SolverStatus.UNKNOWN,
-        solver_objective=None,
-        solver_best_bound=None,
-        metrics=ScheduleMetrics(),
-        validation_errors=[],
-        validation_warnings=[],
-        diagnostics=[],
-        notes=notes,
-    ))
+    return working_draft_for_inputs(instance, schedule)
 
 
 def _store_attending_work(
@@ -738,6 +704,17 @@ def set_attending_schedule_half_day(
     _validate_attending_work_slot(instance, attending_id, week, weekday, session)
     if assignment is not None and (assignment.weekday, assignment.session) != (weekday, session):
         raise ValueError("The assignment must use the selected half-day.")
+    # Compare only editable content before changing provenance or solve metadata.
+    if (
+        previous is None and assignment is None
+        or (
+            previous is not None and assignment is not None
+            and previous.work_type == assignment.work_type
+            and previous.clinic_id == assignment.clinic_id
+            and previous.description == assignment.description
+        )
+    ):
+        return instance, schedule
     # Edited work keeps its provenance: work a solve placed stays schedule
     # work, keeping an explicit unlock so a past-date edit does not acquire
     # the automatic lock again, and anything else is hand-entered.

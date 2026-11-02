@@ -623,7 +623,9 @@ def test_attending_dates_must_belong_to_the_workspace_academic_year() -> None:
     first_day = instance.calendar.first_week_start
     last_day = first_day + timedelta(days=instance.calendar.weeks * 7 - 1)
 
-    with pytest.raises(ValidationError, match="schedule start date.*outside academic year"):
+    with pytest.raises(
+        ValidationError, match="Ada Lovelace: schedule start date.*outside academic year",
+    ):
         instance.revised(
             attendings=[
                 Attending(
@@ -634,7 +636,7 @@ def test_attending_dates_must_belong_to_the_workspace_academic_year() -> None:
             ]
         )
 
-    with pytest.raises(ValidationError, match="vacation.*outside academic year"):
+    with pytest.raises(ValidationError, match="Ada Lovelace: vacation.*outside academic year"):
         instance.revised(
             attendings=[
                 Attending(
@@ -650,7 +652,7 @@ def test_attending_dates_must_belong_to_the_workspace_academic_year() -> None:
             ]
         )
 
-    with pytest.raises(ValidationError, match="weekly work schedule week.*outside"):
+    with pytest.raises(ValidationError, match="Ada Lovelace: weekly work schedule week.*outside"):
         attending = Attending(
             id="attending-001",
             name="Ada Lovelace",

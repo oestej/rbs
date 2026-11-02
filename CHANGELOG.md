@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Saving an attending half-day without changes preserves the solved schedule
+  and its metrics.
+- Attending scheduling respects the configured worker limit and remaining solve time.
+- Attending date and academic-week validation errors identify the attending by name.
+- Managing attendings from the clinic editor protects unsaved changes and closes the
+  editor before switching tabs.
+- Saved documents open when locked attending work exceeds a clinic's Max attendings,
+  and turning off through-today locking or unlocking that work keeps the solved schedule.
+- Blocks, clinic sessions, and attending work can be edited on an out-of-date schedule.
+  Work that no longer fits stays hidden in the working draft and returns if the change
+  is undone. A warning reports anything left out because its resident, rotation, block
+  length, attending, or clinic was removed.
+- Solves reserve preceptors for resident sessions locked at an attending-managed clinic.
+
 ### Removed
 
 - Attendings no longer require a minimum number of distinct Attending Clinic days
@@ -9,6 +25,9 @@
 
 ### Changed
 
+- Precepting Clinic work is shared more evenly within weeks and across the year,
+  accounting for attending availability and category ranges while preserving
+  existing assignments and higher-priority preferences.
 - **Data compatibility:** Existing documents and working copies discard the retired
   clinic-day minimum while preserving attending work and schedules. Newly saved
   `.rbsc` files use schema 13 (schemas 9–12 migrate); older builds cannot open them.

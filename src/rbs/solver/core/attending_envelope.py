@@ -250,7 +250,9 @@ class AttendingEnvelope:
             share={clinic_id: tuple(items) for clinic_id, items in share.items()},
         )
 
-    def staffed_counts(self, solver) -> dict[tuple[str, int, Weekday, Session], int]:
+    def staffed_counts(
+        self, solver, *, deadline: float | None = None,
+    ) -> dict[tuple[str, int, Weekday, Session], int]:
         """Preceptors each attending-managed half-day gets for a solved placement.
 
         The block search settles where residents are; it has little time left
@@ -300,7 +302,11 @@ class AttendingEnvelope:
                         solver.Value(literal) for literal in record.pinned.get(handle.clinic_id, ())
                     )
                     if pinned:
-                        model.Add(handle.capacity_points() >= pinned)
+                        # Locks may exceed what the clinic could ever seat. Staff it
+                        # fully so allocation keeps them there and validation can
+                        # name the clinic, instead of this whole polish failing.
+                        most = handle.ratio * (handle.fixed + handle.generated_upper_bound)
+                        model.Add(handle.capacity_points() >= min(pinned, most))
                     weighted = sum(
                         weight * solver.Value(literal)
                         for weight, literal in record.share.get(handle.clinic_id, ())
@@ -331,6 +337,7 @@ class AttendingEnvelope:
             [unstaffed_terms, shortfall_terms, generated],
             generated,
             cp_model,
+            deadline=deadline,
         )
         if polished is None:
             return searched

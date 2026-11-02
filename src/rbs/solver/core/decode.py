@@ -35,11 +35,12 @@ def decode_solution(
     *,
     solver_objective: float | None,
     solver_best_bound: float | None,
+    deadline: float | None = None,
 ) -> Schedule:
     context = problem.context
     # Allocation and validation must see the preceptors this solution
     # schedules at attending-managed clinics, not only hand-entered ones.
-    instance = solved_capacity_view(problem, solver)
+    instance = solved_capacity_view(problem, solver, deadline=deadline)
     chosen: list[tuple[Occurrence, int]] = []
     for occurrence in context.occurrences:
         selected = [
@@ -225,14 +226,16 @@ def decode_solution(
     return schedule
 
 
-def solved_capacity_view(problem: CompiledProblem, solver) -> SolverProblem:
+def solved_capacity_view(
+    problem: CompiledProblem, solver, *, deadline: float | None = None,
+) -> SolverProblem:
     """Return the problem staffed with the preceptor counts this solution chose."""
     instance = problem.context.instance
     envelope = problem.context.attending_envelope
     if envelope is None or not envelope.active:
         return instance
     counts = dict(envelope.fixed)
-    for key, count in envelope.staffed_counts(solver).items():
+    for key, count in envelope.staffed_counts(solver, deadline=deadline).items():
         counts[key] = counts.get(key, 0) + count
     first_week_start = instance.calendar.first_week_start
     return instance.with_attending_coverage(

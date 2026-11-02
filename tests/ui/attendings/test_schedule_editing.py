@@ -16,9 +16,9 @@ from rbs.models.attending import (
 )
 from rbs.models.enums import Session, SolverStatus, Weekday
 from rbs.models.instance import SolverProblem
-from rbs.models.schedule import AssignedAttendingWork
+from rbs.models.schedule import AssignedAttendingWork, ScheduleMetrics
 from rbs.solver.attending_availability import attending_week_facts
-from rbs.solver.validation import validate_schedule
+from rbs.solver.validation import validate_persistable_schedule_or_raise, validate_schedule
 from rbs.ui.attendings.ops import (
     add_attending,
     attending_working_draft,
@@ -323,6 +323,47 @@ def _generated_schedule(instance):
             work_type=AttendingWorkType.INPATIENT_SERVICE,
         ),
     ])
+
+
+@pytest.mark.parametrize("source,weekday,week", [
+    ("generated", Weekday.FRIDAY, 1),
+    ("hand-entered schedule", Weekday.FRIDAY, 1),
+    ("case description", Weekday.TUESDAY, 1),
+    ("case clinic", Weekday.MONDAY, 2),
+])
+def test_saving_unchanged_assignment_preserves_solved_result(calendar_page, source, weekday, week):
+    page = calendar_page
+    draft = _generated_schedule(page.workspace.instance)
+    if source == "hand-entered schedule":
+        draft = draft.revised(attending_work=[
+            item.revised(manual_override=True, hand_entered=True, automatic_lock_exempt=True)
+            if item.attending_id == "attending-001" else item
+            for item in draft.attending_work
+        ])
+    solved = draft.revised(meta=draft.meta.revised(
+        status=SolverStatus.FEASIBLE, solver_status=SolverStatus.FEASIBLE,
+        solver_objective=12, solver_best_bound=10,
+        metrics=ScheduleMetrics(primary_site_attending_sessions=4),
+        validation_warnings=["Existing warning"], notes=["Existing solve note"],
+    ))
+    saved = page.store.save_schedule(
+        page.workspace.id, solved,
+        expected_workspace_revision=page.workspace.workspace_revision,
+        expected_instance_revision=page.workspace.instance_revision,
+    )
+    page.session.refresh_panel("attendings")
+    _click(page.button("Edit schedule"))
+    _click(page.accessible(f"Edit {weekday.value.title()} Morning (AM) in week {week}"))
+
+    _click(page.button("Save assignment"))
+
+    current = page.store.get(page.workspace.id)
+    assert current.instance == saved.instance
+    assert current.schedule == saved.schedule
+    assert current.workspace_revision == saved.workspace_revision
+    assert current.instance_revision == saved.instance_revision
+    assert not current.solution_is_out_of_date
+    assert not current.schedule.is_working_draft
 
 
 def test_locked_manual_preceptor_still_counts_toward_generated_preceptor_limit():
@@ -753,14 +794,19 @@ def test_locking_a_stale_schedule_after_vacation_edits_keeps_compatible_work(cal
     assert any(item.locked and item.weekday is Weekday.TUESDAY and item.week == week
                for item in current.schedule.attending_work)
     assert other_work in current.schedule.attending_work
-    assert masked_work not in current.schedule.attending_work
-    assert any("vacation" in note for note in current.schedule.meta.notes)
+    # Work under the new vacation stays in the draft, hidden, and is not reported as gone.
+    assert masked_work in current.schedule.attending_work
+    current_person = next(item for item in current.instance.attendings if item.id == person.id)
+    assert effective_attending_schedule_week(
+        current.instance, current_person, masked_work.week, current.schedule,
+    ).assignment_on(masked_work.weekday, masked_work.session) is None
+    assert not any("left out" in note for note in current.schedule.meta.notes)
 
     # The mounted calendar must use the normalized draft on its next edit.
     _click(page.accessible(f"Unlock work half-day: Tuesday Morning (AM) in week {week}"))
     unlocked = page.store.get(saved.id)
     assert unlocked.workspace_revision == current.workspace_revision + 1
-    assert masked_work not in unlocked.schedule.attending_work
+    assert masked_work in unlocked.schedule.attending_work
     assert other_work in unlocked.schedule.attending_work
     assert not any(item.locked for item in unlocked.schedule.attending_work)
 
@@ -774,7 +820,9 @@ def test_locking_a_stale_schedule_after_vacation_edits_keeps_compatible_work(cal
     assert relocked.schedule.attending_work == current.schedule.attending_work
     assert relocked.schedule.meta.source_instance_revision == relocked.instance_revision
     problem = SolverProblem.from_instance(relocked.instance)
-    assert validate_schedule(problem, relocked.schedule).valid
+    assert validate_persistable_schedule_or_raise(
+        problem, relocked.schedule, prior=relocked.schedule,
+    ) == relocked.schedule
 
 
 @pytest.mark.parametrize("legacy_id", [False, True], ids=["new-id", "legacy-id"])

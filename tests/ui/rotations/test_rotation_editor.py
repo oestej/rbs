@@ -1954,6 +1954,70 @@ def test_clinic_editor_keeps_the_weekly_grid_as_maximums_when_attending_managed(
     assert updated.capacity_overrides == original.capacity_overrides
 
 
+@pytest.mark.parametrize(
+    "action", ["clean", "Keep editing", "Discard changes", "Save clinic", "invalid", "unmounted"],
+)
+def test_manage_attendings_resolves_clinic_draft_before_leaving(action) -> None:
+    from nicegui import ui
+
+    instance = sample_instance()
+    saved = []
+    navigated = []
+    before = set(ui.context.client.elements)
+
+    def save(*args) -> None:
+        assert not navigated
+        saved.append(args)
+        if action == "unmounted":
+            dialog.delete()
+
+    def navigate() -> None:
+        assert dialog.is_deleted or not dialog.value
+        navigated.append(True)
+
+    _open_clinic_editor_dialog(
+        instance, original_id="maple", selected_rotation_id=None,
+        on_save=save, on_manage_attendings=navigate,
+    )
+    created = _editor_elements_since(before)
+    dialog = next(element for element in created if element.__class__.__name__ == "Dialog")
+    manage = next(
+        element for element in created
+        if element.__class__.__name__ == "Button"
+        and element._props.get("label") == "Manage attendings"
+    )
+    ratio = next(
+        element for element in created
+        if element.__class__.__name__ == "Number"
+        and element._props.get("label") == "Capacity per attending"
+    )
+    if action != "clean":
+        ratio.value = 0 if action == "invalid" else ratio.value + 1
+    before_navigation = set(ui.context.client.elements)
+    _fire_click(manage)
+
+    if action != "clean":
+        assert dialog.value
+        assert navigated == [] and saved == []
+        prompt = _editor_elements_since(before_navigation)
+        button = next(
+            element for element in prompt
+            if element.__class__.__name__ == "Button"
+            and element._props.get("label") == (
+                "Save clinic" if action in {"invalid", "unmounted"} else action
+            )
+        )
+        _fire_click(button)
+
+    leaves = action in {"clean", "Discard changes", "Save clinic", "unmounted"}
+    assert bool(navigated) is leaves
+    if not dialog.is_deleted:
+        assert bool(dialog.value) is not leaves
+    assert len(saved) == (1 if action in {"Save clinic", "unmounted"} else 0)
+    if saved:
+        assert saved[0][0].clinic_policy.site("maple").residents_per_attending == ratio.value
+
+
 def test_remove_clinic_protects_attending_precepting_assignments() -> None:
     instance = sample_instance()
     attending = Attending(

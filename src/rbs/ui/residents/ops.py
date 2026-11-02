@@ -17,7 +17,7 @@ from rbs.models.resident import Resident
 from rbs.models.schedule import AssignedClinic, Assignment, Schedule
 from rbs.models.special import SpecialRotationKind
 from rbs.solver.attending_availability import schedule_capacity_view
-from rbs.solver.validation import validate_schedule_or_raise
+from rbs.solver.validation import validate_schedule
 from rbs.ui.clinic.projection import (
     ClinicOccupant,
     clinic_kind_slots_for_week,
@@ -1073,7 +1073,7 @@ def move_resident_clinic_slot(
         )
     slots.sort(key=_clinic_slot_sort_key)
     updated = _replace_assignment_clinic_slots(schedule, assignment_index, slots)
-    return _validate_clinic_schedule_change(instance, updated)
+    return _validate_clinic_schedule_change(instance, updated, schedule)
 
 
 def add_resident_clinic_slot(
@@ -1135,7 +1135,7 @@ def add_resident_clinic_slot(
         slots,
         manual_clinic_baselines=baselines,
     )
-    return _validate_clinic_schedule_change(instance, updated)
+    return _validate_clinic_schedule_change(instance, updated, schedule)
 
 
 def remove_resident_clinic_slot(
@@ -1168,7 +1168,7 @@ def remove_resident_clinic_slot(
         slots,
         manual_clinic_baselines=baselines,
     )
-    return _validate_clinic_schedule_change(instance, updated)
+    return _validate_clinic_schedule_change(instance, updated, schedule)
 
 
 def change_resident_clinic_slot_site(
@@ -1244,7 +1244,7 @@ def change_resident_clinic_slot_site(
     slots[slot_index] = candidate
     slots.sort(key=_clinic_slot_sort_key)
     updated = _replace_assignment_clinic_slots(schedule, assignment_index, slots)
-    return _validate_clinic_schedule_change(instance, updated)
+    return _validate_clinic_schedule_change(instance, updated, schedule)
 
 
 def _clinic_slot_content_key(slot: AssignedClinic) -> tuple:
@@ -1415,12 +1415,15 @@ def _updated_manual_clinic_baselines(
 def _validate_clinic_schedule_change(
     instance: SchedulerInput,
     schedule: Schedule,
+    prior: Schedule,
 ) -> Schedule:
-    try:
-        validate_schedule_or_raise(instance, schedule)
-    except ValueError as exc:
-        message = str(exc).removeprefix("schedule does not match instance: ")
-        raise ValueError(message) from None
+    """Reject a clinic edit for what it breaks, not for what was already out of date."""
+    errors = validate_schedule(instance, schedule).errors
+    if errors:
+        already = set(validate_schedule(instance, prior).errors)
+        introduced = [error for error in errors if error not in already]
+        if introduced:
+            raise ValueError("; ".join(introduced[:5]))
     return schedule
 
 

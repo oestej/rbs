@@ -56,7 +56,11 @@ from rbs.solver.core.objective_terms import (
     _session_pgy_mix,
     _sum_literals,
 )
-from rbs.solver.reference import occurrence_can_cover_week, viable_reference_clinic_locks
+from rbs.solver.reference import (
+    occurrence_can_cover_week,
+    reference_locked_clinic_sites,
+    viable_reference_clinic_locks,
+)
 
 __all__ = [
     "add_clinic_objective",
@@ -111,6 +115,10 @@ class _ClinicObjectiveState:
     """This week's sessions pinned to an attending-managed clinic, by half-day."""
     flexible_share: dict = field(default_factory=lambda: defaultdict(list))
     """This week's flexible sessions weighted by target percent, by half-day and clinic."""
+    locked_sites: dict = field(default_factory=dict)
+    """Clinics that locks on the previous schedule hold sessions at, by occurrence."""
+    locked_to_managed: dict = field(default_factory=lambda: defaultdict(int))
+    """This week's capacity points locked at an attending-managed clinic, by half-day."""
     resident_managed_shares: dict = field(default_factory=dict)
 
 
@@ -147,7 +155,16 @@ def add_clinic_objective(
         else {}
     )
     occurrences = _include_honored_occurrences(context, occurrences, viable_locks)
-    state = _ClinicObjectiveState()
+    envelope = getattr(context, "attending_envelope", None)
+    state = _ClinicObjectiveState(
+        # Allocation never moves a locked session, so its clinic needs preceptors
+        # exactly as if the rotation template had pinned the session there.
+        locked_sites=(
+            reference_locked_clinic_sites(context.instance, reference_schedule)
+            if envelope is not None and envelope.active
+            else {}
+        ),
+    )
     pgys = [
         pgy
         for pgy, count in sorted(context.instance.cohort_counts().items())

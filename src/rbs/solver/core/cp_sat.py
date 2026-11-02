@@ -33,6 +33,9 @@ from rbs.solver.reference import (
 )
 from rbs.solver.tuning import portfolio_plan
 
+_ATTENDING_TIME_FRACTION = 0.2
+"""Reserve part of the shared solve budget to turn precepting supply into named work."""
+
 
 class CpSatEngine:
     name = SolverEngineName.CP_SAT
@@ -48,6 +51,7 @@ class CpSatEngine:
         # Readiness does not depend on solver options, so relaxing the clinic
         # band below could never clear a configuration conflict.
         started = time.perf_counter()
+        deadline = started + options.time_limit_seconds
         readiness = check_solve_readiness(instance, reference_schedule=reference_schedule)
         if not readiness.ready:
             return self._model_not_built(
@@ -58,12 +62,19 @@ class CpSatEngine:
         # Computed once: the precepting envelope and the weekly attending pass
         # must agree on what is fixed, and the facts cover every attending-week.
         attending_facts = attending_week_facts(instance, reference_schedule)
+        # Naming preceptors is required for a usable resident schedule. Leave
+        # time for that pass even when the resident search uses its full budget.
+        block_deadline = deadline
+        if any(facts.open_half_days for weekly in attending_facts.values() for facts in weekly):
+            block_deadline -= options.time_limit_seconds * _ATTENDING_TIME_FRACTION
         schedule = self._solve_portfolio(
             instance,
             options=options,
             reference_schedule=reference_schedule,
             attending_facts=attending_facts,
             readiness=readiness,
+            started=started,
+            deadline=block_deadline,
         )
         if not _needs_band_relaxation(instance, options, schedule):
             return _with_attending_work(
@@ -72,6 +83,8 @@ class CpSatEngine:
                     instance, options, schedule, reference_schedule
                 ),
                 attending_facts,
+                options=options,
+                deadline=deadline,
             )
         # The curriculum-derived clinic band is a convenience, not a rule the
         # program asked for. Vacation, locks, or manual blocks can leave it
@@ -85,6 +98,8 @@ class CpSatEngine:
             reference_schedule=reference_schedule,
             attending_facts=attending_facts,
             readiness=readiness,
+            started=started,
+            deadline=block_deadline,
         )
         if fallback.is_empty():
             return _with_infeasibility_diagnostics(
@@ -94,7 +109,9 @@ class CpSatEngine:
             *fallback.meta.notes,
             "automatic clinic balance could not be satisfied and was dropped for this solve",
         ]
-        return _with_attending_work(instance, fallback, attending_facts)
+        return _with_attending_work(
+            instance, fallback, attending_facts, options=options, deadline=deadline,
+        )
 
     def _solve_portfolio(
         self,
@@ -104,6 +121,8 @@ class CpSatEngine:
         reference_schedule: Schedule | None,
         attending_facts: dict[int, list[AttendingWeekFacts]] | None = None,
         readiness: ReadinessResult | None = None,
+        started: float | None = None,
+        deadline: float | None = None,
     ) -> Schedule:
         """Race a few independent seeds and keep the best schedule.
 
@@ -117,7 +136,8 @@ class CpSatEngine:
         except ImportError as exc:  # pragma: no cover
             raise RuntimeError("the cp_sat engine requires the 'ortools' package") from exc
 
-        started = time.perf_counter()
+        if started is None:
+            started = time.perf_counter()
         try:
             problem = compile_problem(
                 instance,
@@ -136,6 +156,7 @@ class CpSatEngine:
                 problem,
                 started=started,
                 workers=workers,
+                deadline=deadline,
             )
 
         base = options.random_seed or 0
@@ -147,6 +168,7 @@ class CpSatEngine:
                         started=started,
                         workers=workers,
                         seed=base + index,
+                        deadline=deadline,
                     ),
                     range(attempts),
                 )
@@ -183,6 +205,7 @@ class CpSatEngine:
         started: float,
         workers: int | None = None,
         seed: int | None = None,
+        deadline: float | None = None,
     ) -> Schedule:
         from ortools.sat.python import cp_model
 
@@ -190,7 +213,8 @@ class CpSatEngine:
         options = problem.context.options
         reference_schedule = problem.reference_schedule
 
-        deadline = started + options.time_limit_seconds
+        if deadline is None:
+            deadline = started + options.time_limit_seconds
         worker_count = max(1, workers if workers is not None else options.num_workers)
         chosen_seed = seed if seed is not None else options.random_seed
         best_solver = None
@@ -235,6 +259,7 @@ class CpSatEngine:
                     if final_phase and problem.clinic.has_objective
                     else None
                 ),
+                deadline=deadline,
             )
             for key in sorted(
                 honored_locks,
@@ -359,6 +384,9 @@ def _with_attending_work(
     instance: SolverProblem,
     schedule: Schedule,
     facts: dict[int, list[AttendingWeekFacts]],
+    *,
+    options: SolverConfig,
+    deadline: float,
 ) -> Schedule:
     """Name the attendings the chosen schedule needs and fill their weeks.
 
@@ -381,7 +409,10 @@ def _with_attending_work(
     from rbs.solver.validation import validate_schedule
 
     started = time.perf_counter()
-    result = schedule_attending_work(instance, schedule, facts, cp_model)
+    result = schedule_attending_work(
+        instance, schedule, facts, cp_model,
+        num_workers=options.num_workers, deadline=deadline,
+    )
     notes = [
         *schedule.meta.notes,
         (

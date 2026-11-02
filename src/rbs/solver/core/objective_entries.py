@@ -379,6 +379,7 @@ def _materialize_week_entries(
     managed = envelope.managed if envelope is not None else {}
     state.pinned_to_managed = defaultdict(list)
     state.flexible_share = defaultdict(list)
+    state.locked_to_managed = defaultdict(int)
 
     for (resident_id, weekday, session, pinned), members in grouped.items():
         pgy = members[0][0].pgy
@@ -396,14 +397,21 @@ def _materialize_week_entries(
             present_by_pgy[weekday, session, pgy].append(literal)
         points = context.instance.clinic_capacity_for_pgy(pgy)
         shares = _managed_shares(context, state, resident_id, pgy) if managed else {}
+        # A template pin leaves a lock at any other clinic unusable, as allocation does.
+        locked_site = (
+            state.locked_sites.get((resident_id, week, weekday, session)) if managed else None
+        )
+        site = pinned if pinned is not None else locked_site
+        if not on_vacation and pinned is None and locked_site in managed:
+            state.locked_to_managed[weekday, session, locked_site] += points
         for literal in literals:
             if not on_vacation:
                 occupied_by_slot[weekday, session].extend([literal] * points)
-                if pinned in managed:
-                    state.pinned_to_managed[weekday, session, pinned].extend(
+                if site in managed:
+                    state.pinned_to_managed[weekday, session, site].extend(
                         [literal] * points
                     )
-                elif pinned is None:
+                elif site is None:
                     for clinic_id, percent in shares.items():
                         state.flexible_share[weekday, session, clinic_id].append(
                             (percent * points, literal)
@@ -476,7 +484,10 @@ def _add_half_day_capacity(
     At an attending-managed clinic the seats are the preceptors the solve
     schedules there times the clinic's capacity points per attending, so the
     bound links resident placement to the precepting envelope. Sessions
-    pinned to such a clinic are also bounded by its own seats.
+    pinned or locked to such a clinic are also bounded by its own seats, unless
+    the locks alone exceed what it could ever seat: locks are never skipped, so
+    final validation names that clinic and half-day rather than the search
+    reporting an unexplained conflict.
     """
     instance = context.instance
     policy = instance.clinic_policy
@@ -544,7 +555,8 @@ def _add_half_day_capacity(
         # Below the seat count the bound is arithmetic, not a constraint.
         if 0 < capacity < len(literals):
             context.model.Add(sum(literals) <= capacity)
-    # A session pinned to one attending-managed clinic can only sit there.
+    # A session pinned or locked to one attending-managed clinic can only sit there.
+    locked_points = state.locked_to_managed if state is not None else {}
     for (weekday, session, site_id), literals in (pinned_to_managed or {}).items():
         handle = next(
             (
@@ -554,7 +566,10 @@ def _add_half_day_capacity(
             ),
             None,
         )
-        if handle is not None:
+        if handle is None:
+            continue
+        most = handle.ratio * (handle.fixed + handle.generated_upper_bound)
+        if locked_points.get((weekday, session, site_id), 0) <= most:
             context.model.Add(sum(literals) <= handle.capacity_points())
 
 

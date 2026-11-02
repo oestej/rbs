@@ -22,6 +22,7 @@ from rbs.solver.validation_electives import (
     _validate_elective_policies,
     _validate_rotation_groups,
 )
+from rbs.solver.validation_inherited import InheritedWork
 from rbs.solver.validation_placement import (
     _validate_clinics,
     _validate_consecutive,
@@ -40,7 +41,12 @@ class ScheduleValidationResult:
         return not self.errors
 
 
-def validate_schedule(instance: SolverProblem, schedule: Schedule) -> ScheduleValidationResult:
+def validate_schedule(
+    instance: SolverProblem,
+    schedule: Schedule,
+    *,
+    precepting_maximums: bool = True,
+) -> ScheduleValidationResult:
     """Validate a schedule through independent identity, block, and clinic rules.
 
     Capacity at an attending-managed clinic is whatever the schedule's own
@@ -106,13 +112,20 @@ def validate_schedule(instance: SolverProblem, schedule: Schedule) -> ScheduleVa
         errors,
         successful=successful,
     )
-    _validate_attending_work(instance, schedule, errors, maximums=successful)
+    _validate_attending_work(
+        instance,
+        schedule,
+        errors,
+        maximums=successful and precepting_maximums,
+    )
     return ScheduleValidationResult(tuple(errors), tuple(warnings))
 
 
 def _validate_working_draft_integrity(
     instance: SolverProblem,
     schedule: Schedule,
+    *,
+    prior: Schedule | None = None,
 ) -> ScheduleValidationResult:
     """Validate invariants a later solve cannot safely repair.
 
@@ -120,7 +133,13 @@ def _validate_working_draft_integrity(
     capacity, adjacency, and annual-total constraints. They still have to
     reference this problem's residents, rotations, clinic sites, calendar,
     and viable block definitions.
+
+    ``prior`` is the schedule the draft was edited from. What it already held
+    only has to reference this problem, because an input edit may have left it
+    outside the current rules (see :mod:`rbs.solver.validation_inherited`).
+    Anything else also has to fit them.
     """
+    inherited = InheritedWork.of(prior) if prior is not None else None
     errors: list[str] = []
     warnings: list[str] = []
     expected_weeks = set(range(1, instance.calendar.weeks + 1))
@@ -139,9 +158,10 @@ def _validate_working_draft_integrity(
         block_vacations,
         block_rules,
         errors,
+        inherited=inherited,
     )
     _validate_block_vacation_limits(block_vacations, block_rules, errors)
-    _validate_elective_policies(instance, schedule, errors)
+    _validate_elective_policies(instance, schedule, errors, inherited=inherited)
     _validate_resident_coverage(
         instance,
         schedule,
@@ -151,19 +171,37 @@ def _validate_working_draft_integrity(
         errors,
         warnings,
     )
+    added = (
+        schedule
+        if inherited is None
+        else schedule.model_copy(
+            update={
+                "assignments": [
+                    assignment
+                    for assignment in schedule.assignments
+                    if not inherited.holds_block(assignment)
+                ]
+            }
+        )
+    )
     _validate_placement_rules(
         instance,
-        schedule.week_grid,
+        added.week_grid,
         instance.residents_by_id,
         errors,
         successful=False,
     )
-    _validate_attending_work(instance, schedule, errors, maximums=False)
+    _validate_attending_work(instance, schedule, errors, maximums=False, inherited=inherited)
     return ScheduleValidationResult(tuple(errors), tuple(warnings))
 
 
-def validate_schedule_or_raise(instance: SolverProblem, schedule: Schedule) -> None:
-    result = validate_schedule(instance, schedule)
+def validate_schedule_or_raise(
+    instance: SolverProblem,
+    schedule: Schedule,
+    *,
+    precepting_maximums: bool = True,
+) -> None:
+    result = validate_schedule(instance, schedule, precepting_maximums=precepting_maximums)
     if result.errors:
         preview = "; ".join(result.errors[:5])
         raise ValueError(f"schedule does not match instance: {preview}")
@@ -172,13 +210,18 @@ def validate_schedule_or_raise(instance: SolverProblem, schedule: Schedule) -> N
 def validate_persistable_schedule_or_raise(
     instance: SolverProblem,
     schedule: Schedule,
+    *,
+    prior: Schedule | None = None,
+    precepting_maximums: bool = True,
 ) -> Schedule:
     """Return revalidated output, permitting an explicitly unsolved working draft.
 
     A manual block edit can temporarily exceed capacity, consecutive-week, or
     annual-total constraints until the next solve rearranges the cohort. The
     draft must remain structurally valid and refer only to data in the current
-    academic-year problem.
+    academic-year problem. ``prior`` is the schedule a draft was edited from;
+    pass the schedule itself when it has no such history to compare against,
+    as when it comes from a saved document.
     """
     # ``model_copy(update=...)`` does not run Pydantic validators. A UI edit
     # may therefore hand persistence a Schedule object whose individual
@@ -189,10 +232,10 @@ def validate_persistable_schedule_or_raise(
     schedule = Schedule.model_validate(schedule.model_dump(mode="json"))
 
     if schedule.is_working_draft:
-        result = _validate_working_draft_integrity(instance, schedule)
+        result = _validate_working_draft_integrity(instance, schedule, prior=prior)
         if result.errors:
             preview = "; ".join(result.errors[:5])
             raise ValueError(f"working draft does not match instance: {preview}")
         return schedule
-    validate_schedule_or_raise(instance, schedule)
+    validate_schedule_or_raise(instance, schedule, precepting_maximums=precepting_maximums)
     return schedule

@@ -35,7 +35,16 @@ class StoreExchangeMixin:
             ):
                 continue
             instance = catalogs[workspace.catalog_id].apply(workspace.case)
-            validate_persistable_schedule_or_raise(instance, workspace.schedule)
+            # A file is rejected for dangling or malformed data, never for a
+            # rule only a solve can settle. Older builds could save work kept
+            # over a clinic's preceptor maximum without recording the override;
+            # that schedule opens as out of date and nothing in it is lost.
+            validate_persistable_schedule_or_raise(
+                instance,
+                workspace.schedule,
+                prior=workspace.schedule,
+                precepting_maximums=False,
+            )
         return state
 
     def export_rbsc(self) -> str:

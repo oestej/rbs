@@ -8,15 +8,23 @@ from itertools import product
 from rbs.models.enums import RotationKind
 from rbs.models.instance import SolverProblem
 from rbs.models.schedule import Schedule
+from rbs.solver.validation_inherited import InheritedWork
 
 
 def _validate_elective_policies(
     instance: SolverProblem,
     schedule: Schedule,
     errors: list[str],
+    *,
+    inherited: InheritedWork | None = None,
 ) -> None:
-    """Validate per-level eligibility and per-resident repeat limits."""
+    """Validate per-level eligibility and per-resident repeat limits.
+
+    A block in ``inherited`` is not held to them, but it still counts toward the
+    repeat limit of a block an edit adds beside it.
+    """
     counts: dict[tuple[str, str], int] = defaultdict(int)
+    added: set[tuple[str, str]] = set()
     for assignment in schedule.assignments:
         if not assignment.elective or assignment.elective_fallback:
             continue
@@ -24,6 +32,10 @@ def _validate_elective_policies(
         option = instance.electives.option_for(assignment.rotation_id)
         if resident is None or option is None:
             continue
+        counts[assignment.resident_id, assignment.rotation_id] += 1
+        if inherited is not None and inherited.holds_block(assignment):
+            continue
+        added.add((assignment.resident_id, assignment.rotation_id))
         if not option.allows(resident.pgy, assignment.block_duration_weeks):
             errors.append(
                 f"{assignment.resident_id} {assignment.rotation_id}: elective is not "
@@ -36,10 +48,11 @@ def _validate_elective_policies(
                 f"{assignment.resident_id} {assignment.rotation_id}: elective block overlaps "
                 f"blackout week(s) {blackout_overlap}"
             )
-        counts[assignment.resident_id, assignment.rotation_id] += 1
 
     for (resident_id, rotation_id), count in counts.items():
         option = instance.electives.option_for(rotation_id)
+        if (resident_id, rotation_id) not in added:
+            continue
         if option is not None and not option.repeatable and count > 1:
             errors.append(
                 f"{resident_id} has {count} elective blocks on {rotation_id}, "

@@ -50,6 +50,12 @@ well: each attending's open half-days are filled from their weekly total,
 category ranges, and preferred weekly schedule,
 around hand-entered work and the academic half-day's Admin Time, and every
 attending-managed clinic gets the precepting its residents need.
+An automatic soft preference shares Precepting Clinic half-days within weeks
+and across the academic year, in proportion to available work and configured
+precepting ranges. Required coverage, existing assignments, category ranges,
+and preferred weekly placements take priority. Locked and hand-entered work
+count toward workload and stay in place. Balancing uses the remaining solve
+time, so a short run can finish before annual sharing is fully improved.
 
 Closing a workspace in the browser build deletes it permanently. Clean
 workspaces close at once; unsaved changes get a confirmation dialog whose
@@ -134,7 +140,8 @@ share one availability class, so the model grows with how differently
 attendings are configured rather than with how many there are. After the
 search, a small model per academic week names who precepts and fills the rest
 of each attending's week (`rbs.solver.core.attending_envelope` and
-`attending_assignment`).
+`attending_assignment`). An annual refinement then improves workload sharing
+while preserving the weekly results' achieved higher-priority goals.
 
 ```text
 UI / CLI / hosted adapters

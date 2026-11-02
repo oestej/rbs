@@ -12,12 +12,12 @@ from __future__ import annotations
 
 from collections import Counter
 
-from rbs.clinic_locks import attending_work_is_locked
 from rbs.models.attending import AttendingWorkType, EffectiveAttendingWeek
 from rbs.models.clinic import clinic_slot_date
 from rbs.models.enums import Session, Weekday
 from rbs.models.instance import SolverProblem
 from rbs.models.schedule import Schedule
+from rbs.solver.validation_inherited import InheritedWork
 
 _WEEKDAY_ORDER = {weekday: index for index, weekday in enumerate(Weekday)}
 
@@ -28,6 +28,7 @@ def _validate_attending_work(
     errors: list[str],
     *,
     maximums: bool = True,
+    inherited: InheritedWork | None = None,
 ) -> None:
     """Check attending work, and with ``maximums`` each clinic's preceptor limit.
 
@@ -35,6 +36,9 @@ def _validate_attending_work(
     placed. Hand edits may override it in a working draft until the next
     solve, as block edits may exceed rotation capacity, and they stay
     overrides when a later lock change keeps the schedule solved.
+
+    Work in ``inherited`` that an input edit has covered stays in a working
+    draft, where the effective attending week hides it.
     """
     if not schedule.attending_work:
         return
@@ -74,6 +78,11 @@ def _validate_attending_work(
         )
         half_day = "AM" if item.session is Session.MORNING else "PM"
         where = f"{attending.name} · {calendar_day:%b} {calendar_day.day} {half_day}"
+        if inherited is not None and inherited.holds_attending_work(item) and (
+            item.weekday not in effective.available_weekdays
+            or effective.assignment_on(item.weekday, item.session) is not None
+        ):
+            continue
         if item.weekday not in effective.available_weekdays:
             errors.append(
                 f"{where}: scheduled work falls outside the attending's schedule dates "
@@ -87,12 +96,10 @@ def _validate_attending_work(
         elif item.work_type is AttendingWorkType.PRECEPTING_CLINIC:
             assert item.clinic_id is not None
             # Whether work may override the maximum depends on who placed it,
-            # never on a lock that can later be removed.
-            counts = (
-                override_precepting
-                if item.manual_override or attending_work_is_locked(instance, item)
-                else placed_precepting
-            )
+            # never on a lock: through-today locking is not part of a saved
+            # document, and any lock can later be removed. A solve records the
+            # work it kept over a maximum as an override for the same reason.
+            counts = override_precepting if item.manual_override else placed_precepting
             counts[item.clinic_id, item.week, item.weekday, item.session] += 1
     if maximums:
         _validate_precepting_maximums(instance, placed_precepting, override_precepting, errors)
@@ -106,8 +113,8 @@ def _validate_precepting_maximums(
 ) -> None:
     """Reject placed precepting beyond a clinic's maximum for a half-day.
 
-    Hand-entered, locked, and hand-placed precepting count toward the
-    maximum, but they may exceed it by themselves as an override. Only work
+    Hand-entered, hand-placed, and kept-over-the-maximum precepting count toward
+    the maximum, but they may exceed it by themselves as an override. Only work
     the solve placed can break the maximum here.
     """
     if not placed:

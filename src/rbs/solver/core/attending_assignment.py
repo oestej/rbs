@@ -5,8 +5,8 @@ attending-managed clinic half-day needs a known number of preceptors. The
 envelope in :mod:`rbs.solver.core.attending_envelope` already proved that
 many could be supplied under every attending's rules. This pass decides who,
 and fills the rest of each attending's week, one small model per academic
-week. Every attending rule is weekly, so the weeks are independent and the
-year never becomes one large model.
+week. A subsequent annual balancing sweep shares indivisible half-days across
+weeks without building one large model or worsening higher-priority goals.
 
 Precepting coverage is a hard requirement. The attending rules use the same
 builder as the envelope, in relaxed form: a Fixed minimum or an exact weekly
@@ -20,12 +20,14 @@ The objective is strictly lexicographic:
 3. changes to the previous schedule's attending work;
 4. distance outside Flexible ranges;
 5. preferred weekly schedule half-days not matched;
-6. half-days left unfilled in vacation and boundary weeks.
+6. precepting workload relative to available work and configured category ranges;
+7. half-days left unfilled in vacation and boundary weeks.
 """
 
 from __future__ import annotations
 
 import os
+import time
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -38,6 +40,15 @@ from rbs.models.enums import Session, Weekday
 from rbs.models.instance import SolverProblem
 from rbs.models.schedule import AssignedAttendingWork, Schedule
 from rbs.solver.attending_availability import AttendingWeekFacts, precepting_allowed
+from rbs.solver.core.attending_balance import (
+    PreceptingBalance,
+    add_workload_terms,
+    could_improve,
+    precepting_counts,
+    precepting_opportunities,
+    workload_coefficients,
+    workload_cost,
+)
 from rbs.solver.core.attending_rules import AttendingWeekModel, add_attending_week
 from rbs.solver.core.lexicographic import solve_in_tiers
 
@@ -59,14 +70,14 @@ class AttendingPassResult:
 
 @dataclass
 class _WeekTerms:
-    tiers: list[list[tuple[Any, int]]] = field(default_factory=lambda: [[] for _ in range(6)])
+    tiers: list[list[tuple[Any, int]]] = field(default_factory=lambda: [[] for _ in range(7)])
 
     def add(self, tier: int, expression, upper_bound: int) -> None:
         if upper_bound > 0:
             self.tiers[tier].append((expression, upper_bound))
 
 
-_VIOLATIONS, _IDLE, _STABILITY, _FLEXIBLE, _PREFERRED, _FILL = range(6)
+_VIOLATIONS, _IDLE, _STABILITY, _FLEXIBLE, _PREFERRED, _BALANCE, _FILL = range(7)
 
 
 def precepting_demand(problem: SolverProblem, schedule: Schedule) -> Counter[PreceptingKey]:
@@ -100,6 +111,9 @@ def schedule_attending_work(
     schedule: Schedule,
     facts_by_week: dict[int, list[AttendingWeekFacts]],
     cp_model,
+    *,
+    num_workers: int = 1,
+    deadline: float | None = None,
 ) -> AttendingPassResult:
     """Place every attending's work around the solved resident schedule."""
     demand = precepting_demand(problem, schedule)
@@ -127,10 +141,21 @@ def schedule_attending_work(
         }
         for week in weeks
     }
+    opportunities = {
+        week: {
+            facts.attending_id: precepting_opportunities(problem, facts)
+            for facts in facts_by_week.get(week, [])
+        }
+        for week in weeks
+    }
+    balances = {
+        week: PreceptingBalance(workload_coefficients(opportunities[week])) for week in weeks
+    }
     # Weeks are independent and CP-SAT releases the GIL, so they solve in
     # parallel. Each week is still a single-worker, fixed-seed search with a
-    # deterministic budget, so the result does not depend on the thread count.
-    with ThreadPoolExecutor(max_workers=_WEEK_THREADS) as pool:
+    # deterministic budget, bounded by the remaining shared wall-clock time.
+    # Queued weeks check that deadline before building or searching a model.
+    with ThreadPoolExecutor(max_workers=max(1, min(num_workers, _WEEK_THREADS))) as pool:
         solved = list(
             pool.map(
                 lambda week: _solve_week(
@@ -139,10 +164,16 @@ def schedule_attending_work(
                     facts_by_week.get(week, []),
                     needs[week],
                     cp_model,
+                    deadline=deadline,
+                    balance=balances[week],
                 ),
                 weeks,
             )
         )
+    _balance_across_year(
+        problem, facts_by_week, needs, weeks, solved, balances, opportunities,
+        cp_model, deadline=deadline,
+    )
     for week, (week_work, violated, short) in zip(weeks, solved, strict=True):
         weekly = facts_by_week.get(week, [])
         work.extend(week_work)
@@ -170,16 +201,74 @@ def schedule_attending_work(
     )
 
 
+def _balance_across_year(
+    problem, facts_by_week, needs, weeks, solved, balances, opportunities, cp_model,
+    *, deadline,
+) -> None:
+    """Improve annual sharing while keeping a complete weekly solution in hand.
+
+    The baseline stays parallel and usable even when no time remains for this
+    refinement. Each replacement must preserve every achieved higher-priority
+    cost and strictly improve annual balance; it never displaces a useful week
+    with an incomplete or timed-out result.
+    """
+    if len(weeks) < 2 or any(violated or short for _work, violated, short in solved):
+        return
+    annual_opportunities: Counter[str] = Counter()
+    counts: Counter[str] = Counter()
+    for week, (work, _violated, _short) in zip(weeks, solved, strict=True):
+        annual_opportunities.update(opportunities[week])
+        counts.update(precepting_counts(work))
+        for facts in facts_by_week.get(week, []):
+            counts[facts.attending_id] += facts.fixed_count(AttendingWorkType.PRECEPTING_CLINIC)
+    coefficients = workload_coefficients(annual_opportunities)
+    for index, week in enumerate(weeks):
+        if deadline is not None and time.perf_counter() >= deadline:
+            break
+        if not could_improve(counts, coefficients):
+            break
+        original, _violated, _short = solved[index]
+        if balances[week].quality_limits is None:
+            continue
+        fixed = Counter({
+            facts.attending_id: facts.fixed_count(AttendingWorkType.PRECEPTING_CLINIC)
+            for facts in facts_by_week.get(week, [])
+        })
+        balance = PreceptingBalance(
+            coefficients=coefficients,
+            other_weeks=counts - precepting_counts(original) - fixed,
+            quality_limits=balances[week].quality_limits,
+            hint=tuple(original),
+        )
+        candidate, violated, short = _solve_week(
+            problem, week, facts_by_week.get(week, []), needs[week], cp_model,
+            deadline=deadline, balance=balance,
+        )
+        if violated or short:
+            continue
+        updated = counts.copy()
+        updated.subtract(precepting_counts(original))
+        updated.update(precepting_counts(candidate))
+        if workload_cost(updated, coefficients) < workload_cost(counts, coefficients):
+            solved[index] = candidate, violated, short
+            counts = updated
+
+
 def _solve_week(
     problem: SolverProblem,
     week: int,
     weekly: list[AttendingWeekFacts],
     need: dict[tuple[str, Weekday, Session], int],
     cp_model,
+    *,
+    deadline: float | None = None,
+    balance: PreceptingBalance | None = None,
 ) -> tuple[list[AssignedAttendingWork], bool, dict[tuple[str, Weekday, Session], int]]:
     placeable = [facts for facts in weekly if facts.open_half_days]
     if not placeable and not need:
         return [], False, {}
+    if deadline is not None and time.perf_counter() >= deadline:
+        return [], bool(placeable), dict(need)
     precepting_already = Counter(
         (item.clinic_id, item.weekday, item.session)
         for facts in weekly
@@ -194,6 +283,8 @@ def _solve_week(
         precepting_already,
         cp_model,
         hard_coverage=True,
+        deadline=deadline,
+        balance=balance,
     )
     if result is None:
         # The envelope makes this unreachable for the rules it models, and
@@ -208,6 +299,8 @@ def _solve_week(
             precepting_already,
             cp_model,
             hard_coverage=False,
+            deadline=deadline,
+            balance=balance,
         )
     if result is None:
         # Placing nothing always satisfies the relaxed model, so only a
@@ -226,7 +319,11 @@ def _build_and_solve(
     cp_model,
     *,
     hard_coverage: bool,
+    deadline: float | None = None,
+    balance: PreceptingBalance | None = None,
 ):
+    if deadline is not None and time.perf_counter() >= deadline:
+        return None
     model = cp_model.CpModel()
     first_week_start = problem.calendar.first_week_start
 
@@ -292,6 +389,12 @@ def _build_and_solve(
 
     for week_model in handles:
         _add_attending_terms(model, week_model, terms)
+    if balance is None:
+        balance = PreceptingBalance(workload_coefficients({
+            facts.attending_id: precepting_opportunities(problem, facts)
+            for facts in placeable
+        }))
+    terms.tiers[_BALANCE].extend(add_workload_terms(model, handles, balance))
 
     # Tiers are listed most important first. Uncovered sessions, which only
     # the fallback allows, outrank everything.
@@ -299,6 +402,19 @@ def _build_and_solve(
         [(variable, need[key]) for key, variable in shortfalls.items()],
         *terms.tiers,
     ]
+    if balance.quality_limits is not None:
+        for tier, limit in zip(tiers, balance.quality_limits, strict=False):
+            model.Add(sum(expression for expression, _bound in tier) <= limit)
+    if balance.hint:
+        selected = {
+            (item.attending_id, item.weekday, item.session, item.work_type, item.clinic_id)
+            for item in balance.hint
+        }
+        for handle in handles:
+            for (half_day, work_type, clinic_id), literal in handle.choices.items():
+                model.AddHint(literal, int((
+                    handle.facts.attending_id, *half_day, work_type, clinic_id,
+                ) in selected))
     solver = solve_in_tiers(
         model,
         [[expression for expression, _bound in tier] for tier in tiers],
@@ -308,9 +424,15 @@ def _build_and_solve(
             for literal in week_model.choices.values()
         ),
         cp_model,
+        deadline=deadline,
     )
     if solver is None:
         return None
+    if balance.quality_limits is None:
+        balance.quality_limits = tuple(
+            _value(solver, sum(expression for expression, _bound in tier))
+            for tier in tiers[:_BALANCE + 1]
+        )
 
     work: list[AssignedAttendingWork] = []
     violated = False

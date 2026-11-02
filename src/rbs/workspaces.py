@@ -9,6 +9,7 @@ from rbs.models.instance import SchedulerInput
 from rbs.models.schedule import Schedule
 from rbs.models.workspace import Workspace
 from rbs.repository import WorkspaceRepository
+from rbs.solver.working_draft import working_draft_for_inputs
 
 
 class InstanceEditImpact(StrEnum):
@@ -64,6 +65,10 @@ class WorkspaceController:
             raise ValueError(
                 "cannot preserve and replace a schedule in the same instance edit"
             )
+        if draft_schedule is not None and (
+            workspace.solution_is_out_of_date or draft_schedule.is_working_draft
+        ):
+            draft_schedule = working_draft_for_inputs(instance, draft_schedule)
         return self.repository.save_instance(
             workspace.id,
             instance,
@@ -80,6 +85,17 @@ class WorkspaceController:
             expected_instance_revision=workspace.instance_revision,
             expected_workspace_revision=workspace.workspace_revision,
         )
+
+    def save_schedule_edit(self, workspace: Workspace, schedule: Schedule) -> Workspace:
+        """Save a change the user made to the schedule, as opposed to a solve result.
+
+        An edit to an out-of-date schedule is a working draft of the current
+        inputs, whatever status the edit left on it. An edit that keeps a
+        current solved schedule valid stays solved.
+        """
+        if workspace.solution_is_out_of_date or schedule.is_working_draft:
+            schedule = working_draft_for_inputs(workspace.instance, schedule)
+        return self.save_schedule(workspace, schedule)
 
     def rename(self, workspace: Workspace, name: str) -> Workspace:
         return self.repository.rename(

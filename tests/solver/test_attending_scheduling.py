@@ -668,6 +668,176 @@ def test_validation_rejects_attending_work_that_could_never_be_scheduled() -> No
 # The weekly attending pass -------------------------------------------------
 
 
+def _balanced_attendings(*, weeks=4, count=4):
+    return [
+        _one_week(
+            f"attending-{index:03d}", f"Attending {index}",
+            weekly_shift_targets=[_target(PC, 0, 4), _target(AC, 0, 9)],
+        ).revised(schedule_end_date=_first_day() + timedelta(weeks=weeks, days=-1))
+        for index in range(1, count + 1)
+    ]
+
+
+def test_identical_attendings_share_precepting_within_each_week() -> None:
+    attendings = _balanced_attendings()
+    problem = _problem(attendings)
+    demand = {
+        (week, day, AM): 4 for week in range(1, 5) for day in (MON, TUE, THU, FRI)
+    }
+
+    result = schedule_attending_work(
+        problem, _demand(problem, demand), attending_week_facts(problem), cp_model,
+    )
+
+    assert not result.relaxed_weeks and not result.uncovered
+    for week in range(1, 5):
+        counts = Counter(item.attending_id for item in result.work
+                         if item.week == week and item.work_type is PC)
+        assert [counts[item.id] for item in attendings] == [1, 1, 1, 1]
+
+
+@pytest.mark.parametrize("workers", [1, 4])
+def test_indivisible_precepting_half_days_are_shared_across_the_year(workers) -> None:
+    attendings = _balanced_attendings()
+    problem = _problem(attendings)
+    demand = {(week, MON, AM): 4 for week in range(1, 5)}
+
+    result = schedule_attending_work(
+        problem, _demand(problem, demand), attending_week_facts(problem), cp_model,
+        num_workers=workers,
+    )
+
+    assert not result.relaxed_weeks and not result.uncovered
+    assert [_counts(result.work, item.id, PC) for item in attendings] == [1, 1, 1, 1]
+    assert {item.week for item in result.work if item.work_type is PC} == {1, 2, 3, 4}
+
+
+def test_precepting_balance_respects_different_configured_workloads() -> None:
+    attendings = _balanced_attendings(weeks=1, count=2)
+    attendings[0] = attendings[0].revised(
+        weekly_shift_targets=[_target(PC, 0, 2), _target(AC, 0, 9)],
+    )
+    problem = _problem(attendings)
+    demand = {(1, day, session): 4 for day, session in (
+        (MON, AM), (MON, PM), (TUE, AM), (TUE, PM), (THU, AM), (FRI, AM),
+    )}
+
+    result = schedule_attending_work(
+        problem, _demand(problem, demand), attending_week_facts(problem), cp_model,
+    )
+
+    assert not result.relaxed_weeks and not result.uncovered
+    assert [_counts(result.work, item.id, PC) for item in attendings] == [2, 4]
+
+
+def test_annual_sharing_accounts_for_schedule_dates_and_vacation() -> None:
+    attendings = _balanced_attendings(weeks=6, count=2)
+    # The second attending can work only half the year covered by this example.
+    attendings[1] = attendings[1].revised(
+        schedule_start_date=_first_day() + timedelta(weeks=2),
+        vacation_ranges=[AttendingVacation(
+            start_date=_first_day() + timedelta(weeks=3),
+            end_date=_first_day() + timedelta(weeks=4, days=-1),
+        )],
+    )
+    problem = _problem(attendings)
+    demand = {(week, MON, AM): 4 for week in range(1, 7)}
+
+    result = schedule_attending_work(
+        problem, _demand(problem, demand), attending_week_facts(problem), cp_model,
+    )
+
+    assert not result.relaxed_weeks and not result.uncovered
+    assert [_counts(result.work, item.id, PC) for item in attendings] == [4, 2]
+    assert all(item.week in {3, 5, 6} for item in result.work
+               if item.attending_id == attendings[1].id and item.work_type is PC)
+
+
+def test_precepting_balance_keeps_existing_assignments_ahead_of_fairness() -> None:
+    attendings = _balanced_attendings()
+    problem = _problem(attendings)
+    prior = [AssignedAttendingWork(
+        attending_id=attendings[0].id, week=week, weekday=MON, session=AM,
+        work_type=PC, clinic_id=CLINIC,
+    ) for week in range(1, 5)]
+    demand = {(week, MON, AM): 4 for week in range(1, 5)}
+
+    result = schedule_attending_work(
+        problem, _demand(problem, demand),
+        attending_week_facts(problem, _schedule(problem, prior)), cp_model,
+    )
+
+    assert not result.relaxed_weeks and not result.uncovered
+    assert [_counts(result.work, item.id, PC) for item in attendings] == [4, 0, 0, 0]
+    assert all(item in result.work for item in prior)
+
+
+def test_balance_counts_locked_work_without_adding_unneeded_preceptors() -> None:
+    attendings = _balanced_attendings(weeks=1, count=2)
+    problem = _problem(attendings)
+    locked = [AssignedAttendingWork(
+        attending_id=attendings[0].id, week=1, weekday=day, session=AM,
+        work_type=PC, clinic_id=CLINIC, locked=True,
+    ) for day in (MON, TUE, THU)]
+    demand = {(1, day, AM): 4 for day in (MON, TUE, THU)}
+
+    result = schedule_attending_work(
+        problem, _demand(problem, demand),
+        attending_week_facts(problem, _schedule(problem, locked)), cp_model,
+    )
+
+    assert not result.relaxed_weeks and not result.uncovered
+    assert [_counts(result.work, item.id, PC) for item in attendings] == [3, 0]
+    assert all(item in result.work for item in locked)
+
+
+def test_annual_balance_keeps_preferred_weekly_placements_ahead_of_fairness() -> None:
+    attendings = _balanced_attendings()
+    attendings[0] = attendings[0].revised(
+        preferred_weekly_schedule_half_days=[_work(MON, AM, PC, CLINIC)],
+    )
+    problem = _problem(attendings)
+    demand = {(week, MON, AM): 4 for week in range(1, 5)}
+
+    result = schedule_attending_work(
+        problem, _demand(problem, demand), attending_week_facts(problem), cp_model,
+    )
+
+    assert not result.relaxed_weeks and not result.uncovered
+    assert [_counts(result.work, item.id, PC) for item in attendings] == [4, 0, 0, 0]
+
+
+def test_annual_refinement_expiry_keeps_the_complete_weekly_solution(monkeypatch) -> None:
+    from rbs.solver.core import attending_assignment
+
+    attendings = _balanced_attendings()
+    problem = _problem(attendings)
+    demand = {(week, MON, AM): 4 for week in range(1, 5)}
+    solve_week = attending_assignment._solve_week
+    now = [0.0]
+    completed = []
+    monkeypatch.setattr(attending_assignment.time, "perf_counter", lambda: now[0])
+
+    def week(*args, **kwargs):
+        result = solve_week(*args, **kwargs)
+        completed.append(result)
+        if len(completed) == 4:
+            now[0] = 11.0
+        return result
+
+    monkeypatch.setattr(attending_assignment, "_solve_week", week)
+    result = schedule_attending_work(
+        problem, _demand(problem, demand), attending_week_facts(problem), cp_model,
+        num_workers=1, deadline=10.0,
+    )
+
+    assert len(completed) == 4
+    assert not result.relaxed_weeks and not result.uncovered
+    assert _counts(result.work, attendings[0].id, PC) <= 4
+    assert sum(item.work_type is PC for item in result.work) == 4
+    assert {item.week for item in result.work if item.work_type is PC} == {1, 2, 3, 4}
+
+
 def test_weekly_pass_covers_residents_and_keeps_every_required_rule() -> None:
     clinic_lead = _one_week(
         "attending-001",
@@ -1046,6 +1216,8 @@ class _ScriptedCpModel:
     def __init__(self, statuses) -> None:
         self.statuses = list(statuses)
         self.budgets: list[float] = []
+        self.time_limits: list[float] = []
+        self.on_solve = lambda: None
 
     def CpSolver(self):  # noqa: N802 - mirrors the OR-Tools name
         scripted = self
@@ -1056,6 +1228,8 @@ class _ScriptedCpModel:
 
             def Solve(self, _model):  # noqa: N802
                 scripted.budgets.append(self.parameters.max_deterministic_time)
+                scripted.time_limits.append(self.parameters.max_time_in_seconds)
+                scripted.on_solve()
                 return scripted.statuses.pop(0)
 
             def ObjectiveValue(self):  # noqa: N802
@@ -1107,6 +1281,118 @@ def test_a_week_the_search_cannot_finish_is_reported_instead_of_aborting(monkeyp
     work, violated, short = _solve_week(problem, 1, facts, need, cp_model)
 
     assert work == [] and violated and short == need
+
+
+@pytest.mark.parametrize("first_status", [_ScriptedCpModel.UNKNOWN, _ScriptedCpModel.FEASIBLE])
+def test_tier_search_shares_deadline_across_retries_and_tiers(monkeypatch, first_status) -> None:
+    from rbs.solver.core import lexicographic
+
+    now = [10.0]
+    monkeypatch.setattr(lexicographic.time, "perf_counter", lambda: now[0])
+    scripted = _ScriptedCpModel([first_status])
+    scripted.on_solve = lambda: now.__setitem__(0, 12.0)
+
+    solver = lexicographic.solve_in_tiers(
+        _Model(), [[1], [2]], [], scripted, deadline=12.0,
+    )
+
+    assert (solver is not None) is (first_status == scripted.FEASIBLE)
+    assert scripted.budgets == [0.1]
+    assert scripted.time_limits == [2.0]
+
+
+def test_tier_search_recomputes_remaining_time_for_each_attempt(monkeypatch) -> None:
+    from rbs.solver.core import lexicographic
+
+    now = [10.0]
+    monkeypatch.setattr(lexicographic.time, "perf_counter", lambda: now[0])
+    scripted = _ScriptedCpModel([_ScriptedCpModel.UNKNOWN, _ScriptedCpModel.FEASIBLE])
+    scripted.on_solve = lambda: now.__setitem__(0, now[0] + 1)
+
+    assert lexicographic.solve_in_tiers(_Model(), [[1]], [], scripted, deadline=13.0)
+    assert scripted.time_limits == [3.0, 2.0]
+
+
+@pytest.mark.parametrize("num_workers", [1, 2, 32])
+def test_attending_week_concurrency_obeys_worker_limit(monkeypatch, num_workers) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from rbs.solver.core import attending_assignment
+
+    limits = []
+    deadlines = []
+
+    def pool(*, max_workers):
+        limits.append(max_workers)
+        return ThreadPoolExecutor(max_workers=max_workers)
+
+    def week(*_args, deadline, balance):
+        deadlines.append(deadline)
+        return [], False, {}
+
+    problem = _problem([_one_week("attending-001", "Ada Lovelace")])
+    monkeypatch.setattr(attending_assignment, "ThreadPoolExecutor", pool)
+    monkeypatch.setattr(attending_assignment, "_solve_week", week)
+    schedule_attending_work(
+        problem, _schedule(problem), {week: [] for week in range(1, 11)}, cp_model,
+        num_workers=num_workers, deadline=123.0,
+    )
+
+    assert limits == [min(num_workers, attending_assignment._WEEK_THREADS)]
+    assert deadlines == [123.0] * 10
+
+
+def test_expired_attending_pass_preserves_locks_and_reports_uncovered_clinics(monkeypatch) -> None:
+    from rbs.solver.core import attending_assignment
+
+    attending = _one_week("attending-001", "Ada Lovelace")
+    problem = _problem([attending])
+    locked = AssignedAttendingWork(
+        attending_id=attending.id, week=1, weekday=MON, session=AM,
+        work_type=ADMIN, locked=True,
+    )
+    reference = _schedule(problem, work=[locked])
+    facts = attending_week_facts(problem, reference)
+    need = {(CLINIC, 1, TUE, AM): 1}
+    monkeypatch.setattr(attending_assignment.time, "perf_counter", lambda: 10.0)
+    monkeypatch.setattr(attending_assignment, "precepting_demand", lambda *_a: Counter(need))
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("an expired week must not build a model")
+
+    monkeypatch.setattr(attending_assignment, "_build_and_solve", unexpected)
+    result = schedule_attending_work(problem, reference, facts, cp_model, deadline=10.0)
+
+    assert result.work == (locked,)
+    assert result.uncovered == tuple(need.items())
+    assert result.relaxed_weeks == (1,)
+
+
+def test_engine_reserves_attending_time_within_the_configured_budget(monkeypatch) -> None:
+    from rbs.solver.core import cp_sat
+
+    problem = _problem([_one_week("attending-001", "Ada Lovelace")])
+    options = blank_instance().solver.revised(time_limit_seconds=10, num_workers=2)
+    schedule = _schedule(problem)
+    portfolio_limits = []
+    pass_limits = []
+    monkeypatch.setattr(cp_sat.time, "perf_counter", lambda: 100.0)
+
+    def portfolio(_self, _problem, *, started, deadline, **_kwargs):
+        portfolio_limits.append((started, deadline))
+        return schedule
+
+    def attendings(_problem, chosen, _facts, *, options, deadline):
+        pass_limits.append((options.num_workers, deadline))
+        return chosen
+
+    monkeypatch.setattr(cp_sat.CpSatEngine, "_solve_portfolio", portfolio)
+    monkeypatch.setattr(cp_sat, "_with_attending_work", attendings)
+    result = cp_sat.CpSatEngine().solve(problem, options=options)
+
+    assert result is schedule
+    assert portfolio_limits == [(100.0, 108.0)]
+    assert pass_limits == [(2, 110.0)]
 
 
 @pytest.mark.parametrize("weekend_vacation", [False, True])

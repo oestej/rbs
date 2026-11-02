@@ -11,12 +11,13 @@ configured attendings are interchangeable, and CP-SAT typically finds the
 best schedule almost at once and then spends its time closing the bound.
 Each tier therefore gets a deterministic work budget rather than a
 wall-clock one. With a single worker and a fixed seed the result depends
-only on the input, never on machine speed or load. The wall-clock limit is
-only a safety net far above what the deterministic budget uses.
+only on the input unless the caller's wall-clock deadline interrupts the
+search. Without a deadline, the wall-clock limit is only a safety net.
 """
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterable, Sequence
 from typing import Any
 
@@ -34,12 +35,13 @@ def solve_in_tiers(
     cp_model,
     *,
     work_limit: float = DEFAULT_TIER_WORK_LIMIT,
+    deadline: float | None = None,
 ):
     """Minimize each non-empty tier's sum in order; return the last solver.
 
-    Returns ``None`` only when CP-SAT proves the model has no solution, or
-    when even the largest first-solution budget finds none; a budget running
-    out is never mistaken for proof sooner than that. Once a solution exists,
+    Returns ``None`` when CP-SAT proves the model has no solution, or no first
+    solution is found within the work budgets and optional shared deadline.
+    Running out of time is never treated as proof of infeasibility. Once a solution exists,
     a later tier that fails to improve within its budget keeps the previous
     tier's solution, since it already satisfies every tier fixed so far.
     """
@@ -51,9 +53,9 @@ def solve_in_tiers(
         expression = sum(tier)
         model.Minimize(expression)
         attempt = (
-            solve_small(model, cp_model, work_limit=work_limit)
+            solve_small(model, cp_model, work_limit=work_limit, deadline=deadline)
             if solver is not None
-            else _first_solution(model, cp_model, work_limit)
+            else _first_solution(model, cp_model, work_limit, deadline=deadline)
         )
         if attempt is None:
             return solver
@@ -64,30 +66,42 @@ def solve_in_tiers(
             model.AddHint(variable, attempt.Value(variable))
     if solver is None:
         model.ClearObjective()
-        solver = _first_solution(model, cp_model, work_limit)
+        solver = _first_solution(model, cp_model, work_limit, deadline=deadline)
     return solver
 
 
-def _first_solution(model, cp_model, work_limit: float):
+def _first_solution(model, cp_model, work_limit: float, *, deadline: float | None = None):
     """Search with growing budgets until a solution appears or none can exist."""
     for multiplier in FIRST_SOLUTION_BUDGET_MULTIPLIERS:
-        solver, status = _solve(model, cp_model, work_limit * multiplier)
+        if deadline is not None and time.perf_counter() >= deadline:
+            return None
+        solver, status = _solve(model, cp_model, work_limit * multiplier, deadline=deadline)
         if solver is not None or status in (cp_model.INFEASIBLE, cp_model.MODEL_INVALID):
             return solver
     return None
 
 
-def solve_small(model, cp_model, *, work_limit: float = DEFAULT_TIER_WORK_LIMIT):
+def solve_small(
+    model, cp_model, *, work_limit: float = DEFAULT_TIER_WORK_LIMIT,
+    deadline: float | None = None,
+):
     """Solve a small model reproducibly; return the solver, or ``None`` if unsolved."""
-    return _solve(model, cp_model, work_limit)[0]
+    return _solve(model, cp_model, work_limit, deadline=deadline)[0]
 
 
-def _solve(model, cp_model, work_limit: float):
+def _solve(model, cp_model, work_limit: float, *, deadline: float | None = None):
+    remaining = (
+        _SAFETY_TIME_LIMIT_SECONDS
+        if deadline is None
+        else min(_SAFETY_TIME_LIMIT_SECONDS, deadline - time.perf_counter())
+    )
+    if remaining <= 0:
+        return None, cp_model.UNKNOWN
     solver = cp_model.CpSolver()
     solver.parameters.num_search_workers = 1
     solver.parameters.random_seed = 0
     solver.parameters.max_deterministic_time = work_limit
-    solver.parameters.max_time_in_seconds = _SAFETY_TIME_LIMIT_SECONDS
+    solver.parameters.max_time_in_seconds = remaining
     status = solver.Solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return None, status

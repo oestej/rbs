@@ -73,7 +73,11 @@ class StoreWorkspaceMixin:
     ) -> Workspace:
         instance = SchedulerInput.model_validate(instance.model_dump(mode="json"))
         if schedule is not None:
-            schedule = validate_persistable_schedule_or_raise(instance, schedule)
+            schedule = validate_persistable_schedule_or_raise(
+                instance,
+                schedule,
+                prior=schedule,
+            )
             schedule = schedule.revised(
                 meta=schedule.meta.revised(source_instance_revision=1)
             )
@@ -140,7 +144,11 @@ class StoreWorkspaceMixin:
                 schedule = None
             write_schedule = schedule is not None or discard_schedule
             if schedule is not None:
-                schedule = validate_persistable_schedule_or_raise(instance, schedule)
+                schedule = validate_persistable_schedule_or_raise(
+                    instance,
+                    schedule,
+                    prior=workspace.latest_schedule,
+                )
                 schedule = schedule.revised(
                     meta=schedule.meta.revised(
                         source_instance_revision=next_instance_revision
@@ -218,6 +226,7 @@ class StoreWorkspaceMixin:
                 schedule = validate_persistable_schedule_or_raise(
                     workspace.instance,
                     schedule,
+                    prior=workspace.latest_schedule,
                 )
                 schedule = schedule.revised(
                     meta=schedule.meta.revised(

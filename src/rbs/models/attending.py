@@ -741,7 +741,7 @@ def validate_attending_academic_year(
         for weekly in schedule.weeks:
             if weekly.week > weeks:
                 raise ValueError(
-                    f"{attending.id}: weekly work schedule week {weekly.week} is outside "
+                    f"{attending.name}: weekly work schedule week {weekly.week} is outside "
                     f"academic year weeks 1..{weeks}"
                 )
     for attending in attendings:
@@ -751,13 +751,13 @@ def validate_attending_academic_year(
         ):
             if calendar_day is not None and not first_day <= calendar_day <= last_day:
                 raise ValueError(
-                    f"{attending.id}: {label} {calendar_day.isoformat()} is outside "
+                    f"{attending.name}: {label} {calendar_day.isoformat()} is outside "
                     f"academic year {first_day.isoformat()}..{last_day.isoformat()}"
                 )
         for vacation in attending.vacation_ranges:
             if vacation.start_date < first_day or vacation.end_date > last_day:
                 raise ValueError(
-                    f"{attending.id}: vacation {vacation.start_date.isoformat()}.."
+                    f"{attending.name}: vacation {vacation.start_date.isoformat()}.."
                     f"{vacation.end_date.isoformat()} is outside academic year "
                     f"{first_day.isoformat()}..{last_day.isoformat()}"
                 )

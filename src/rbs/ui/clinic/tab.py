@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from copy import deepcopy
 from datetime import date, timedelta
 from functools import partial
 
@@ -49,6 +50,7 @@ from rbs.ui.editor_common import (
     _validation_message,
     _weeks_label,
 )
+from rbs.ui.editor_guard import EditorGuard, confirm_guarded_navigation
 from rbs.ui.rotations.ops import (
     replace_clinic_block_rules,
     rotation_editor_state,
@@ -1794,9 +1796,26 @@ def _open_clinic_editor_dialog(
     draft["capacity_overrides"] = [dict(item) for item in existing.get("capacity_overrides", [])]
     draft["closure_days"] = [dict(item) for item in existing.get("closure_days", [])]
     draft["allocation_rules"] = [dict(item) for item in existing.get("allocation_rules", [])]
+    guard = EditorGuard(subject="this clinic", save_label="Save clinic")
+
+    def close_editor() -> None:
+        # Saving may refresh the clinic panel and delete its dialog already.
+        if not dialog.is_deleted:
+            dialog.close()
+
+    def request_close() -> None:
+        confirm_guarded_navigation(guard, close_editor)
+
+    def manage_attendings() -> None:
+        def proceed() -> None:
+            close_editor()
+            if on_manage_attendings is not None:
+                on_manage_attendings()
+
+        confirm_guarded_navigation(guard, proceed)
 
     with (
-        ui.dialog() as dialog,
+        ui.dialog().props("persistent") as dialog,
         (
             ui.card()
             .classes("rbs-clinic-editor-dialog p-0 gap-0")
@@ -1846,7 +1865,7 @@ def _open_clinic_editor_dialog(
                 "clinic_exceptions": exceptions_tab,
             }
             ui.space()
-            ui.button(icon="close", on_click=dialog.close).props(
+            ui.button(icon="close", on_click=request_close).props(
                 "flat round dense aria-label='Close clinic editor'"
             )
         with (
@@ -1953,7 +1972,7 @@ def _open_clinic_editor_dialog(
                                         ui.button(
                                             "Manage attendings",
                                             icon="groups",
-                                            on_click=on_manage_attendings,
+                                            on_click=manage_attendings,
                                         ).props(SECONDARY_BUTTON_PROPS)
                                 else:
                                     ui.label(
@@ -2002,9 +2021,9 @@ def _open_clinic_editor_dialog(
 
         ui.separator()
         with ui.row().classes("w-full justify-end gap-3 p-4"):
-            ui.button("Cancel", on_click=dialog.close).props("flat no-caps")
+            ui.button("Cancel", on_click=request_close).props("flat no-caps")
 
-            def save_clinic() -> None:
+            def save_clinic() -> bool:
                 try:
                     clinic = ClinicSiteConfig.model_validate(draft)
                     updated = (
@@ -2012,20 +2031,26 @@ def _open_clinic_editor_dialog(
                         if original_id is not None
                         else add_clinic(instance, clinic)
                     )
-                    dialog.close()
+                    on_save(updated, selected_rotation_id)
+                    guard.clear()
+                    close_editor()
                     ui.notify(
                         "Clinic updated" if original_id else "Clinic added",
                         type="positive",
                     )
-                    on_save(updated, selected_rotation_id)
+                    return True
                 except (ValidationError, ValueError) as exc:
                     ui.notify(_validation_message(exc), type="negative", multi_line=True)
+                    return False
 
             ui.button(
                 "Save clinic",
                 icon="save",
                 on_click=save_clinic,
             ).props("unelevated no-caps")
+    initial_draft = deepcopy(draft)
+    guard.is_dirty = lambda: draft != initial_draft
+    guard.save = save_clinic
     dialog.open()
 
 

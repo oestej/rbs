@@ -15,6 +15,7 @@ from rbs.models.schedule import Schedule
 from rbs.models.workspace import Workspace, WorkspaceConflictError
 from rbs.product import ProductConfig
 from rbs.repository import WorkspaceRepository
+from rbs.solver.working_draft import left_out_of_draft
 from rbs.ui.clinic.projection import ClinicScheduleView
 from rbs.ui.host import LocalHost, Principal, WorkspaceHost
 from rbs.ui.locks import refresh_locks_through_today
@@ -32,6 +33,29 @@ TAB_NAMES = (
     "clinic",
     "settings",
 )
+
+
+def _warn_about_work_left_out(
+    before: Workspace,
+    instance: SchedulerInput,
+    saved: Workspace,
+) -> None:
+    """Say so when an edit turned an out-of-date schedule into a draft with less in it.
+
+    The count comes from the schedule as it was, so it reports what the changed
+    inputs took away rather than whatever the edit itself removed.
+    """
+    if (
+        before.stale_schedule is None
+        or saved.schedule is None
+        or not saved.schedule.is_working_draft
+    ):
+        return
+    message = left_out_of_draft(instance, before.stale_schedule).message
+    if message is not None:
+        from nicegui import ui
+
+        ui.notify(message, type="warning", multi_line=True)
 
 
 @runtime_checkable
@@ -235,6 +259,7 @@ class WorkspaceSession:
         except WorkspaceConflictError:
             self._refresh_after_conflict()
             raise
+        _warn_about_work_left_out(workspace, instance, saved)
         documents = getattr(self.workspace_host, "document_io", None)
         sync_settings = getattr(documents, "sync_application_settings", None)
         if sync_settings is not None:
@@ -256,10 +281,11 @@ class WorkspaceSession:
     ) -> Workspace:
         self._require_active_snapshot(workspace)
         try:
-            saved = WorkspaceController(self.store).save_schedule(workspace, schedule)
+            saved = WorkspaceController(self.store).save_schedule_edit(workspace, schedule)
         except WorkspaceConflictError:
             self._refresh_after_conflict()
             raise
+        _warn_about_work_left_out(workspace, workspace.instance, saved)
         with self.render_snapshot(saved):
             self.touch()
             self.mark_stale()
