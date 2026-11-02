@@ -16,7 +16,6 @@ from rbs.models.enums import Session, Weekday
 
 DEFAULT_ATTENDING_HALF_DAYS_PER_WEEK = 10
 MAX_ATTENDING_HALF_DAYS_PER_WEEK = 14
-MAX_ATTENDING_CLINIC_DAYS_PER_WEEK = 7
 ATTENDING_WORK_DESCRIPTION_MAX_LENGTH = 120
 
 _SESSION_ORDER = {
@@ -306,15 +305,6 @@ class Attending(StrictModel):
             "Optional fixed or flexible weekly shift ranges for recurring work categories."
         ),
     )
-    minimum_attending_clinic_days_per_week: int = Field(
-        default=0,
-        ge=0,
-        le=MAX_ATTENDING_CLINIC_DAYS_PER_WEEK,
-        description=(
-            "Minimum distinct weekdays with Attending Clinic work in full active "
-            "weeks without weekday vacation."
-        ),
-    )
     preferred_weekly_schedule_half_days: list[AttendingWorkHalfDay] = Field(
         default_factory=list,
         description=(
@@ -327,6 +317,15 @@ class Attending(StrictModel):
             "Reusable typed pattern copied into selected weeks; it is not itself work."
         ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def remove_legacy_clinic_day_minimum(cls, value: object) -> object:
+        """Discard the retired requirement in documents, caches, and input JSON."""
+        if isinstance(value, dict) and "minimum_attending_clinic_days_per_week" in value:
+            value = dict(value)
+            value.pop("minimum_attending_clinic_days_per_week")
+        return value
 
     @field_validator("id", "name")
     @classmethod
@@ -407,11 +406,6 @@ class Attending(StrictModel):
                 "preferred schedule half-days cannot exceed the configured "
                 "half-days per week"
             )
-        if self.minimum_attending_clinic_days_per_week > self.half_days_per_week:
-            raise ValueError(
-                "minimum Attending Clinic days cannot exceed the configured "
-                "half-days per week"
-            )
         for target in self.weekly_shift_targets:
             if target.maximum_shifts_per_week > self.half_days_per_week:
                 raise ValueError(
@@ -481,7 +475,6 @@ class EffectiveAttendingWeek:
     is_active_week: bool
     is_full_schedule_week: bool
     has_vacation: bool
-    attending_clinic_day_minimum: int
     scheduled_half_days: frozenset[tuple[Weekday, Session]] = frozenset()
 
     @property
@@ -604,8 +597,6 @@ def effective_attending_week(
                 assignments.append(scheduled)
                 scheduled_slots.add((weekday, session))
 
-    weekday_vacation = any(vacation_days[:5])
-    active_weekdays = any(scheduled_days[:5])
     full_weekdays = all(scheduled_days[:5])
     return EffectiveAttendingWeek(
         attending_id=attending.id,
@@ -635,11 +626,6 @@ def effective_attending_week(
         is_active_week=any(scheduled_days),
         is_full_schedule_week=full_weekdays,
         has_vacation=any(vacation_days),
-        attending_clinic_day_minimum=(
-            0
-            if not active_weekdays or not full_weekdays or weekday_vacation
-            else attending.minimum_attending_clinic_days_per_week
-        ),
         scheduled_half_days=frozenset(scheduled_slots),
     )
 

@@ -46,7 +46,6 @@ def test_schedule_report_distinguishes_required_and_preferred_rules() -> None:
         half_days_per_week=4,
         schedule_start_date=first_day,
         schedule_end_date=first_day + timedelta(days=4),
-        minimum_attending_clinic_days_per_week=2,
         weekly_shift_targets=[
             AttendingWeeklyShiftTarget(
                 work_type=AttendingWorkType.INPATIENT_SERVICE,
@@ -104,12 +103,10 @@ def test_schedule_report_distinguishes_required_and_preferred_rules() -> None:
     assert {issue.code for issue in report.issues} == {
         "attending_fixed_target",
         "attending_flexible_target",
-        "attending_clinic_day_minimum",
         "attending_preferred_schedule",
     }
     assert {issue.code for issue in report.errors} == {
         "attending_fixed_target",
-        "attending_clinic_day_minimum",
     }
     assert {issue.code for issue in report.warnings} == {
         "attending_flexible_target",
@@ -129,7 +126,6 @@ def test_vacation_removes_all_work_and_exempts_weekly_minimums() -> None:
         schedule_start_date=first_day,
         schedule_end_date=first_day + timedelta(days=4),
         vacation_ranges=[AttendingVacation(start_date=tuesday, end_date=tuesday)],
-        minimum_attending_clinic_days_per_week=3,
         weekly_shift_targets=[
             AttendingWeeklyShiftTarget(
                 work_type=AttendingWorkType.INPATIENT_SERVICE,
@@ -188,7 +184,6 @@ def test_vacation_removes_all_work_and_exempts_weekly_minimums() -> None:
         effective.assignment_on(Weekday.WEDNESDAY, Session.AFTERNOON).work_type
         is AttendingWorkType.ADMIN_TIME
     )
-    assert effective.attending_clinic_day_minimum == 0
     assert effective.assigned_half_days == 3
     assert attending_schedule_report(configured).issues == ()
 
@@ -202,7 +197,6 @@ def test_partial_boundary_week_can_fall_below_the_weekly_total() -> None:
         half_days_per_week=2,
         schedule_start_date=first_day + timedelta(days=2),
         schedule_end_date=first_day + timedelta(days=4),
-        minimum_attending_clinic_days_per_week=2,
     )
     configured = instance.revised(attendings=[attending])
 
@@ -211,7 +205,6 @@ def test_partial_boundary_week_can_fall_below_the_weekly_total() -> None:
     assert effective.is_active_week
     assert not effective.is_full_schedule_week
     assert effective.assigned_half_days == 1
-    assert effective.attending_clinic_day_minimum == 0
     assert attending_schedule_report(configured).issues == ()
 
 

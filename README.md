@@ -25,8 +25,7 @@ Schedule**, **Residents**, **Attendings**, **Rotations**, **Clinic**, and
 **Configuration** (annual calendar start, automatic locking, training levels,
 solver tuning). The Attendings tab records each attending's weekly half-day
 total, optional Fixed or Flexible minimum/maximum ranges for each recurring work
-category, a minimum number of distinct Attending Clinic days in full weeks
-without weekday vacation, an independent schedule for every academic week, schedule dates, and
+category, an independent schedule for every academic week, schedule dates, and
 day-level vacation ranges. A preferred weekly schedule records soft placement
 preferences without creating work. Special/Other work is scheduled manually
 and can carry a free-text description. Adding an attending starts with only
@@ -42,13 +41,13 @@ schedules. A week's half-day total can be overridden with its
 current assignment count, including for attendings whose usual total is zero.
 The program's effective academic half-day is automatically reserved as Admin
 Time for active attendings unless that option is disabled in Academic settings.
-Schedule checks distinguish required weekly totals, Fixed ranges, and Attending Clinic
-day minimums from Flexible ranges and preferred placements, while accounting
+Schedule checks distinguish required weekly totals and Fixed ranges
+from Flexible ranges and preferred placements, while accounting
 for vacation and partial schedule-boundary weeks.
 Clinics can use their own configured capacity or derive resident capacity from
 attendings assigned to Precepting Clinic work. Solving schedules attendings as
 well: each attending's open half-days are filled from their weekly total,
-category ranges, Attending Clinic day minimum, and preferred weekly schedule,
+category ranges, and preferred weekly schedule,
 around hand-entered work and the academic half-day's Admin Time, and every
 attending-managed clinic gets the precepting its residents need.
 
@@ -107,9 +106,10 @@ already exist in `rbs.cloud` and surface in the UI behind `rbs ui --cloud`.
 
 ## File formats
 
-- `.rbsc` workspaces use schema v12; v9 through v11 documents migrate
+- `.rbsc` workspaces use schema v13; v9 through v12 documents migrate
   (versions 9 and 10 gain an empty attending directory, version 11 migrates
-  attending work into week-specific schedules). Earlier versions are rejected.
+  attending work into week-specific schedules, and version 12 drops the retired
+  minimum Attending Clinic days setting). Earlier versions are rejected.
 - Constraint catalogs (rotations, curricula, clinic policy) are schema v10
   (v8 and v9 migrate automatically); `data/catalog.json` is the bundled default.
 - Clinic block training-level rules set `capacity_per_resident` (positive integer,
@@ -125,7 +125,7 @@ already exist in `rbs.cloud` and surface in the UI behind `rbs ui --cloud`.
 
 The UI never calls CP-SAT directly. It shells out to `rbs-solver` with one
 JSON document on stdin and reads one back on stdout
-(`protocol: "rbs.solve"`, version 7). Set `RBS_SOLVER_COMMAND` to swap the
+(`protocol: "rbs.solve"`, version 8). Set `RBS_SOLVER_COMMAND` to swap the
 executable; the desktop bundle ships its own so no system Python is needed.
 
 Attendings reach the block search only as preceptor counts per

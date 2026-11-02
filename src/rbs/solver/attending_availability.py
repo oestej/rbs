@@ -87,7 +87,6 @@ class AttendingWeekFacts:
     open_half_days: tuple[HalfDay, ...]
     fixed_ranges: tuple[tuple[AttendingWorkType, TargetRange], ...]
     flexible_ranges: tuple[tuple[AttendingWorkType, TargetRange], ...]
-    clinic_day_minimum: int
     work_types: frozenset[AttendingWorkType]
     precepting_clinics: tuple[str, ...]
     fill_goal: int
@@ -109,14 +108,6 @@ class AttendingWeekFacts:
     def fixed_count(self, work_type: AttendingWorkType) -> int:
         return sum(assignment.work_type is work_type for assignment in self.fixed)
 
-    @property
-    def fixed_clinic_days(self) -> frozenset[Weekday]:
-        return frozenset(
-            assignment.weekday
-            for assignment in self.fixed
-            if assignment.work_type is AttendingWorkType.ATTENDING_CLINIC
-        )
-
     def date_of(self, weekday: Weekday) -> date:
         return self.week_start + timedelta(days=_WEEKDAY_INDEX[weekday])
 
@@ -131,9 +122,7 @@ class AttendingWeekFacts:
             self.remaining,
             self.open_half_days,
             tuple(sorted(Counter(item.work_type for item in self.fixed).items())),
-            tuple(sorted(self.fixed_clinic_days, key=_WEEKDAY_INDEX.__getitem__)),
             self.fixed_ranges,
-            self.clinic_day_minimum,
             tuple(sorted(self.work_types)),
             self.can_precept,
         )
@@ -201,7 +190,6 @@ def _week_facts(
             open_half_days=(),
             fixed_ranges=(),
             flexible_ranges=(),
-            clinic_day_minimum=0,
             work_types=frozenset(),
             precepting_clinics=(),
             fill_goal=0,
@@ -330,7 +318,6 @@ def _week_facts(
         open_half_days=open_half_days,
         fixed_ranges=fixed_ranges,
         flexible_ranges=flexible_ranges,
-        clinic_day_minimum=hand_entered.attending_clinic_day_minimum,
         work_types=frozenset(work_types),
         precepting_clinics=precepting_clinics,
         fill_goal=fill_goal,

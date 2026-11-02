@@ -254,7 +254,6 @@ def sample_attendings(first_week_start: date) -> list[Attending]:
                 (clinic, 4, 5, flexible),
                 (admin, 1, 2, flexible),
             ),
-            minimum_attending_clinic_days_per_week=2,
             preferred_weekly_schedule_half_days=_sample_half_days(
                 (monday, morning, clinic, None),
                 (monday, afternoon, clinic, None),
@@ -305,7 +304,6 @@ def sample_attendings(first_week_start: date) -> list[Attending]:
                 (clinic, 4, 6, flexible),
                 (admin, 1, 2, flexible),
             ),
-            minimum_attending_clinic_days_per_week=3,
             preferred_weekly_schedule_half_days=_sample_half_days(
                 (tuesday, afternoon, precepting, "cedar"),
                 (thursday, morning, precepting, "cedar"),
@@ -340,7 +338,6 @@ def sample_attendings(first_week_start: date) -> list[Attending]:
                 (clinic, 4, 6, flexible),
                 (admin, 1, 2, flexible),
             ),
-            minimum_attending_clinic_days_per_week=2,
             preferred_weekly_schedule_half_days=_sample_half_days(
                 (monday, afternoon, precepting, "cedar"),
                 (tuesday, afternoon, precepting, "maple"),
@@ -373,7 +370,6 @@ def sample_attendings(first_week_start: date) -> list[Attending]:
             # Joins the faculty partway through the academic year.
             schedule_start_date=first_week_start + timedelta(days=140),
             weekly_shift_targets=_sample_targets((clinic, 5, 6, flexible)),
-            minimum_attending_clinic_days_per_week=3,
             preferred_weekly_schedule_half_days=_sample_half_days(
                 (tuesday, morning, precepting, "cedar"),
                 (thursday, morning, precepting, "cedar"),

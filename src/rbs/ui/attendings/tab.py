@@ -21,7 +21,6 @@ from rbs.models.attending import (
     ATTENDING_WORK_DESCRIPTION_MAX_LENGTH,
     ATTENDING_WORK_TYPE_LABELS,
     DEFAULT_ATTENDING_HALF_DAYS_PER_WEEK,
-    MAX_ATTENDING_CLINIC_DAYS_PER_WEEK,
     MAX_ATTENDING_HALF_DAYS_PER_WEEK,
     Attending,
     AttendingVacation,
@@ -437,17 +436,6 @@ def _attending_view(
                             len(attending.weekly_shift_targets)
                         )
                     ).props("outline").classes("rbs-muted-badge")
-                with ui.row().classes(
-                    "rbs-attending-work-row w-full items-center gap-3 rounded px-4 py-3"
-                ):
-                    ui.icon("calendar_view_week").classes("rbs-text-primary")
-                    with ui.column().classes("min-w-0 flex-1 gap-0"):
-                        ui.label("Attending Clinic days").classes("rbs-font-semibold")
-                        ui.label(
-                            _minimum_attending_clinic_days_label(
-                                attending.minimum_attending_clinic_days_per_week
-                            )
-                        ).classes("rbs-type-caption rbs-text-muted")
                 _attending_weekly_shift_target_list(attending.weekly_shift_targets)
 
         with master_detail.detail_card():
@@ -1149,11 +1137,6 @@ def _attending_form(
     initial_weekly_shift_targets = (
         list(attending.weekly_shift_targets) if attending is not None else []
     )
-    initial_minimum_clinic_days = (
-        attending.minimum_attending_clinic_days_per_week
-        if attending is not None
-        else 0
-    )
     initial_preferred_schedule = (
         list(attending.preferred_weekly_schedule_half_days)
         if attending is not None
@@ -1217,11 +1200,6 @@ def _attending_form(
                 ),
                 vacation_ranges=initial_vacations,
                 weekly_shift_targets=configured_weekly_shift_targets(),
-                minimum_attending_clinic_days_per_week=getattr(
-                    controls.get("minimum_attending_clinic_days_per_week"),
-                    "value",
-                    initial_minimum_clinic_days,
-                ),
                 preferred_weekly_schedule_half_days=initial_preferred_schedule,
                 schedule_template_half_days=initial_schedule_template,
             )
@@ -1316,14 +1294,9 @@ def _attending_form(
 
                 with ui.tab_panel(targets_tab).classes("p-0"):
                     with ui.column().classes("w-full gap-4 p-5"):
-                        controls["minimum_attending_clinic_days_per_week"] = (
-                            _weekly_shift_target_editor(
-                                initial_weekly_shift_targets,
-                                weekly_shift_target_controls,
-                                minimum_attending_clinic_days=(
-                                    initial_minimum_clinic_days
-                                ),
-                            )
+                        _weekly_shift_target_editor(
+                            initial_weekly_shift_targets,
+                            weekly_shift_target_controls,
                         )
 
                 with ui.tab_panel(preferences_tab).classes("p-0"):
@@ -1375,11 +1348,6 @@ def _attending_form(
                 }
                 for work_type, mode, minimum, maximum in weekly_shift_target_controls
             ],
-            "minimum_attending_clinic_days_per_week": getattr(
-                controls.get("minimum_attending_clinic_days_per_week"),
-                "value",
-                initial_minimum_clinic_days,
-            ),
             "preferred_weekly_schedule": [
                 half_day.model_dump(mode="json")
                 for half_day in initial_preferred_schedule
@@ -1508,9 +1476,7 @@ def _attending_details_editor(
 def _weekly_shift_target_editor(
     targets: list[AttendingWeeklyShiftTarget],
     controls: list[tuple[AttendingWorkType, object, object, object]],
-    *,
-    minimum_attending_clinic_days: int,
-) -> object:
+) -> None:
     from nicegui import ui
 
     by_work_type = {target.work_type: target for target in targets}
@@ -1521,33 +1487,6 @@ def _weekly_shift_target_editor(
             "required; a Flexible range is preferred. Special/Other work is added "
             "directly to the schedule."
         ).classes("rbs-type-caption rbs-text-muted")
-
-    with ui.column().classes(
-        "rbs-attending-form-section w-full gap-3 rounded p-4"
-    ):
-        with ui.row().classes("w-full items-center gap-3"):
-            ui.icon("calendar_view_week").classes("rbs-text-primary")
-            with ui.column().classes("min-w-0 gap-0"):
-                ui.label("Attending Clinic days").classes(
-                    "rbs-type-section-title"
-                )
-                ui.label(
-                    "An Attending Clinic day is a distinct weekday containing one or "
-                    "two Attending Clinic half-days. Weeks containing weekday vacation "
-                    "are excluded."
-                ).classes("rbs-type-caption rbs-text-muted")
-        minimum_clinic_days = (
-            ui.number(
-                "Minimum Attending Clinic days per week",
-                value=minimum_attending_clinic_days,
-                min=0,
-                max=MAX_ATTENDING_CLINIC_DAYS_PER_WEEK,
-                step=1,
-                precision=0,
-            )
-            .props("outlined")
-            .classes("w-full md:w-72")
-        )
 
     for work_type in ATTENDING_WEEKLY_TARGET_WORK_TYPES:
         category_label = _WORK_TYPE_OPTIONS[work_type.value]
@@ -1621,7 +1560,6 @@ def _weekly_shift_target_editor(
 
                 mode.on_value_change(toggle_range)
                 controls.append((work_type, mode, minimum, maximum))
-    return minimum_clinic_days
 
 
 def _preferred_weekly_schedule_editor(
@@ -2254,13 +2192,6 @@ def _assigned_half_day_target_label(count: int, target: int) -> str:
 
 def _preferred_schedule_count_label(count: int, target: int) -> str:
     return f"{count} of {target} preferred half-days"
-
-
-def _minimum_attending_clinic_days_label(count: int) -> str:
-    if count == 0:
-        return "No Attending Clinic day minimum"
-    unit = "day" if count == 1 else "days"
-    return f"At least {count} Attending Clinic {unit} per full week without weekday vacation"
 
 
 def _weekly_shift_target_count_label(count: int) -> str:

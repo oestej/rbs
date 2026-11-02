@@ -83,7 +83,26 @@ def test_attending_half_days_per_week_default_to_ten_and_are_editable() -> None:
             attending.revised(half_days_per_week=invalid)
 
 
-def test_attending_clinic_day_minimum_and_preferred_schedule_are_typed() -> None:
+def test_retired_clinic_day_minimum_is_removed_without_changing_other_fields() -> None:
+    attending = Attending(id="attending-001", name="Ada Lovelace", half_days_per_week=1)
+    payload = attending.model_dump(mode="json")
+    payload["minimum_attending_clinic_days_per_week"] = 3
+
+    restored = Attending.model_validate(payload)
+
+    assert restored == attending
+    assert payload["minimum_attending_clinic_days_per_week"] == 3
+    assert "minimum_attending_clinic_days_per_week" not in restored.model_dump()
+    assert (
+        "minimum_attending_clinic_days_per_week"
+        not in Attending.model_json_schema()["properties"]
+    )
+    assert restored.revised(half_days_per_week=0).half_days_per_week == 0
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        Attending.model_validate({**payload, "unknown_requirement": 2})
+
+
+def test_attending_preferred_schedule_is_typed() -> None:
     preferred_clinic = AttendingWorkHalfDay(
         weekday=Weekday.TUESDAY,
         session=Session.MORNING,
@@ -98,11 +117,9 @@ def test_attending_clinic_day_minimum_and_preferred_schedule_are_typed() -> None
         id="attending-001",
         name="Ada Lovelace",
         half_days_per_week=3,
-        minimum_attending_clinic_days_per_week=2,
         preferred_weekly_schedule_half_days=[preferred_clinic, preferred_admin],
     )
 
-    assert attending.minimum_attending_clinic_days_per_week == 2
     assert attending.preferred_weekly_schedule_half_days == [
         preferred_admin,
         preferred_clinic,
@@ -113,11 +130,6 @@ def test_attending_clinic_day_minimum_and_preferred_schedule_are_typed() -> None
         "preferred_weekly_schedule_half_days"
     ] == []
 
-    with pytest.raises(ValidationError, match="minimum Attending Clinic days"):
-        attending.revised(
-            half_days_per_week=1,
-            preferred_weekly_schedule_half_days=[],
-        )
     with pytest.raises(ValidationError, match="cannot include Special/Other"):
         attending.revised(
             preferred_weekly_schedule_half_days=[
@@ -715,7 +727,6 @@ def test_attending_clinic_days_count_distinct_effective_weekdays() -> None:
         id="attending-001",
         name="Ada Lovelace",
         half_days_per_week=5,
-        minimum_attending_clinic_days_per_week=3,
     )
     schedule = AttendingSchedule(
         attending_id=attending.id,
@@ -758,7 +769,6 @@ def test_attending_clinic_days_count_distinct_effective_weekdays() -> None:
         Weekday.MONDAY,
         Weekday.TUESDAY,
     }
-    assert configured.attending_clinic_day_minimum_for_week(attending, 1) == 3
 
     vacation_attending = attending.revised(
         vacation_ranges=[
@@ -775,7 +785,6 @@ def test_attending_clinic_days_count_distinct_effective_weekdays() -> None:
     assert configured.attending_clinic_days_for_week(vacation_attending, 1) == {
         Weekday.MONDAY
     }
-    assert configured.attending_clinic_day_minimum_for_week(vacation_attending, 1) == 0
 
     weekend_vacation = attending.revised(
         vacation_ranges=[
@@ -789,7 +798,10 @@ def test_attending_clinic_days_count_distinct_effective_weekdays() -> None:
         attendings=[weekend_vacation],
         attending_schedules=[schedule],
     )
-    assert configured.attending_clinic_day_minimum_for_week(weekend_vacation, 1) == 3
+    assert configured.attending_clinic_days_for_week(weekend_vacation, 1) == {
+        Weekday.MONDAY,
+        Weekday.TUESDAY,
+    }
 
 
 def test_academic_half_day_is_derived_admin_time_for_active_attendings() -> None:
@@ -1638,16 +1650,11 @@ def test_weekly_shift_targets_default_when_loading_an_earlier_attending_shape() 
     payload = sample_instance().model_dump(mode="json")
     for attending in payload["attendings"]:
         attending.pop("weekly_shift_targets")
-        attending.pop("minimum_attending_clinic_days_per_week")
         attending.pop("preferred_weekly_schedule_half_days")
 
     restored = SchedulerInput.model_validate(payload)
 
     assert all(not attending.weekly_shift_targets for attending in restored.attendings)
-    assert all(
-        attending.minimum_attending_clinic_days_per_week == 0
-        for attending in restored.attendings
-    )
     assert all(
         not attending.preferred_weekly_schedule_half_days
         for attending in restored.attendings

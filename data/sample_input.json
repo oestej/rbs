@@ -564,7 +564,6 @@
           "mode": "fixed"
         }
       ],
-      "minimum_attending_clinic_days_per_week": 0,
       "preferred_weekly_schedule_half_days": [
         {
           "work_type": "precepting_clinic",
@@ -622,7 +621,6 @@
           "mode": "flexible"
         }
       ],
-      "minimum_attending_clinic_days_per_week": 3,
       "preferred_weekly_schedule_half_days": [
         {
           "work_type": "precepting_clinic",
@@ -669,7 +667,6 @@
           "mode": "fixed"
         }
       ],
-      "minimum_attending_clinic_days_per_week": 3,
       "preferred_weekly_schedule_half_days": [
         {
           "work_type": "precepting_clinic",
@@ -722,7 +719,6 @@
           "mode": "fixed"
         }
       ],
-      "minimum_attending_clinic_days_per_week": 0,
       "preferred_weekly_schedule_half_days": [
         {
           "work_type": "precepting_clinic",
@@ -780,7 +776,6 @@
           "mode": "flexible"
         }
       ],
-      "minimum_attending_clinic_days_per_week": 2,
       "preferred_weekly_schedule_half_days": [
         {
           "work_type": "precepting_clinic",
@@ -838,7 +833,6 @@
           "mode": "flexible"
         }
       ],
-      "minimum_attending_clinic_days_per_week": 0,
       "preferred_weekly_schedule_half_days": [
         {
           "work_type": "precepting_clinic",
@@ -900,7 +894,6 @@
           "mode": "flexible"
         }
       ],
-      "minimum_attending_clinic_days_per_week": 2,
       "preferred_weekly_schedule_half_days": [
         {
           "work_type": "attending_clinic",
@@ -985,7 +978,6 @@
           "mode": "flexible"
         }
       ],
-      "minimum_attending_clinic_days_per_week": 0,
       "preferred_weekly_schedule_half_days": [
         {
           "work_type": "precepting_clinic",

@@ -958,10 +958,6 @@ def test_rebasing_academic_year_moves_workspace_specific_dates() -> None:
         rebased_preferred_attending.preferred_weekly_schedule_half_days
         == preferred_attending.preferred_weekly_schedule_half_days
     )
-    assert (
-        rebased_preferred_attending.minimum_attending_clinic_days_per_week
-        == preferred_attending.minimum_attending_clinic_days_per_week
-    )
     assert rebased.clinic_policy.site("maple").capacity_overrides[0].date == date(2028, 9, 16)
     assert {closure.date for closure in rebased.clinic_policy.closure_days} == {date(2028, 12, 25)}
     assert all(lock.source == "manual" for lock in rebased.locks)

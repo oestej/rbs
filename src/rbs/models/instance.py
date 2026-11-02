@@ -772,21 +772,6 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
             )
         return self.effective_attending_week(attending, week).attending_clinic_days
 
-    def attending_clinic_day_minimum_for_week(
-        self,
-        attending: Attending,
-        week: int,
-    ) -> int:
-        """Return the minimum, excluding partial, inactive, and vacation weeks."""
-        if not 1 <= week <= self.calendar.weeks:
-            raise ValueError(
-                f"academic week must be between 1 and {self.calendar.weeks}"
-            )
-        return self.effective_attending_week(
-            attending,
-            week,
-        ).attending_clinic_day_minimum
-
     def constraint_catalog(self) -> ConstraintCatalog:
         return ConstraintCatalog.from_instance(self)
 

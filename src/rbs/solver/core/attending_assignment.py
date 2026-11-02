@@ -14,7 +14,7 @@ total that cannot be met (for example because hand-entered work already
 contradicts it) becomes a counted violation instead of an empty schedule.
 The objective is strictly lexicographic:
 
-1. violations of Fixed ranges, weekly totals, and Attending Clinic days;
+1. violations of Fixed ranges and weekly totals;
 2. precepting beyond what residents need, so a Flexible range, a preference,
    or the previous schedule never books a preceptor with no one to precept;
 3. changes to the previous schedule's attending work;

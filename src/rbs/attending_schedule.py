@@ -153,23 +153,6 @@ def attending_schedule_report(
                 )
             )
 
-            clinic_days = len(effective.attending_clinic_days)
-            clinic_minimum = effective.attending_clinic_day_minimum
-            if clinic_days < clinic_minimum:
-                issues.append(
-                    AttendingScheduleIssue(
-                        code="attending_clinic_day_minimum",
-                        severity=AttendingScheduleIssueSeverity.ERROR,
-                        attending_id=attending.id,
-                        week=week,
-                        work_type=AttendingWorkType.ATTENDING_CLINIC,
-                        message=(
-                            f"{attending.name} · week {week}: {clinic_days} of at least "
-                            f"{clinic_minimum} Attending Clinic days assigned."
-                        ),
-                    )
-                )
-
             preferred_misses = _preferred_misses(attending, effective)
             if preferred_misses:
                 issues.append(

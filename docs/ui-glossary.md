@@ -14,7 +14,6 @@ descriptions.
 | Attending half-day total used for one academic week | week override; Override; Use default | ad hoc; lock |
 | Protected attending placement | locked work half-day; Lock all work; Unlock all work | fixed week; Override |
 | Attending half-day categories | Inpatient Service; Attending Clinic; Precepting Clinic; Admin Time; Special/Other | generic clinic time |
-| Minimum distinct weekdays of an attending's own clinic | Attending Clinic day(s); Minimum Attending Clinic days per week | Clinic Day; clinic shift minimum |
 | Academic half-day attending rule | Reserve the academic half-day as Admin Time for attendings | attending availability |
 | Attending category shift goal | weekly category target; Minimum shifts per week; Maximum shifts per week; Fixed; Flexible; No target | quota; limit; Special/Other target |
 | Explanation of Special/Other attending work | Description | weekly target; generic note |

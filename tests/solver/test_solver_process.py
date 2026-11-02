@@ -114,6 +114,17 @@ def test_structured_diagnostics_round_trip_over_the_json_contract() -> None:
     assert restored.solution.meta.diagnostics == [diagnostic]
 
 
+def test_retired_solver_protocol_is_rejected() -> None:
+    payload = _request(_stub_instance(), request_id="old-protocol").model_dump(mode="json")
+    payload["version"] = 7
+
+    response = handle_request_json(json.dumps(payload))
+
+    assert isinstance(response, SolveFailure)
+    assert response.request_id == "old-protocol"
+    assert response.error.code == "invalid_request"
+
+
 def test_invalid_wire_payload_returns_a_structured_error() -> None:
     response = handle_request_json('{"request_id":"bad-request","version":99}')
 
@@ -230,7 +241,7 @@ def test_process_client_surfaces_structured_solver_errors() -> None:
             "-c",
             (
                 "import json,sys; request=json.load(sys.stdin); "
-                    "print(json.dumps({'protocol':'rbs.solve','version':7,"
+                    "print(json.dumps({'protocol':'rbs.solve','version':8,"
                 "'request_id':request['request_id'],'status':'error',"
                 "'error':{'code':'solver_error','message':'boom'}}))"
             ),

@@ -178,8 +178,6 @@ class AttendingEnvelope:
             }
             if profile.capacity < len(usable):
                 self.model.Add(sum(counts.values()) <= size * profile.capacity)
-            if not profile.relaxed:
-                self._limit_precepting_days(members[0], counts, size, week, index)
             for half_day, count in counts.items():
                 supply[half_day].append((count, size))
 
@@ -372,49 +370,6 @@ class AttendingEnvelope:
                 key=lambda item: item[1][0].attending_id,
             )
         ]
-
-    def _limit_precepting_days(
-        self,
-        facts: AttendingWeekFacts,
-        counts: dict[HalfDay, Any],
-        size: int,
-        week: int,
-        index: int,
-    ) -> None:
-        """Keep enough days free for each member's Attending Clinic day minimum."""
-        # The same condition as the weekly rule: the effective week's minimum
-        # already excludes partial and weekday-vacation weeks.
-        needed = facts.clinic_day_minimum - len(facts.fixed_clinic_days)
-        if needed <= 0 or AttendingWorkType.ATTENDING_CLINIC not in facts.work_types:
-            return
-        candidate_days = [
-            weekday
-            for weekday in Weekday
-            if weekday not in facts.fixed_clinic_days
-            and any(half_day[0] is weekday for half_day in facts.open_half_days)
-        ]
-        blocked = []
-        for weekday in candidate_days:
-            day_half_days = [
-                half_day for half_day in facts.open_half_days if half_day[0] is weekday
-            ]
-            if not all(half_day in counts for half_day in day_half_days):
-                # Some open half-day that day never precepts here, so the day
-                # always keeps room for Attending Clinic.
-                continue
-            fully_precepted = self.model.NewIntVar(
-                0,
-                size,
-                f"precept_day:w{week}:k{index}:{weekday.value}",
-            )
-            self.model.Add(
-                fully_precepted
-                >= sum(counts[half_day] for half_day in day_half_days)
-                - (len(day_half_days) - 1) * size
-            )
-            blocked.append(fully_precepted)
-        if blocked:
-            self.model.Add(sum(blocked) <= size * (len(candidate_days) - needed))
 
     def _profile(
         self,

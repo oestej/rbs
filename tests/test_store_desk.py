@@ -237,6 +237,73 @@ def test_importing_a_file_with_no_workspaces_is_refused(tmp_path) -> None:
         _store(tmp_path).import_workspace_rbsc(payload)
 
 
+def test_v12_file_drops_clinic_day_minimum_and_preserves_work_and_schedule(tmp_path) -> None:
+    source = _store(tmp_path / "a")
+    workspace = _workspace(source)
+    workspace = source.save_schedule(
+        workspace.id,
+        _solved_schedule(source, workspace.id),
+        expected_instance_revision=workspace.instance_revision,
+        expected_workspace_revision=workspace.workspace_revision,
+    )
+    payload = json.loads(source.export_workspace_rbsc(workspace.id))
+    expected = RBSCState.model_validate(payload)
+    expected_instance = expected.catalogs[0].catalog.apply(expected.workspaces[0].case)
+    payload["schema_version"] = 12
+    for attending in payload["workspaces"][0]["case"]["attendings"]:
+        attending["minimum_attending_clinic_days_per_week"] = 3
+
+    target = _store(tmp_path / "b")
+    imported = target.import_workspace_rbsc(json.dumps(payload))[0]
+
+    assert imported.instance == expected_instance
+    assert imported.schedule == workspace.schedule
+    assert imported.instance_revision == workspace.instance_revision
+    assert imported.schedule_revision == workspace.schedule_revision
+    reexported = json.loads(target.export_workspace_rbsc(imported.id))
+    assert reexported["schema_version"] == 13
+    assert all(
+        "minimum_attending_clinic_days_per_week" not in attending
+        for attending in reexported["workspaces"][0]["case"]["attendings"]
+    )
+    assert payload["workspaces"][0]["case"]["attendings"][0][
+        "minimum_attending_clinic_days_per_week"
+    ] == 3
+
+
+def test_working_copy_drops_clinic_day_minimum_without_revision_change(tmp_path) -> None:
+    store = _store(tmp_path)
+    workspace = _workspace(store)
+    with store.connect() as connection:
+        row = connection.execute(
+            "SELECT instance_json FROM workspaces WHERE id = ?", (workspace.id,)
+        ).fetchone()
+        payload = json.loads(row["instance_json"])
+        for attending in payload["attendings"]:
+            attending["minimum_attending_clinic_days_per_week"] = 3
+        connection.execute(
+            "UPDATE workspaces SET instance_json = ? WHERE id = ?",
+            (json.dumps(payload), workspace.id),
+        )
+
+    restored = store.get(workspace.id)
+
+    assert restored.instance == workspace.instance
+    assert restored.instance_revision == workspace.instance_revision
+    assert restored.workspace_revision == workspace.workspace_revision
+    assert "minimum_attending_clinic_days_per_week" not in store.export_workspace_rbsc(workspace.id)
+
+
+def test_future_document_schema_is_rejected(tmp_path) -> None:
+    from pydantic import ValidationError
+
+    store = _store(tmp_path)
+    payload = json.loads(store.export_workspace_rbsc(_workspace(store).id))
+    payload["schema_version"] = 14
+    with pytest.raises(ValidationError, match="Input should be 13"):
+        RBSCState.model_validate(payload)
+
+
 def test_v11_file_migrates_attending_work_and_target_ranges(tmp_path) -> None:
     source = _store(tmp_path / "a")
     payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
@@ -250,7 +317,6 @@ def test_v11_file_migrates_attending_work_and_target_ranges(tmp_path) -> None:
     _move_attending_schedules_to_v11(case)
     attendings = case["attendings"]
     for attending in attendings:
-        attending.pop("minimum_attending_clinic_days_per_week")
         attending.pop("preferred_weekly_schedule_half_days")
         for schedule in attending["weekly_work_schedules"]:
             schedule.pop("half_days_override")
@@ -322,13 +388,12 @@ def test_v11_file_migrates_attending_work_and_target_ranges(tmp_path) -> None:
     assert migrated_targets[0].minimum_shifts_per_week == 3
     assert migrated_targets[0].maximum_shifts_per_week == 3
     assert all(
-        item.minimum_attending_clinic_days_per_week == 0
-        and not item.preferred_weekly_schedule_half_days
+        not item.preferred_weekly_schedule_half_days
         for item in imported.instance.attendings
     )
     assert imported.instance.clinic_policy.academic_half_day_is_attending_admin_time is True
     reexported = json.loads(target.export_workspace_rbsc(imported.id))
-    assert reexported["schema_version"] == 12
+    assert reexported["schema_version"] == 13
     assert reexported["catalogs"][0]["catalog"]["schema_version"] == 10
     assert all(
         "ad_hoc_work_half_days" not in item
@@ -363,7 +428,6 @@ def test_v11_attending_without_dated_work_uses_weekly_defaults(tmp_path) -> None
     case = payload["workspaces"][0]["case"]
     _move_attending_schedules_to_v11(case)
     for attending in case["attendings"]:
-        attending.pop("minimum_attending_clinic_days_per_week")
         attending.pop("preferred_weekly_schedule_half_days")
         attending["half_days_per_week"] = 10
         for schedule in attending["weekly_work_schedules"]:
@@ -385,7 +449,7 @@ def test_pre_v11_files_are_rejected(tmp_path) -> None:
     payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
     payload["schema_version"] = 1
 
-    with pytest.raises(ValidationError, match="Input should be 12"):
+    with pytest.raises(ValidationError, match="Input should be 13"):
         _store(tmp_path / "b").import_workspace_rbsc(json.dumps(payload))
 
 
@@ -396,7 +460,7 @@ def test_v8_files_are_rejected(tmp_path) -> None:
     payload = json.loads(source.export_workspace_rbsc(_workspace(source).id))
     payload["schema_version"] = 8
 
-    with pytest.raises(ValidationError, match="Input should be 12"):
+    with pytest.raises(ValidationError, match="Input should be 13"):
         _store(tmp_path / "b").import_workspace_rbsc(json.dumps(payload))
 
 
@@ -409,7 +473,7 @@ def test_v7_files_with_v6_catalogs_are_rejected(tmp_path) -> None:
     for record in payload["catalogs"]:
         record["catalog"]["schema_version"] = 6
 
-    with pytest.raises(ValidationError, match="Input should be 12"):
+    with pytest.raises(ValidationError, match="Input should be 13"):
         _store(tmp_path / "b").import_workspace_rbsc(json.dumps(payload))
 
 
@@ -497,7 +561,7 @@ def test_v9_documents_migrate_resident_capacity_and_roundtrip(tmp_path) -> None:
     from rbs.models.rbsc import RBSCState
 
     migrated = RBSCState.model_validate(payload)
-    assert migrated.schema_version == 12
+    assert migrated.schema_version == 13
     assert all(
         rule.capacity_per_resident == 1
         for catalog in migrated.catalogs
@@ -525,7 +589,7 @@ def test_v10_documents_migrate_attending_defaults_and_roundtrip(tmp_path) -> Non
     from rbs.models.rbsc import RBSCState
 
     migrated = RBSCState.model_validate(payload)
-    assert migrated.schema_version == 12
+    assert migrated.schema_version == 13
     assert all(
         workspace.case.attendings == []
         and workspace.case.attending_schedules == []

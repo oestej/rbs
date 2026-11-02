@@ -677,7 +677,6 @@ def test_weekly_pass_covers_residents_and_keeps_every_required_rule() -> None:
             _target(PC, 0, 4),
             _target(ADMIN, 1, 2, FIXED),
         ],
-        minimum_attending_clinic_days_per_week=3,
     )
     preceptor = _one_week(
         "attending-002",
@@ -721,8 +720,6 @@ def test_weekly_pass_covers_residents_and_keeps_every_required_rule() -> None:
     assert _counts(work, preceptor.id) == 5
     assert _counts(work, hospitalist.id) == 9
     assert 3 <= _counts(work, clinic_lead.id, AC) <= 5
-    assert len({item.weekday for item in work if item.attending_id == clinic_lead.id
-                and item.work_type is AC}) >= 3
     assert 2 <= _counts(work, preceptor.id, PC) <= 3
     assert _counts(work, hospitalist.id, IS) == 2
 
@@ -810,7 +807,6 @@ def test_weekly_pass_reports_a_week_whose_required_rules_contradict() -> None:
         "Ada Lovelace",
         half_days_per_week=4,
         weekly_shift_targets=[_target(AC, 4, 4, FIXED)],
-        minimum_attending_clinic_days_per_week=4,
     )
     problem = _problem([attending])
 
@@ -818,8 +814,8 @@ def test_weekly_pass_reports_a_week_whose_required_rules_contradict() -> None:
         problem, _schedule(problem), attending_week_facts(problem), cp_model
     )
 
-    # Four Attending Clinic half-days on four different days need four open
-    # days, but the academic Admin Time already uses one of four half-days.
+    # The academic Admin Time already uses one of four half-days, leaving
+    # too few half-days to meet the Fixed Attending Clinic range.
     assert result.relaxed_weeks == (1,)
     assert _counts(result.work, attending.id) == 3
 
@@ -853,9 +849,47 @@ def _random_attending(rng: random.Random, index: int) -> Attending:
         f"Attending {index:03d}",
         half_days_per_week=total,
         weekly_shift_targets=targets,
-        minimum_attending_clinic_days_per_week=min(rng.choice([0, 0, 1, 2, 3]), total),
         vacation_ranges=vacation,
     )
+
+
+def test_clinic_work_can_share_one_day_while_other_days_cover_residents() -> None:
+    from rbs.attending_schedule import attending_schedule_report
+
+    attending = _one_week(
+        "attending-001", "Ada Lovelace",
+        minimum_attending_clinic_days_per_week=3,
+        weekly_shift_targets=[_target(AC, 2, 2, FIXED), _target(PC, 0, 7)],
+    )
+    instance = _configured([attending])
+    problem = SolverProblem.from_instance(instance)
+    facts = attending_week_facts(problem)
+    # Leave Monday for two Attending Clinic half-days; Wednesday afternoon
+    # is academic Admin Time. Every remaining half-day needs a preceptor.
+    need = {
+        (CLINIC, weekday, session): 1
+        for weekday in WEEKDAYS_MF for session in Session
+        if weekday is not MON and (weekday, session) != (WED, PM)
+    }
+    model = cp_model.CpModel()
+    envelope = AttendingEnvelope(problem, facts, model, cp_model)
+    preceptors = envelope.week_preceptors(
+        1, {(weekday, session) for _, weekday, session in need},
+    )
+    for handles in preceptors.values():
+        model.Add(sum(handle.generated for handle in handles) >= 1)
+    solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = 1
+    assert solver.Solve(model) == cp_model.OPTIMAL
+
+    work, violated, uncovered = _solve_week(problem, 1, facts[1], need, cp_model)
+
+    assert not violated and not uncovered
+    assert _counts(work, attending.id, PC) == 7
+    assert [(item.weekday, item.session) for item in work if item.work_type is AC] == [
+        (MON, AM), (MON, PM),
+    ]
+    assert attending_schedule_report(instance, schedule=_schedule(problem, work)).errors == ()
 
 
 def test_precepting_envelope_never_promises_more_than_the_weekly_pass_can_staff() -> None:
@@ -931,7 +965,6 @@ def _managed_sample(attendings: int) -> SolverProblem:
                 _target(PC, 1, 4),
                 _target(ADMIN, 1, 2, FIXED),
             ],
-            minimum_attending_clinic_days_per_week=2,
         ).model_dump(mode="json")
         for index in range(attendings)
     ]
@@ -1076,36 +1109,37 @@ def test_a_week_the_search_cannot_finish_is_reported_instead_of_aborting(monkeyp
     assert work == [] and violated and short == need
 
 
-def test_attending_clinic_day_minimum_holds_in_a_week_with_only_weekend_vacation() -> None:
+@pytest.mark.parametrize("weekend_vacation", [False, True])
+def test_retired_clinic_day_minimum_does_not_override_preferences(weekend_vacation) -> None:
     from rbs.attending_schedule import attending_schedule_report
 
     first = _first_day()
-    # Ada prefers Inpatient Service everywhere, so only the clinic-day rule
-    # makes the weekly pass place Attending Clinic on three different days.
+    # An older attending record must no longer force clinic work against Ada's
+    # preferred Inpatient Service pattern, in full weeks or vacation weeks.
     attending = _one_week(
         "attending-001",
         "Ada Lovelace",
-        weekly_shift_targets=[_target(AC, 0, 3), _target(IS, 0, 10)],
         minimum_attending_clinic_days_per_week=3,
+        weekly_shift_targets=[_target(AC, 0, 3), _target(IS, 0, 10)],
         preferred_weekly_schedule_half_days=[
             _work(weekday, session, IS) for weekday in WEEKDAYS_MF for session in Session
         ],
         vacation_ranges=[AttendingVacation(
             start_date=first + timedelta(days=5), end_date=first + timedelta(days=5),
-        )],
+        )] if weekend_vacation else [],
     )
     instance = _configured([attending], managed=False)
     problem = SolverProblem.from_instance(instance)
     (facts,) = attending_week_facts(problem)[1]
-    assert not facts.full_week and facts.clinic_day_minimum == 3
+    assert facts.full_week is not weekend_vacation
 
     result = schedule_attending_work(problem, _schedule(problem), {1: [facts]}, cp_model)
 
-    clinic_days = {item.weekday for item in result.work if item.work_type is AC}
-    assert len(clinic_days) >= 3
+    assert not [item for item in result.work if item.work_type is AC]
+    assert any(item.work_type is IS for item in result.work)
     assert result.relaxed_weeks == ()
     report = attending_schedule_report(instance, schedule=_schedule(problem, result.work))
-    assert not [issue for issue in report.errors if issue.code == "attending_clinic_day_minimum"]
+    assert report.errors == ()
 
 
 def test_a_draft_holding_only_locked_attending_work_still_guides_the_solve() -> None:

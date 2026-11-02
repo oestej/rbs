@@ -10,9 +10,7 @@ Rules, in the language of the Attendings tab:
 - work fills only open half-days, one category per half-day;
 - the weekly half-day total is never exceeded, and is met exactly in full
   weeks without vacation;
-- Fixed minimum/maximum ranges hold (minimums only in full weeks);
-- the Attending Clinic day minimum holds in full weeks without weekday
-  vacation.
+- Fixed minimum/maximum ranges hold (minimums only in full weeks).
 
 In ``relaxed`` mode every rule a hand-entered week could already break (a
 minimum or an exact total) becomes a counted violation instead of a hard
@@ -123,33 +121,6 @@ def add_attending_week(
                 name=f"{prefix}:{work_type.value}:min",
             )
 
-    # The effective week already zeroes the minimum in partial, inactive, and
-    # weekday-vacation weeks. A weekend vacation keeps it, as the schedule
-    # checks do, even though it relaxes the weekly total.
-    needed_days = facts.clinic_day_minimum - len(facts.fixed_clinic_days)
-    if needed_days > 0:
-        day_literals = []
-        for weekday in Weekday:
-            if weekday in facts.fixed_clinic_days:
-                continue
-            clinic = [
-                literal
-                for (half_day, work_type, _clinic_id), literal in handles.choices.items()
-                if half_day[0] is weekday and work_type is AttendingWorkType.ATTENDING_CLINIC
-            ]
-            if not clinic:
-                continue
-            day = model.NewBoolVar(f"{prefix}:{weekday.value}:clinic_day")
-            model.Add(day <= sum(clinic))
-            day_literals.append(day)
-        _at_least(
-            model,
-            handles,
-            sum(day_literals) if day_literals else 0,
-            needed_days,
-            relaxed=relaxed,
-            name=f"{prefix}:clinic_days",
-        )
     return handles
 
 

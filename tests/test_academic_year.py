@@ -173,10 +173,6 @@ def test_start_new_academic_year_clears_year_specific_work() -> None:
         moved_preferred_attending.preferred_weekly_schedule_half_days
         == preferred_attending.preferred_weekly_schedule_half_days
     )
-    assert (
-        moved_preferred_attending.minimum_attending_clinic_days_per_week
-        == preferred_attending.minimum_attending_clinic_days_per_week
-    )
     assert not moved.academic_half_day_overrides
     assert not moved.locks
     assert not moved.manual_clinic_blocks

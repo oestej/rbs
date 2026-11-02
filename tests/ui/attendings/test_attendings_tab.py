@@ -197,7 +197,6 @@ def test_new_attending_form_is_limited_to_basic_schedule_details() -> None:
     assert added.schedule_start_date is None
     assert added.schedule_end_date is None
     assert added.weekly_shift_targets == []
-    assert added.minimum_attending_clinic_days_per_week == 0
     assert added.preferred_weekly_schedule_half_days == []
     assert saved[0][0].attending_schedules == []
     assert added.schedule_template_half_days == []
@@ -478,16 +477,10 @@ def test_attending_form_saves_fixed_and_flexible_target_ranges() -> None:
     assert all(count._props.get("disable") is True for count in target_minimums.values())
     assert all(count._props.get("disable") is True for count in target_maximums.values())
     assert "Special/Other target type" not in target_types
-    clinic_day_minimum = next(
-        element
+    assert not any(
+        element._props.get("label") == "Minimum Attending Clinic days per week"
         for element in created
-        if element.__class__.__name__ == "Number"
-        and element._props.get("label") == "Minimum Attending Clinic days per week"
     )
-    assert clinic_day_minimum.value == 0
-    assert clinic_day_minimum._props.get("max") == 7
-
-    clinic_day_minimum.value = 2
     target_types["Precepting Clinic target type"].value = "fixed"
     target_minimums["Precepting Clinic minimum shifts per week"].value = 2
     target_maximums["Precepting Clinic maximum shifts per week"].value = 3
@@ -504,7 +497,6 @@ def test_attending_form_saves_fixed_and_flexible_target_ranges() -> None:
 
     assert len(saved) == 1
     saved_attending = saved[0][0].attendings[0]
-    assert saved_attending.minimum_attending_clinic_days_per_week == 2
     targets = saved_attending.weekly_shift_targets
     assert [target.work_type for target in targets] == [
         AttendingWorkType.PRECEPTING_CLINIC,
@@ -829,7 +821,6 @@ def test_attending_view_shows_configured_category_targets_and_modes() -> None:
     attending = Attending(
         id="attending-001",
         name="Ada Lovelace",
-        minimum_attending_clinic_days_per_week=2,
         preferred_weekly_schedule_half_days=[
             AttendingWorkHalfDay(
                 weekday=Weekday.THURSDAY,
@@ -873,7 +864,7 @@ def test_attending_view_shows_configured_category_targets_and_modes() -> None:
     assert "Admin Time" in labels
     assert "0–1 shifts per week" in labels
     assert "Flexible" in labels
-    assert "At least 2 Attending Clinic days per full week without weekday vacation" in labels
+    assert "Attending Clinic days" not in labels
     assert "Preferred weekly schedule" in labels
     assert "1 of 10 preferred half-days" in labels
     assert "Thursday · Morning (AM)" in labels

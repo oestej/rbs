@@ -171,7 +171,7 @@ def test_rbsc_round_trip_replaces_and_restores_the_complete_database(tmp_path) -
     exported = json.loads(payload)
 
     assert exported["format"] == "rbsc"
-    assert exported["schema_version"] == 12
+    assert exported["schema_version"] == 13
     assert exported["current_workspace_id"] == second.id
     assert exported["app_metadata"]["portable_test_marker"] == "preserved"
     assert {row["id"] for row in exported["workspaces"]} == {first.id, second.id}
@@ -226,7 +226,7 @@ def test_rbsc_v12_omits_application_preferences_and_derived_locks(tmp_path) -> N
     exported = json.loads(store.export_workspace_rbsc(workspace.id))
     case = exported["workspaces"][0]["case"]
 
-    assert exported["schema_version"] == 12
+    assert exported["schema_version"] == 13
     assert "color_scheme" not in case
     assert "solver" not in case
     assert "lock_through_today" not in case

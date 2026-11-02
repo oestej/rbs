@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Attendings no longer require a minimum number of distinct Attending Clinic days
+  per week. Weekly category ranges and preferred schedules still apply.
+
+### Changed
+
+- **Data compatibility:** Existing documents and working copies discard the retired
+  clinic-day minimum while preserving attending work and schedules. Newly saved
+  `.rbsc` files use schema 13 (schemas 9–12 migrate); older builds cannot open them.
+  Solver protocol 8 requires matching solver binaries.
+
 ## [0.2.0] - 2026-09-30
 
 ### Added
