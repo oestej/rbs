@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-06
+
 ### Added
 
 - `rbs ui` chooses an available local port and prints its address. An explicit
@@ -482,7 +484,8 @@
 - **Releases:** Download a macOS disk image built from the tagged commit, with
   that release's changelog section as its published description.
 
-[Unreleased]: https://github.com/oestej/rbs/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/oestej/rbs/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/oestej/rbs/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/oestej/rbs/compare/v0.1.14...v0.2.0
 [0.1.14]: https://github.com/oestej/rbs/compare/v0.1.13...v0.1.14
 [0.1.13]: https://github.com/oestej/rbs/compare/v0.1.12...v0.1.13
