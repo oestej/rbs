@@ -14,6 +14,7 @@ from rbs.models.instance import SolverConfig, SolverProblem
 from rbs.models.resident import Resident
 from rbs.models.schedule import Schedule, SolverDiagnostic
 from rbs.models.special import SpecialRotation, SpecialRotationKind
+from rbs.solver.budget import BudgetExpired, check_deadline, remaining
 from rbs.solver.clinic_requirements import uncoverable_clinic_sessions
 from rbs.solver.core import constraints
 from rbs.solver.core.context import ModelBuildError, PlanningContext
@@ -23,9 +24,12 @@ def explain_infeasibility(
     problem: SolverProblem,
     options: SolverConfig,
     reference_schedule: Schedule | None = None,
+    *, deadline: float | None = None,
 ) -> list[SolverDiagnostic]:
     """Return conclusive explanations for isolated infeasible subproblems."""
     diagnostics: list[SolverDiagnostic] = []
+    if remaining(deadline, cap=2.0) <= 0:
+        return diagnostics
     diagnostics.extend(_locked_capacity_conflicts(problem))
     diagnostics.extend(_locked_elective_repeats(problem))
     # The probe leaves alone any resident-week a reference clinic lock could
@@ -38,7 +42,11 @@ def explain_infeasibility(
         )
     )
     for resident in problem.residents:
-        feasible = _resident_curriculum_can_cover_year(problem, options, resident)
+        if remaining(deadline, cap=2.0) <= 0:
+            break
+        feasible = _resident_curriculum_can_cover_year(
+            problem, options, resident, deadline=deadline,
+        )
         if feasible is not False:
             continue
 
@@ -48,6 +56,7 @@ def explain_infeasibility(
             options,
             resident,
             ignore_vacations=True,
+            deadline=deadline,
         )
         if vacation_weeks and without_vacations is True:
             diagnostics.append(
@@ -244,6 +253,7 @@ def _resident_curriculum_can_cover_year(
     resident: Resident,
     *,
     ignore_vacations: bool = False,
+    deadline: float | None = None,
 ) -> bool | None:
     """Whether one resident's required blocks can exactly cover the calendar.
 
@@ -285,14 +295,22 @@ def _resident_curriculum_can_cover_year(
         }
     )
     try:
-        context = PlanningContext.compile(resident_problem, options, cp_model)
+        check_deadline(deadline)
+        context = PlanningContext.compile(
+            resident_problem, options, cp_model, deadline=deadline,
+        )
         constraints._place_groups(context)
         constraints._cover_each_week(context)
+    except BudgetExpired:
+        return None
     except (ModelBuildError, ValueError):
         return False
 
+    seconds = remaining(deadline, cap=2.0)
+    if seconds <= 0:
+        return None
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 2.0
+    solver.parameters.max_time_in_seconds = seconds
     solver.parameters.num_search_workers = 1
     status = solver.Solve(context.model)
     if status == cp_model.INFEASIBLE:

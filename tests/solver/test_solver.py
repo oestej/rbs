@@ -1564,7 +1564,7 @@ def test_unsatisfiable_automatic_band_is_dropped_rather_than_failing(monkeypatch
     schedule = get_engine("cp_sat").solve(instance, options=instance.solver)
 
     assert not schedule.is_empty()
-    assert any("automatic clinic balance" in note for note in schedule.meta.notes)
+    assert any("automatic clinic balance" in note.lower() for note in schedule.meta.notes)
 
 
 def test_objective_weights_survive_a_case_round_trip() -> None:
@@ -1767,6 +1767,7 @@ def test_portfolio_compiles_once_and_isolates_search_models(monkeypatch) -> None
         result.meta.solver_objective = float(seed)
         return result
 
+    monkeypatch.setattr(cp_sat.time, "perf_counter", lambda: 100.0)
     monkeypatch.setattr(cp_sat, "compile_problem", compile_once)
     monkeypatch.setattr(cp_sat.CpSatEngine, "_solve_once", search)
     result = cp_sat.CpSatEngine()._solve_portfolio(

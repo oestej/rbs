@@ -1358,6 +1358,9 @@ class _ScriptedCpModel:
             def ObjectiveValue(self):  # noqa: N802
                 return 0
 
+            def BestObjectiveBound(self):  # noqa: N802
+                return 0
+
             def Value(self, _variable):  # noqa: N802
                 return 0
 
@@ -1388,7 +1391,7 @@ def test_tiered_search_does_not_mistake_a_spent_budget_for_infeasibility(
     scripted = _ScriptedCpModel([getattr(_ScriptedCpModel, name) for name in statuses])
     solver = solve_in_tiers(_Model(), [[1]], [], scripted)
 
-    assert (solver is not None) is found
+    assert (solver.solver is not None) is found
     assert scripted.budgets == pytest.approx(budgets)
 
 
@@ -1411,7 +1414,7 @@ def test_tier_search_shares_deadline_across_retries_and_tiers(monkeypatch, first
     from rbs.solver.core import lexicographic
 
     now = [10.0]
-    monkeypatch.setattr(lexicographic.time, "perf_counter", lambda: now[0])
+    monkeypatch.setattr("rbs.solver.budget.time.perf_counter", lambda: now[0])
     scripted = _ScriptedCpModel([first_status])
     scripted.on_solve = lambda: now.__setitem__(0, 12.0)
 
@@ -1419,7 +1422,7 @@ def test_tier_search_shares_deadline_across_retries_and_tiers(monkeypatch, first
         _Model(), [[1], [2]], [], scripted, deadline=12.0,
     )
 
-    assert (solver is not None) is (first_status == scripted.FEASIBLE)
+    assert (solver.solver is not None) is (first_status == scripted.FEASIBLE)
     assert scripted.budgets == [0.1]
     assert scripted.time_limits == [2.0]
 
@@ -1428,7 +1431,7 @@ def test_tier_search_recomputes_remaining_time_for_each_attempt(monkeypatch) -> 
     from rbs.solver.core import lexicographic
 
     now = [10.0]
-    monkeypatch.setattr(lexicographic.time, "perf_counter", lambda: now[0])
+    monkeypatch.setattr("rbs.solver.budget.time.perf_counter", lambda: now[0])
     scripted = _ScriptedCpModel([_ScriptedCpModel.UNKNOWN, _ScriptedCpModel.FEASIBLE])
     scripted.on_solve = lambda: now.__setitem__(0, now[0] + 1)
 
@@ -1442,6 +1445,7 @@ def test_attending_week_concurrency_obeys_worker_limit(monkeypatch, num_workers)
 
     from rbs.solver.core import attending_assignment
 
+    monkeypatch.setattr(attending_assignment.time, "perf_counter", lambda: 100.0)
     limits = []
     deadlines = []
 
@@ -1449,7 +1453,7 @@ def test_attending_week_concurrency_obeys_worker_limit(monkeypatch, num_workers)
         limits.append(max_workers)
         return ThreadPoolExecutor(max_workers=max_workers)
 
-    def week(*_args, deadline, balance):
+    def week(*_args, deadline, balance, baseline_only=False):
         deadlines.append(deadline)
         return [], False, {}
 
@@ -1462,7 +1466,8 @@ def test_attending_week_concurrency_obeys_worker_limit(monkeypatch, num_workers)
     )
 
     assert limits == [min(num_workers, attending_assignment._WEEK_THREADS)]
-    assert deadlines == [123.0] * 10
+    assert len(deadlines) == 20
+    assert all(limit <= 123.0 for limit in deadlines)
 
 
 def test_expired_attending_pass_preserves_locks_and_reports_uncovered_clinics(monkeypatch) -> None:
@@ -1641,3 +1646,87 @@ def test_a_lock_cannot_keep_precepting_at_a_capacity_managed_clinic():
     assert not facts.can_precept
     assert facts.locked_work == ()
     assert facts.released_locks == (work,)
+
+
+@pytest.mark.parametrize("refinement", ["timeout", "worse"])
+def test_attending_refinement_keeps_better_complete_baseline(monkeypatch, refinement):
+    from rbs.solver.core import attending_assignment
+    attending = _one_week("attending-001", "Ada Lovelace")
+    problem = _problem([attending])
+    facts = attending_week_facts(problem)
+    placed = AssignedAttendingWork(
+        attending_id=attending.id, week=1, weekday=MON, session=AM,
+        work_type=PC, clinic_id=CLINIC,
+    )
+    monkeypatch.setattr(attending_assignment.time, "perf_counter", lambda: 0.0)
+    calls = []
+
+    def week(*args, baseline_only=False, balance, **kwargs):
+        calls.append(baseline_only)
+        if baseline_only:
+            balance.quality_limits = (0, 0, 0)
+            return [placed], False, {}
+        if refinement == "worse":
+            balance.quality_limits = (0, 1, 0)
+            return [placed.revised(weekday=TUE)], True, {}
+        return [], True, {(CLINIC, MON, AM): 1}
+
+    monkeypatch.setattr(attending_assignment, "_solve_week", week)
+    monkeypatch.setattr(attending_assignment, "_balance_across_year", lambda *a, **kw: None)
+    result = schedule_attending_work(problem, _schedule(problem), facts, cp_model, deadline=100)
+    assert calls == [True, False]
+    assert result.work == (placed,)
+    assert not result.uncovered
+
+
+@pytest.mark.parametrize("status", ["INFEASIBLE", "MODEL_INVALID", "UNKNOWN"])
+def test_small_phase_preserves_termination_reason(status):
+    from rbs.solver.core.lexicographic import solve_small
+    scripted = _ScriptedCpModel([getattr(_ScriptedCpModel, status)])
+    result = solve_small(_Model(), scripted)
+    assert result.status == status.lower()
+    assert result.solver is None
+    if status == "MODEL_INVALID":
+        with pytest.raises(RuntimeError, match="invalid"):
+            result.checked_solver()
+
+
+def test_tier_result_distinguishes_proven_costs_and_keeps_incumbent():
+    from rbs.solver.core.lexicographic import solve_in_tiers
+    scripted = _ScriptedCpModel([
+        _ScriptedCpModel.OPTIMAL, _ScriptedCpModel.FEASIBLE, _ScriptedCpModel.UNKNOWN,
+    ])
+    result = solve_in_tiers(_Model(), [[1], [2], [3]], [], scripted)
+    assert result.status == "unknown"
+    assert result.solver is not None
+    assert result.completed_tiers == 2
+    assert [tier.proven for tier in result.tiers] == [True, False]
+    assert [tier.index for tier in result.tiers] == [0, 1]
+    assert all(tier.value == tier.bound == 0 for tier in result.tiers)
+
+
+def test_attending_refinement_does_not_claim_global_optimality(monkeypatch):
+    from rbs.models.enums import SolverStatus
+    from rbs.solver.core import cp_sat
+    from rbs.solver.core.attending_assignment import AttendingPassResult
+    from rbs.solver.validation import ScheduleValidationResult
+
+    attending = _one_week("attending-001", "Ada Lovelace")
+    problem = _problem([attending])
+    schedule = _schedule(problem)
+    schedule.meta.status = schedule.meta.solver_status = SolverStatus.OPTIMAL
+    placed = AssignedAttendingWork(
+        attending_id=attending.id, week=1, weekday=MON, session=AM, work_type=ADMIN,
+    )
+    monkeypatch.setattr(cp_sat, "schedule_attending_work", lambda *a, **kw: AttendingPassResult(
+        work=(placed,), scheduled_half_days=1,
+    ))
+    monkeypatch.setattr("rbs.solver.validation.validate_schedule",
+                        lambda *a, **kw: ScheduleValidationResult())
+    result = cp_sat._with_attending_work(
+        problem, schedule, attending_week_facts(problem),
+        options=blank_instance().solver, deadline=100,
+    )
+    assert result.meta.solver_status is SolverStatus.OPTIMAL
+    assert result.meta.status is SolverStatus.FEASIBLE
+    assert result.meta.postprocessed

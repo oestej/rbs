@@ -257,3 +257,62 @@ def test_process_client_surfaces_structured_solver_errors() -> None:
         )
 
     assert caught.value.code == "solver_error"
+
+
+@pytest.mark.parametrize("timeout, expected", [(None, 37.0), (4.0, 4.0)])
+def test_sync_client_has_default_watchdog_and_honors_explicit_timeout(
+    monkeypatch, timeout, expected,
+):
+    from rbs.solver import client
+    instance = _stub_instance()
+    options = instance.solver.revised(time_limit_seconds=7)
+
+    def run(command, **kwargs):
+        assert kwargs["timeout"] == expected
+        raise subprocess.TimeoutExpired(command, expected)
+
+    monkeypatch.setattr(client.subprocess, "run", run)
+    with pytest.raises(SolverProcessError) as error:
+        SolverProcessClient().solve(
+            SolverProblem.from_instance(instance), options=options, timeout=timeout,
+        )
+    assert error.value.code == "timeout"
+
+
+def test_async_default_watchdog_kills_and_reaps_child(monkeypatch):
+    import asyncio
+
+    from rbs.solver import client
+    instance = _stub_instance()
+    events = []
+
+    class Process:
+        returncode = None
+
+        async def communicate(self, payload):
+            raise AssertionError("the watchdog stub closes this coroutine")
+
+        def kill(self):
+            events.append("kill")
+
+        async def wait(self):
+            events.append("wait")
+            self.returncode = -9
+
+    async def create(*args, **kwargs):
+        return Process()
+
+    async def wait_for(coroutine, *, timeout):
+        assert timeout == 37
+        coroutine.close()
+        raise TimeoutError()
+
+    monkeypatch.setattr(client.asyncio, "create_subprocess_exec", create)
+    monkeypatch.setattr(client.asyncio, "wait_for", wait_for)
+    with pytest.raises(SolverProcessError) as error:
+        asyncio.run(SolverProcessClient().solve_async(
+            SolverProblem.from_instance(instance),
+            options=instance.solver.revised(time_limit_seconds=7),
+        ))
+    assert error.value.code == "timeout"
+    assert events == ["kill", "wait"]

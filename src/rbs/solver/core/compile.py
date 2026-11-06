@@ -7,6 +7,7 @@ from rbs.solver.attending_availability import (
     attending_week_facts,
     potential_capacity_view,
 )
+from rbs.solver.budget import check_deadline
 from rbs.solver.core import kinds as rotation_kinds
 from rbs.solver.core.attending_envelope import AttendingEnvelope
 from rbs.solver.core.constraints import add_hard_constraints
@@ -24,6 +25,7 @@ def compile_problem(
     reference_schedule: Schedule | None = None,
     attending_facts: dict[int, list[AttendingWeekFacts]] | None = None,
     readiness: ReadinessResult | None = None,
+    deadline: float | None = None,
 ) -> CompiledProblem:
     """Build the block model.
 
@@ -37,7 +39,8 @@ def compile_problem(
         readiness = check_solve_readiness(instance, reference_schedule=reference_schedule)
     if not readiness.ready:
         raise ModelBuildError("; ".join(readiness.errors), readiness.issues)
-    context = PlanningContext.compile(instance, options, cp_model)
+    check_deadline(deadline)
+    context = PlanningContext.compile(instance, options, cp_model, deadline=deadline)
     if instance.attending_managed_clinic_ids:
         # Only attending-managed clinics couple resident placement to attending
         # work. Without one, the block model stays exactly as it was and the
@@ -54,9 +57,13 @@ def compile_problem(
             context.model,
             cp_model,
             reference=reference_schedule,
+            deadline=deadline,
         )
+    check_deadline(deadline)
     matching = add_hard_constraints(context)
+    check_deadline(deadline)
     decisions = rotation_kinds.apply_constraints(context)
+    check_deadline(deadline)
     clinic = add_clinic_objective(
         context,
         decisions,
@@ -66,6 +73,7 @@ def compile_problem(
     # it has finished so the warm start covers those choices as well as block
     # placement and dedicated Clinic decisions.
     add_reference_hints(context, clinic.decisions, reference_schedule)
+    check_deadline(deadline)
     return CompiledProblem(
         context=context,
         clinic=clinic,

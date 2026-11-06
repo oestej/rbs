@@ -451,7 +451,7 @@ def test_reference_conflict_is_restored_when_probes_find_nothing(
         notes=["CP-SAT returned INFEASIBLE"],
         diagnostics=[provisional],
     )
-    monkeypatch.setattr(cp_sat, "explain_infeasibility", lambda *args: [])
+    monkeypatch.setattr(cp_sat, "explain_infeasibility", lambda *args, **kwargs: [])
 
     result = cp_sat._with_infeasibility_diagnostics(
         problem, instance.solver, schedule
@@ -483,7 +483,7 @@ def test_reference_conflict_yields_to_a_conclusive_probe(monkeypatch) -> None:
         notes=["CP-SAT returned INFEASIBLE"],
         diagnostics=[provisional],
     )
-    monkeypatch.setattr(cp_sat, "explain_infeasibility", lambda *args: [conclusive])
+    monkeypatch.setattr(cp_sat, "explain_infeasibility", lambda *args, **kwargs: [conclusive])
 
     result = cp_sat._with_infeasibility_diagnostics(
         problem, instance.solver, schedule

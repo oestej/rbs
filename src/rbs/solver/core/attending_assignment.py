@@ -12,7 +12,8 @@ Precepting coverage is a hard requirement. The attending rules use the same
 builder as the envelope, in relaxed form: a Fixed minimum or an exact weekly
 total that cannot be met (for example because hand-entered work already
 contradicts it) becomes a counted violation instead of an empty schedule.
-The objective is strictly lexicographic:
+Goals follow this priority order. Bounded searches preserve achieved costs
+without claiming proof of lexicographic optimality:
 
 1. violations of Fixed ranges;
 2. precepting beyond what residents need, so a Flexible range, a preference,
@@ -42,6 +43,7 @@ from rbs.models.enums import Session, Weekday
 from rbs.models.instance import SolverProblem
 from rbs.models.schedule import AssignedAttendingWork, Schedule
 from rbs.solver.attending_availability import AttendingWeekFacts, precepting_allowed
+from rbs.solver.budget import BudgetExpired
 from rbs.solver.core.attending_balance import (
     PreceptingBalance,
     add_workload_terms,
@@ -155,25 +157,48 @@ def schedule_attending_work(
     balances = {
         week: PreceptingBalance(workload_coefficients(opportunities[week])) for week in weeks
     }
-    # Weeks are independent and CP-SAT releases the GIL, so they solve in
-    # parallel. Each week is still a single-worker, fixed-seed search with a
-    # deterministic budget, bounded by the remaining shared wall-clock time.
-    # Queued weeks check that deadline before building or searching a model.
-    with ThreadPoolExecutor(max_workers=max(1, min(num_workers, _WEEK_THREADS))) as pool:
-        solved = list(
-            pool.map(
+    # Complete coverage for every week before spending time on quality. A
+    # timed-out refinement keeps its feasible baseline, including named staff.
+    workers = max(1, min(num_workers, _WEEK_THREADS))
+    now = time.perf_counter()
+    baseline_deadline = (
+        None if deadline is None else min(deadline, now + max(0, deadline - now) * 0.5)
+    )
+    baseline = None
+    baseline_costs = {}
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        if deadline is not None:
+            baseline = list(pool.map(
                 lambda week: _solve_week(
-                    problem,
-                    week,
-                    facts_by_week.get(week, []),
-                    needs[week],
-                    cp_model,
-                    deadline=deadline,
-                    balance=balances[week],
-                ),
-                weeks,
-            )
-        )
+                    problem, week, facts_by_week.get(week, []), needs[week], cp_model,
+                    deadline=baseline_deadline, balance=balances[week], baseline_only=True,
+                ), weeks,
+            ))
+            for week, (placed_work, _violated, short) in zip(weeks, baseline, strict=True):
+                if not short:
+                    balances[week].hint = tuple(placed_work)
+                # Baseline costs are not proven objectives: only use its work as
+                # hints, never turn an arbitrary feasible cost into a hard rule.
+                baseline_costs[week] = balances[week].quality_limits
+                balances[week].quality_limits = None
+        if baseline is not None and time.perf_counter() >= deadline:
+            solved = list(baseline)
+        else:
+            solved = list(pool.map(
+                lambda week: _solve_week(
+                    problem, week, facts_by_week.get(week, []), needs[week], cp_model,
+                    deadline=deadline, balance=balances[week],
+                ), weeks,
+            ))
+    if baseline is not None:
+        for index, (original, candidate) in enumerate(zip(baseline, solved, strict=True)):
+            week = weeks[index]
+            prior_cost = baseline_costs[week]
+            cost = balances[week].quality_limits
+            worse = prior_cost is not None and (cost is None or cost > prior_cost)
+            if not original[2] and (candidate[2] or worse or (original[0] and not candidate[0])):
+                solved[index] = original
+                balances[week].quality_limits = prior_cost
     _balance_across_year(
         problem, facts_by_week, needs, weeks, solved, balances, opportunities,
         cp_model, deadline=deadline,
@@ -272,6 +297,7 @@ def _solve_week(
     *,
     deadline: float | None = None,
     balance: PreceptingBalance | None = None,
+    baseline_only: bool = False,
 ) -> tuple[list[AssignedAttendingWork], bool, dict[tuple[str, Weekday, Session], int]]:
     placeable = [facts for facts in weekly if facts.open_half_days]
     if not placeable and not need:
@@ -284,22 +310,7 @@ def _solve_week(
         for item in facts.fixed
         if item.work_type is AttendingWorkType.PRECEPTING_CLINIC
     )
-    result = _build_and_solve(
-        problem,
-        week,
-        placeable,
-        need,
-        precepting_already,
-        cp_model,
-        hard_coverage=True,
-        deadline=deadline,
-        balance=balance,
-    )
-    if result is None:
-        # The envelope makes this unreachable for the rules it models, and
-        # the search escalates its budget before giving up. If a rule outside
-        # the envelope ever blocks coverage, keep every other placement and
-        # let validation name the uncovered clinic sessions.
+    try:
         result = _build_and_solve(
             problem,
             week,
@@ -307,10 +318,30 @@ def _solve_week(
             need,
             precepting_already,
             cp_model,
-            hard_coverage=False,
+            hard_coverage=True,
             deadline=deadline,
             balance=balance,
+            baseline_only=baseline_only,
         )
+        if result is None:
+            # The envelope makes this unreachable for the rules it models, and
+            # the search escalates its budget before giving up. If a rule outside
+            # the envelope ever blocks coverage, keep every other placement and
+            # let validation name the uncovered clinic sessions.
+            result = _build_and_solve(
+                problem,
+                week,
+                placeable,
+                need,
+                precepting_already,
+                cp_model,
+                hard_coverage=False,
+                deadline=deadline,
+                balance=balance,
+                baseline_only=baseline_only,
+            )
+    except BudgetExpired:
+        return [], bool(placeable), dict(need)
     if result is None:
         # Placing nothing always satisfies the relaxed model, so only a
         # search that ran out of budget ends here. Report the week rather
@@ -330,9 +361,10 @@ def _build_and_solve(
     hard_coverage: bool,
     deadline: float | None = None,
     balance: PreceptingBalance | None = None,
+    baseline_only: bool = False,
 ):
     if deadline is not None and time.perf_counter() >= deadline:
-        return None
+        raise BudgetExpired("attending search time exhausted")
     model = cp_model.CpModel()
     first_week_start = problem.calendar.first_week_start
 
@@ -426,7 +458,8 @@ def _build_and_solve(
                 ) in selected))
     solver = solve_in_tiers(
         model,
-        [[expression for expression, _bound in tier] for tier in tiers],
+        [[expression for expression, _bound in tier]
+         for tier in (tiers[:_TOTAL + 2] if baseline_only else tiers)],
         (
             literal
             for week_model in handles
@@ -435,6 +468,10 @@ def _build_and_solve(
         cp_model,
         deadline=deadline,
     )
+    phase = solver
+    solver = phase.checked_solver()
+    if solver is None and phase.status != "infeasible":
+        raise BudgetExpired("attending search did not finish")
     if solver is None:
         return None
     if balance.quality_limits is None:

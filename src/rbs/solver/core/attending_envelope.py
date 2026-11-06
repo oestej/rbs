@@ -44,6 +44,7 @@ from rbs.solver.attending_availability import (
     precepting_allowed,
     schedule_attending_coverage,
 )
+from rbs.solver.budget import BudgetExpired, check_deadline, remaining
 from rbs.solver.core.attending_rules import add_attending_week
 from rbs.solver.core.clinic_seating import SiteDemand, add_site_seating, solved_seating
 from rbs.solver.core.lexicographic import solve_in_tiers
@@ -108,7 +109,9 @@ class AttendingEnvelope:
         *,
         reference: Schedule | None = None,
         profiles: dict[tuple, PreceptingProfile] | None = None,
+        deadline: float | None = None,
     ) -> None:
+        self.deadline = deadline
         self.problem = problem
         self.facts_by_week = facts_by_week
         self.model = model
@@ -271,7 +274,7 @@ class AttendingEnvelope:
 
         The block search settles where residents are; it has little time left
         to also perfect how many preceptors each half-day gets. With the
-        placement fixed that choice is a small exact problem, solved here in
+        placement fixed that choice is a small staffing problem, optimized in
         three tiers:
 
         1. open each clinic on every half-day its residents with a target
@@ -284,7 +287,7 @@ class AttendingEnvelope:
         satisfy it, so this never makes a placement uncoverable.
         """
         searched = {key: int(solver.Value(variable)) for key, variable in self.generated.items()}
-        if not self._demand:
+        if not self._demand or remaining(deadline, cap=1.0) <= 0:
             return searched
         cp_model = self._cp_model
         model = cp_model.CpModel()
@@ -294,6 +297,7 @@ class AttendingEnvelope:
             model,
             cp_model,
             profiles=self._profiles,
+            deadline=deadline,
         )
         unstaffed_terms: list[Any] = []
         shortfall_terms: list[Any] = []
@@ -379,6 +383,7 @@ class AttendingEnvelope:
             cp_model,
             deadline=deadline,
         )
+        polished = polished.checked_solver()
         if polished is None:
             return searched
         if seating is not None:
@@ -491,6 +496,7 @@ class AttendingEnvelope:
         required: HalfDay | None = None,
     ) -> tuple[int, set[HalfDay]] | None:
         """Most managed-clinic precepting one attending-week allows, if feasible."""
+        check_deadline(self.deadline)
         cp_model = self._cp_model
         model = cp_model.CpModel()
         handles = add_attending_week(
@@ -516,8 +522,15 @@ class AttendingEnvelope:
         solver.parameters.num_search_workers = 1
         solver.parameters.random_seed = 0
         solver.parameters.max_deterministic_time = _PROFILE_WORK_LIMIT
-        solver.parameters.max_time_in_seconds = _PROFILE_SAFETY_SECONDS
+        solver.parameters.max_time_in_seconds = remaining(
+            self.deadline, cap=_PROFILE_SAFETY_SECONDS,
+        )
+        check_deadline(self.deadline)
         status = solver.Solve(model)
+        if status == cp_model.MODEL_INVALID:
+            raise RuntimeError("invalid attending capacity model")
+        if status == cp_model.UNKNOWN:
+            raise BudgetExpired("attending capacity search did not finish")
         if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             return None
         used = {half_day for half_day, literal in managed if solver.Value(literal)}

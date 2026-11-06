@@ -173,6 +173,19 @@ of each attending's week (`rbs.solver.core.attending_envelope` and
 `attending_assignment`). An annual refinement then improves workload sharing
 while preserving the weekly results' achieved higher-priority goals.
 
+Compilation, search, relaxed clinic-balance retries, attending completion, and
+infeasibility probes share one solve deadline. Retries receive reserved time;
+a timeout is not proof that the program's rules conflict. Portfolio candidates
+remain available until one has completed attending assignment and passed final
+validation. Attending refinement retains completed baseline weeks when time
+runs out. Small-model optimization records achieved costs and proven bounds
+separately: bounded tier improvements do not imply global optimality.
+
+Local and hosted process clients apply a watchdog of the configured solve time
+plus 30 seconds for startup, serialization, and shutdown. Callers may supply
+an explicit transport timeout. These changes do not alter document or solver
+protocol formats.
+
 ```text
 UI / CLI / hosted adapters
         │  SolverProblem + SolverConfig (+ prior Schedule)

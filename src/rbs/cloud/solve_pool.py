@@ -18,6 +18,7 @@ from rbs.cloud.config import CloudConfig
 from rbs.logging import get_logger, log_context
 from rbs.models.instance import SchedulerInput, SolverProblem
 from rbs.models.schedule import Schedule
+from rbs.solver.budget import process_timeout
 from rbs.solver.client import SolverProcessClient
 
 
@@ -79,10 +80,7 @@ class SolvePool:
         operation_id = str(uuid.uuid4())
         logger = get_logger("solver.pool")
         started = monotonic()
-        # One solve can make a second pass after relaxing the automatic Clinic
-        # balance band. Portfolio attempts run concurrently, so the raw user
-        # ``solve_attempts`` value must never multiply this deadline.
-        deadline = bounded.solver.time_limit_seconds * 2 + 60.0
+        deadline = process_timeout(bounded.solver.time_limit_seconds)
         self._waiting += 1
         with log_context(operation_id=operation_id):
             logger.info(

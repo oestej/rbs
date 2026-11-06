@@ -17,6 +17,12 @@
 
 ### Fixed
 
+- Solves reserve time for relaxed clinic balance and attending completion, try
+  alternative schedules when staffing cannot finish, and distinguish exhausted
+  search time from conflicting rules. Diagnostic work and solver processes have
+  bounded time allowances, and attending refinement no longer implies global
+  optimality. Existing documents and solver protocol formats are unchanged.
+
 - Clinic sessions restricted to selected sites use only those clinics' capacity.
   Required sessions no longer disappear when staffing is missing, and allocation
   can rearrange flexible sessions to avoid unnecessary overflow. Solve checks

@@ -17,9 +17,11 @@ search. Without a deadline, the wall-clock limit is only a safety net.
 
 from __future__ import annotations
 
-import time
 from collections.abc import Iterable, Sequence
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
+
+from rbs.solver.budget import remaining
 
 DEFAULT_TIER_WORK_LIMIT = 0.1
 """CP-SAT deterministic time per tier: enough to find, not always prove, the best."""
@@ -28,89 +30,96 @@ FIRST_SOLUTION_BUDGET_MULTIPLIERS = (1, 10, 100)
 _SAFETY_TIME_LIMIT_SECONDS = 10.0
 
 
-def solve_in_tiers(
-    model,
-    tiers: Sequence[Sequence[Any]],
-    hint_variables: Iterable[Any],
-    cp_model,
-    *,
-    work_limit: float = DEFAULT_TIER_WORK_LIMIT,
-    deadline: float | None = None,
-):
-    """Minimize each non-empty tier's sum in order; return the last solver.
+@dataclass(frozen=True)
+class TierResult:
+    """Cost and bound when this tier finished, before later improvements."""
+    index: int
+    value: float
+    bound: float
+    proven: bool
 
-    Returns ``None`` when CP-SAT proves the model has no solution, or no first
-    solution is found within the work budgets and optional shared deadline.
-    Running out of time is never treated as proof of infeasibility. Once a solution exists,
-    a later tier that fails to improve within its budget keeps the previous
-    tier's solution, since it already satisfies every tier fixed so far.
+
+@dataclass(frozen=True)
+class PhaseResult:
+    """Internal result: a retained incumbent and why the latest search stopped.
+
+    FEASIBLE tiers are bounded improvements, not proofs of lexicographic
+    optimality. Each later tier preserves the costs already achieved.
     """
+    status: Literal["optimal", "feasible", "infeasible", "model_invalid", "unknown", "deadline"]
+    solver: Any | None = None
+    tiers: tuple[TierResult, ...] = ()
+
+    @property
+    def completed_tiers(self) -> int:
+        return len(self.tiers)
+
+    def checked_solver(self):
+        if self.status == "model_invalid":
+            raise RuntimeError("invalid internal optimization model")
+        return self.solver
+
+
+def solve_in_tiers(
+    model, tiers: Sequence[Sequence[Any]], hint_variables: Iterable[Any], cp_model,
+    *, work_limit: float = DEFAULT_TIER_WORK_LIMIT, deadline: float | None = None,
+) -> PhaseResult:
+    """Optimize tiers with bounded effort, retaining the incumbent on timeout."""
     hints = list(hint_variables)
-    solver = None
-    for tier in tiers:
+    incumbent = None
+    completed = []
+    status = "unknown"
+    for index, tier in enumerate(tiers):
         if not tier:
             continue
         expression = sum(tier)
         model.Minimize(expression)
-        attempt = (
-            solve_small(model, cp_model, work_limit=work_limit, deadline=deadline)
-            if solver is not None
-            else _first_solution(model, cp_model, work_limit, deadline=deadline)
-        )
+        result = (solve_small(model, cp_model, work_limit=work_limit, deadline=deadline)
+                  if incumbent is not None else
+                  _first_solution(model, cp_model, work_limit, deadline=deadline))
+        status = result.status
+        attempt = result.solver
         if attempt is None:
-            return solver
-        solver = attempt
+            return PhaseResult(status, incumbent, tuple(completed))
+        incumbent = attempt
+        completed.append(TierResult(index, attempt.ObjectiveValue(),
+                                    attempt.BestObjectiveBound(), status == "optimal"))
         model.Add(expression <= int(round(attempt.ObjectiveValue())))
         model.ClearHints()
         for variable in hints:
             model.AddHint(variable, attempt.Value(variable))
-    if solver is None:
+    if incumbent is None:
         model.ClearObjective()
-        solver = _first_solution(model, cp_model, work_limit, deadline=deadline)
-    return solver
+        return _first_solution(model, cp_model, work_limit, deadline=deadline)
+    return PhaseResult(status, incumbent, tuple(completed))
 
 
 def _first_solution(model, cp_model, work_limit: float, *, deadline: float | None = None):
-    """Search with growing budgets until a solution appears or none can exist."""
+    result = PhaseResult("unknown")
     for multiplier in FIRST_SOLUTION_BUDGET_MULTIPLIERS:
-        if deadline is not None and time.perf_counter() >= deadline:
-            return None
-        solver, status = _solve(model, cp_model, work_limit * multiplier, deadline=deadline)
-        if solver is not None or status in (cp_model.INFEASIBLE, cp_model.MODEL_INVALID):
-            return solver
-    return None
+        result = _solve(model, cp_model, work_limit * multiplier, deadline=deadline)
+        if (result.solver is not None
+                or result.status in {"infeasible", "model_invalid", "deadline"}):
+            return result
+    return result
 
 
-def solve_small(
-    model, cp_model, *, work_limit: float = DEFAULT_TIER_WORK_LIMIT,
-    deadline: float | None = None,
-):
-    """Solve a small model reproducibly; return the solver, or ``None`` if unsolved."""
-    return _solve(model, cp_model, work_limit, deadline=deadline)[0]
+def solve_small(model, cp_model, *, work_limit: float = DEFAULT_TIER_WORK_LIMIT,
+                deadline: float | None = None) -> PhaseResult:
+    return _solve(model, cp_model, work_limit, deadline=deadline)
 
 
 def _solve(model, cp_model, work_limit: float, *, deadline: float | None = None):
-    remaining = (
-        _SAFETY_TIME_LIMIT_SECONDS
-        if deadline is None
-        else min(_SAFETY_TIME_LIMIT_SECONDS, deadline - time.perf_counter())
-    )
-    if remaining <= 0:
-        return None, cp_model.UNKNOWN
+    seconds = remaining(deadline, cap=_SAFETY_TIME_LIMIT_SECONDS)
+    if seconds <= 0:
+        return PhaseResult("deadline")
     solver = cp_model.CpSolver()
     solver.parameters.num_search_workers = 1
     solver.parameters.random_seed = 0
     solver.parameters.max_deterministic_time = work_limit
-    solver.parameters.max_time_in_seconds = remaining
+    solver.parameters.max_time_in_seconds = seconds
     status = solver.Solve(model)
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return None, status
-    return solver, status
-
-
-__all__ = [
-    "DEFAULT_TIER_WORK_LIMIT",
-    "FIRST_SOLUTION_BUDGET_MULTIPLIERS",
-    "solve_in_tiers",
-    "solve_small",
-]
+    name = {cp_model.OPTIMAL: "optimal", cp_model.FEASIBLE: "feasible",
+            cp_model.INFEASIBLE: "infeasible", cp_model.MODEL_INVALID: "model_invalid",
+            cp_model.UNKNOWN: "unknown"}[status]
+    return PhaseResult(name, solver if status in (cp_model.OPTIMAL, cp_model.FEASIBLE) else None)

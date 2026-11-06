@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from rbs.logging import current_runtime, get_logger, log_context, relay_solver_stderr
 from rbs.models.instance import SolverConfig, SolverProblem
 from rbs.models.schedule import Schedule
+from rbs.solver.budget import process_timeout
 from rbs.solver.contract import SolveFailure, SolveRequest, parse_response_json
 
 SOLVER_COMMAND_ENV = "RBS_SOLVER_COMMAND"
@@ -52,6 +53,8 @@ class SolverProcessClient:
         reference_solution: Schedule | None = None,
         timeout: float | None = None,
     ) -> Schedule:
+        if timeout is None:
+            timeout = process_timeout(options.time_limit_seconds)
         request = SolveRequest.from_problem(
             problem,
             options=options,
@@ -125,6 +128,8 @@ class SolverProcessClient:
         reference_solution: Schedule | None = None,
         timeout: float | None = None,
     ) -> Schedule:
+        if timeout is None:
+            timeout = process_timeout(options.time_limit_seconds)
         request = SolveRequest.from_problem(
             problem,
             options=options,

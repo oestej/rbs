@@ -9,6 +9,7 @@ from rbs.models.instance import SolverConfig, SolverProblem
 from rbs.models.resident import Resident
 from rbs.models.rotation import Rotation
 from rbs.models.schedule import Schedule
+from rbs.solver.budget import check_deadline
 from rbs.solver.planning import Occurrence, expand_occurrences, legal_starts
 
 
@@ -142,6 +143,7 @@ class PlanningContext:
         instance: SolverProblem,
         options: SolverConfig,
         cp_model,
+        *, deadline: float | None = None,
     ) -> PlanningContext:
         model = cp_model.CpModel()
         residents = instance.residents_by_id
@@ -158,6 +160,7 @@ class PlanningContext:
         placeable_occurrences: list[Occurrence] = []
 
         for occurrence in occurrences:
+            check_deadline(deadline)
             rotation = rotations[occurrence.rotation_id]
             resident = residents[occurrence.resident_id]
             legal = tuple(

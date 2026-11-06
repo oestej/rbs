@@ -414,6 +414,7 @@ def _repair_half_day(instance, candidates, fixed_sites, *, deadline, seating=Non
         [literal for options in choices for literal in options.values()], cp_model,
         deadline=deadline,
     )
+    solver = solver.checked_solver()
     if solver is None:
         return  # Preserve the sessions so validation can report the shortfall.
     for candidate, options in zip(candidates, choices, strict=True):

@@ -170,4 +170,4 @@ def test_deadline_does_not_scale_with_raw_portfolio_attempts() -> None:
 
     asyncio.run(run())
 
-    assert client.timeout == 74.0
+    assert client.timeout == 37.0

@@ -14,6 +14,7 @@ from rbs.models.enums import Session, SolverEngineName, SolverStatus
 from rbs.models.instance import SolverConfig, SolverProblem
 from rbs.models.schedule import Schedule, SolverDiagnostic, ordered_attending_work
 from rbs.solver.attending_availability import AttendingWeekFacts, attending_week_facts
+from rbs.solver.budget import BudgetExpired, SolveBudget, check_deadline
 from rbs.solver.core.attending_assignment import schedule_attending_work
 from rbs.solver.core.base import SchedulerEngine, empty_schedule
 from rbs.solver.core.compile import compile_problem
@@ -33,9 +34,6 @@ from rbs.solver.reference import (
 )
 from rbs.solver.tuning import portfolio_plan
 
-_ATTENDING_TIME_FRACTION = 0.2
-"""Reserve part of the shared solve budget to turn precepting supply into named work."""
-
 
 class CpSatEngine:
     name = SolverEngineName.CP_SAT
@@ -51,67 +49,48 @@ class CpSatEngine:
         # Readiness does not depend on solver options, so relaxing the clinic
         # band below could never clear a configuration conflict.
         started = time.perf_counter()
-        deadline = started + options.time_limit_seconds
+        budget = SolveBudget(started, options.time_limit_seconds)
         readiness = check_solve_readiness(instance, reference_schedule=reference_schedule)
         if not readiness.ready:
             return self._model_not_built(
-                instance,
-                ModelBuildError("; ".join(readiness.errors), readiness.issues),
-                started,
+                instance, ModelBuildError("; ".join(readiness.errors), readiness.issues), started,
             )
-        # Computed once: the precepting envelope and the weekly attending pass
-        # must agree on what is fixed, and the facts cover every attending-week.
         attending_facts = attending_week_facts(instance, reference_schedule)
-        # Naming preceptors is required for a usable resident schedule. Leave
-        # time for that pass even when the resident search uses its full budget.
-        block_deadline = deadline
-        if any(facts.open_half_days for weekly in attending_facts.values() for facts in weekly):
-            block_deadline -= options.time_limit_seconds * _ATTENDING_TIME_FRACTION
+        search_deadline = budget.search_deadline(attendings=any(
+            facts.open_half_days for weekly in attending_facts.values() for facts in weekly
+        ))
+        automatic = resolve_clinic_block_band(instance, options)[2]
+        candidates: list[Schedule] = []
         schedule = self._solve_portfolio(
-            instance,
-            options=options,
-            reference_schedule=reference_schedule,
-            attending_facts=attending_facts,
-            readiness=readiness,
-            started=started,
-            deadline=block_deadline,
+            instance, options=options, reference_schedule=reference_schedule,
+            attending_facts=attending_facts, readiness=readiness, started=started,
+            deadline=budget.first_attempt_deadline(search_deadline, fallback=automatic),
+            candidates=candidates,
         )
-        if not _needs_band_relaxation(instance, options, schedule):
-            return _with_attending_work(
-                instance,
-                _with_infeasibility_diagnostics(
-                    instance, options, schedule, reference_schedule
-                ),
-                attending_facts,
-                options=options,
-                deadline=deadline,
+        if _needs_band_relaxation(instance, options, schedule):
+            # Only the relaxed model can establish infeasibility of the program's
+            # rules. Never return a proof about our optional band after a timeout.
+            options = options.revised(auto_balance_clinic_blocks=False)
+            candidates = []
+            schedule = self._solve_portfolio(
+                instance, options=options, reference_schedule=reference_schedule,
+                attending_facts=attending_facts, readiness=readiness, started=started,
+                deadline=search_deadline, candidates=candidates,
             )
-        # The curriculum-derived clinic band is a convenience, not a rule the
-        # program asked for. Vacation, locks, or manual blocks can leave it
-        # unsatisfiable, and an empty year is a worse answer than an uneven one.
-        relaxed_options = options.model_copy(
-            update={"auto_balance_clinic_blocks": False}
+            for candidate in candidates or [schedule]:
+                candidate.meta.notes.append(
+                    "Automatic clinic balance was dropped to allow more scheduling choices."
+                )
+        schedule = _complete_candidates(
+            instance, candidates or [schedule], attending_facts,
+            options=options, deadline=budget.deadline,
         )
-        fallback = self._solve_portfolio(
-            instance,
-            options=relaxed_options,
-            reference_schedule=reference_schedule,
-            attending_facts=attending_facts,
-            readiness=readiness,
-            started=started,
-            deadline=block_deadline,
+        schedule = _with_infeasibility_diagnostics(
+            instance, options, schedule, reference_schedule,
+            deadline=budget.diagnostic_deadline(),
         )
-        if fallback.is_empty():
-            return _with_infeasibility_diagnostics(
-                instance, options, schedule, reference_schedule
-            )
-        fallback.meta.notes = [
-            *fallback.meta.notes,
-            "automatic clinic balance could not be satisfied and was dropped for this solve",
-        ]
-        return _with_attending_work(
-            instance, fallback, attending_facts, options=options, deadline=deadline,
-        )
+        schedule.meta.wall_time_seconds = time.perf_counter() - started
+        return schedule
 
     def _solve_portfolio(
         self,
@@ -123,6 +102,7 @@ class CpSatEngine:
         readiness: ReadinessResult | None = None,
         started: float | None = None,
         deadline: float | None = None,
+        candidates: list[Schedule] | None = None,
     ) -> Schedule:
         """Race a few independent seeds and keep the best schedule.
 
@@ -139,6 +119,7 @@ class CpSatEngine:
         if started is None:
             started = time.perf_counter()
         try:
+            check_deadline(deadline)
             problem = compile_problem(
                 instance,
                 options,
@@ -146,18 +127,28 @@ class CpSatEngine:
                 reference_schedule=reference_schedule,
                 attending_facts=attending_facts,
                 readiness=readiness,
+                deadline=deadline,
+            )
+        except BudgetExpired:
+            return empty_schedule(
+                instance, engine=self.name, status=SolverStatus.UNKNOWN,
+                notes=["Solve time was exhausted while preparing the schedule."],
+                wall_time_seconds=time.perf_counter() - started,
             )
         except ModelBuildError as exc:
             return self._model_not_built(instance, exc, started)
 
         attempts, workers = portfolio_plan(options)
         if attempts == 1:
-            return self._solve_once(
+            schedule = self._solve_once(
                 problem,
                 started=started,
                 workers=workers,
                 deadline=deadline,
             )
+            if candidates is not None:
+                candidates.append(schedule)
+            return schedule
 
         base = options.random_seed or 0
         with ThreadPoolExecutor(max_workers=attempts) as pool:
@@ -173,6 +164,8 @@ class CpSatEngine:
                     range(attempts),
                 )
             )
+        if candidates is not None:
+            candidates.extend(schedules)
         best = min(schedules, key=_attempt_rank)
         best.meta.wall_time_seconds = time.perf_counter() - started
         if not best.is_empty():
@@ -226,7 +219,9 @@ class CpSatEngine:
         )
 
         def new_solver(*, final_phase: bool):
-            remaining = max(0.001, deadline - time.perf_counter())
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                raise BudgetExpired("search time exhausted")
             phase_solver = cp_model.CpSolver()
             phase_solver.parameters.max_time_in_seconds = remaining
             phase_solver.parameters.num_search_workers = worker_count
@@ -361,14 +356,17 @@ class CpSatEngine:
             problem.context.model.Minimize(final_objective)
             final_solver = new_solver(final_phase=True)
             result = final_solver.Solve(problem.context.model)
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, BudgetExpired) as exc:
             if best_solver is not None:
                 return finish(best_solver, SolverStatus.FEASIBLE, final_phase=False)
             return empty_schedule(
                 instance,
                 engine=self.name,
                 status=SolverStatus.UNKNOWN,
-                notes=["solve interrupted"],
+                notes=[
+                    "Solve time was exhausted before a complete schedule was found."
+                    if isinstance(exc, BudgetExpired) else "solve interrupted"
+                ],
                 wall_time_seconds=time.perf_counter() - started,
             )
 
@@ -378,6 +376,34 @@ class CpSatEngine:
                 return finish(best_solver, SolverStatus.FEASIBLE, final_phase=False)
             return no_solution(final_solver, result)
         return finish(final_solver, solver_status, final_phase=True)
+
+
+def _complete_candidates(
+    instance: SolverProblem,
+    candidates: list[Schedule],
+    facts: dict[int, list[AttendingWeekFacts]],
+    *, options: SolverConfig, deadline: float,
+) -> Schedule:
+    """Keep alternatives until a complete schedule passes independent validation."""
+    ordered = sorted(candidates, key=_attempt_rank)
+    usable = [candidate for candidate in ordered
+              if candidate.meta.status in {SolverStatus.OPTIMAL, SolverStatus.FEASIBLE}
+              and not candidate.meta.validation_errors]
+    completed = []
+    for index, candidate in enumerate(usable):
+        now = time.perf_counter()
+        # A difficult first candidate must not consume every alternative's chance.
+        candidate_deadline = min(
+            deadline, now + max(0.0, deadline - now) / (len(usable) - index),
+        )
+        result = _with_attending_work(
+            instance, candidate, facts, options=options, deadline=candidate_deadline,
+        )
+        completed.append(result)
+        if (result.meta.status in {SolverStatus.OPTIMAL, SolverStatus.FEASIBLE}
+                and not result.meta.validation_errors):
+            return result
+    return min(completed or ordered, key=_attempt_rank)
 
 
 def _with_attending_work(
@@ -390,8 +416,8 @@ def _with_attending_work(
 ) -> Schedule:
     """Name the attendings the chosen schedule needs and fill their weeks.
 
-    This runs once, on the attempt the portfolio kept. The block solve has
-    already reserved enough precepting at attending-managed clinics, so the
+    The portfolio retains alternatives until this pass succeeds. The block
+    solve reserved enough precepting at attending-managed clinics, so the
     pass only has to decide who precepts and what everyone does with the
     rest of their week. The finished schedule is validated again against
     the preceptors it actually names.
@@ -447,13 +473,19 @@ def _with_attending_work(
             "attending_relaxed_weeks": len(result.relaxed_weeks),
         }
     )
+    attending_work = ordered_attending_work(result.work)
+    postprocessed = schedule.meta.postprocessed or attending_work != schedule.attending_work
     updated = schedule.model_copy(
         update={
-            "attending_work": ordered_attending_work(result.work),
+            "attending_work": attending_work,
             "meta": schedule.meta.model_copy(
                 update={
                     "metrics": metrics,
                     "notes": notes,
+                    "postprocessed": postprocessed,
+                    "status": final_status_for(
+                        schedule.meta.status, postprocessed=postprocessed, valid=True,
+                    ),
                     "wall_time_seconds": (schedule.meta.wall_time_seconds or 0.0)
                     + (time.perf_counter() - started),
                 }
@@ -593,6 +625,7 @@ def _with_infeasibility_diagnostics(
     options: SolverConfig,
     schedule: Schedule,
     reference_schedule: Schedule | None = None,
+    *, deadline: float | None = None,
 ) -> Schedule:
     if schedule.meta.status is not SolverStatus.INFEASIBLE:
         return schedule
@@ -616,7 +649,9 @@ def _with_infeasibility_diagnostics(
     # probes can tell whether vacation-like weeks are the actual cause.
     if schedule.meta.diagnostics and not _needs_coverage_diagnosis(schedule):
         return schedule
-    diagnostics = explain_infeasibility(instance, options, reference_schedule)
+    diagnostics = explain_infeasibility(
+        instance, options, reference_schedule, deadline=deadline,
+    )
     if not diagnostics:
         if provisional:
             schedule.meta.diagnostics = [
