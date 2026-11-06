@@ -1,35 +1,35 @@
 {
   "academic_override": {
     "has_objective": true,
-    "num_attending_variables": 468,
-    "num_constraints": 227301,
+    "num_attending_variables": 465,
+    "num_constraints": 226796,
     "num_decisions": 368,
-    "num_in_clinic_entries": 11231,
-    "num_variables": 66118,
-    "proto_sha256": "70ff636a15a4e9b49e648cc6aa244b8df6a7b6078a7edd1370198574d994532a",
-    "quality_bound": 1636660,
+    "num_in_clinic_entries": 11040,
+    "num_variables": 66069,
+    "proto_sha256": "d60b6d0cef6a3cd2b008a879431d6ec6b6f7e492708a3f8231ba63d689c93bef",
+    "quality_bound": 1622560,
     "stability_comparisons": 0
   },
   "all_goals_enabled": {
     "has_objective": true,
-    "num_attending_variables": 468,
-    "num_constraints": 231967,
+    "num_attending_variables": 465,
+    "num_constraints": 231432,
     "num_decisions": 368,
-    "num_in_clinic_entries": 11242,
-    "num_variables": 68925,
-    "proto_sha256": "2d5cb2f6ae087a3f0e9c48d468c0a9aeb42d8fd80e641fa86cdbc9202b9bb55c",
-    "quality_bound": 1648792,
+    "num_in_clinic_entries": 11039,
+    "num_variables": 68858,
+    "proto_sha256": "3bdc16b55c69d7b168fde0cde463cfc23ea79ec9b6f58567f487a00bfd5035b4",
+    "quality_bound": 1633720,
     "stability_comparisons": 0
   },
   "configured_sample": {
     "has_objective": true,
-    "num_attending_variables": 468,
-    "num_constraints": 227287,
+    "num_attending_variables": 465,
+    "num_constraints": 226782,
     "num_decisions": 368,
-    "num_in_clinic_entries": 11242,
-    "num_variables": 66117,
-    "proto_sha256": "f2690122182102ee02fe56b1c630cef1beb845f17364f06946362e4d662c9eaf",
-    "quality_bound": 1637560,
+    "num_in_clinic_entries": 11039,
+    "num_variables": 66068,
+    "proto_sha256": "02b9286d94bb2eee58229cdf193a8d75565e7404e26f6ec0dd99e1bf8fc310af",
+    "quality_bound": 1622560,
     "stability_comparisons": 0
   }
 }

@@ -3,9 +3,9 @@
 Entries describe, per resident-week-half-day, which block placement would
 supply clinic coverage. Later stages group, materialize, and weigh them.
 
-Materializing them is also where a half-day's total seats become a hard bound:
-site selection is a post-process, so the search can only be told how many
-residents a half-day may hold, not where each of them sits.
+Materializing them also bounds total and site-restricted capacity. Integer
+flows between groups of interchangeable sessions and their allowed clinics
+prove a legal seating exists before the allocation pass names each site.
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any
 from rbs.models.clinic import ClinicPolicy, clinic_slot_date
 from rbs.models.enums import RotationKind
 from rbs.models.rotation import Rotation
+from rbs.solver.clinic_sites import clinic_directory_is_open, declared_clinic_sites
+from rbs.solver.core.clinic_seating import SiteDemand, add_site_seating
 from rbs.solver.core.context import ClinicDecision, PlanningContext, new_clinic_decision
 from rbs.solver.core.objective_slots import _Conditional, _slot_literals
 from rbs.solver.planning import covers, rotate_domain
@@ -235,16 +237,7 @@ def _resident_clinic_entries(
             half_day.weekday,
         )
         allowed = policy.resolve_site_ids(half_day.sites) or list(policy.site_ids)
-        open_sites = [
-            site_id
-            for site_id in policy.open_site_ids(calendar_day, allowed)
-            if _capacity_view(context).clinic_max_capacity_on(
-                site_id,
-                calendar_day,
-                half_day.session,
-            )
-            > 0
-        ]
+        open_sites = policy.open_site_ids(calendar_day, allowed)
         if open_sites:
             entries.append(
                 (
@@ -350,6 +343,7 @@ def _available_week_entries(
 ) -> tuple[dict, dict]:
     grouped: dict[tuple, list[tuple]] = defaultdict(list)
     surviving: dict[str, list[tuple]] = defaultdict(list)
+    opening = {}
     for entry in entries:
         occurrence, weekday, session, literal, pinned = entry
         if context.resident_clinic_is_blocked(
@@ -359,7 +353,26 @@ def _available_week_entries(
             session,
         ):
             continue
-        grouped[occurrence.resident_id, weekday, session, pinned].append(entry)
+        policy = context.instance.clinic_policy
+        day = clinic_slot_date(context.instance.calendar.first_week_start, week, weekday)
+        if (weekday, session) not in opening:
+            opening[weekday, session] = clinic_directory_is_open(
+                _capacity_view(context), day, session,
+            )
+        if not opening[weekday, session]:
+            continue
+        resident = context.residents[occurrence.resident_id]
+        rotation = context.rotations[occurrence.rotation_id]
+        allowed = policy.resolve_site_ids(
+            declared_clinic_sites(resident, rotation, weekday, session)
+        )
+        allowed = allowed or list(policy.site_ids)
+        open_sites = tuple(policy.open_site_ids(day, allowed))
+        if not open_sites:
+            continue  # A closure cancels a session; lack of staffing does not.
+        domain = (open_sites[0] if len(open_sites) == 1
+                  else None if set(open_sites) == set(policy.site_ids) else open_sites)
+        grouped[occurrence.resident_id, weekday, session, domain].append(entry)
         surviving[occurrence.key].append((occurrence, literal))
     return grouped, surviving
 
@@ -380,8 +393,10 @@ def _materialize_week_entries(
     state.pinned_to_managed = defaultdict(list)
     state.flexible_share = defaultdict(list)
     state.locked_to_managed = defaultdict(int)
+    state.site_demands = defaultdict(list)
 
-    for (resident_id, weekday, session, pinned), members in grouped.items():
+    for (resident_id, weekday, session, domain), members in grouped.items():
+        pinned = domain if isinstance(domain, str) else None
         pgy = members[0][0].pgy
         keys = tuple(dict.fromkeys(member[0].key for member in members))
         on_vacation = week in context.residents[resident_id].vacation_weeks
@@ -398,14 +413,19 @@ def _materialize_week_entries(
         points = context.instance.clinic_capacity_for_pgy(pgy)
         shares = _managed_shares(context, state, resident_id, pgy) if managed else {}
         # A template pin leaves a lock at any other clinic unusable, as allocation does.
-        locked_site = (
-            state.locked_sites.get((resident_id, week, weekday, session)) if managed else None
-        )
+        locked_site = getattr(state, "locked_sites", {}).get((resident_id, week, weekday, session))
+        allowed = ((domain,) if isinstance(domain, str) else domain
+                   or tuple(context.instance.clinic_policy.site_ids))
+        if locked_site not in allowed:
+            locked_site = None
         site = pinned if pinned is not None else locked_site
         if not on_vacation and pinned is None and locked_site in managed:
             state.locked_to_managed[weekday, session, locked_site] += points
         for literal in literals:
             if not on_vacation:
+                state.site_demands[weekday, session].append(
+                    SiteDemand((site,) if site is not None else allowed, points, (literal,))
+                )
                 occupied_by_slot[weekday, session].extend([literal] * points)
                 if site in managed:
                     state.pinned_to_managed[weekday, session, site].extend(
@@ -413,10 +433,15 @@ def _materialize_week_entries(
                     )
                 elif site is None:
                     for clinic_id, percent in shares.items():
+                        if clinic_id not in allowed:
+                            continue
                         state.flexible_share[weekday, session, clinic_id].append(
                             (percent * points, literal)
                         )
-            if _counts_at_primary_site(context, week, weekday, session, pinned, literal):
+            if (context.instance.clinic_policy.primary_site_id in allowed
+                    and _counts_at_primary_site(
+                        context, week, weekday, session, pinned, literal,
+                    )):
                 primary_by_slot[weekday, session].extend([literal] * points)
     return (
         slots_by_resident,
@@ -465,21 +490,13 @@ def _add_half_day_capacity(
     pinned_to_managed: dict[tuple, list[Any]] | None = None,
     state: _ClinicObjectiveState | None = None,
 ) -> None:
-    """Cap a half-day at the clinic seats the whole directory opens.
+    """Bound total seats and prove sessions can fit their allowed clinics.
 
-    Which site a session lands at is settled after the search, so the model
-    cannot bound one site. It can bound the half-day: when more residents hold
-    clinic than every open site together can seat,
-    :func:`rbs.solver.core.clinic_allocation.assign_clinic_sites` has nowhere
-    legal to put the overflow, deliberately overfills to keep the required
-    session, and the finished schedule is rejected in validation. Stating the
-    total here turns that late rejection into a placement the search does not
-    make.
-
-    A half-day with no capacity at all is left alone. A closure is not an
-    overflow: allocation drops those sessions rather than failing, and forcing
-    them empty would make a week unplaceable over a schedule the program is
-    willing to accept.
+    Sessions sharing site choices and capacity weights are interchangeable,
+    so integer counts can assign whole residents to clinics without adding a
+    site choice per resident. Unrestricted unit-weight sessions need only the
+    pooled bound; restricted groups also need the per-site seating constraints.
+    Closure-canceled sessions have already been filtered before this step.
 
     At an attending-managed clinic the seats are the preceptors the solve
     schedules there times the clinic's capacity points per attending, so the
@@ -501,6 +518,34 @@ def _add_half_day_capacity(
     for (weekday, session), literals in occupied_by_slot.items():
         calendar_day = clinic_slot_date(first_week_start, week, weekday)
         handles = preceptors.get((weekday, session))
+        demands = getattr(state, "site_demands", {}).get((weekday, session), ())
+        locked_overflow = ()
+        if demands:
+            capacities = {
+                site_id: instance.clinic_max_capacity_on(site_id, calendar_day, session)
+                for site_id in policy.site_ids
+            }
+            upper = dict(capacities)
+            for handle in handles or ():
+                capacities[handle.clinic_id] = handle.capacity_points()
+                upper[handle.clinic_id] = handle.ratio * (
+                    handle.fixed + handle.generated_upper_bound
+                )
+            locked_overflow = tuple(
+                (site, points)
+                for (day, half, site), points in getattr(state, "locked_to_managed", {}).items()
+                if (day, half) == (weekday, session) and points > upper.get(site, 0)
+            )
+            # An impossible lock must still reach the existing clinic-specific
+            # validation error. Ordinary sessions never get these extra seats.
+            for site, points in locked_overflow:
+                capacities[site] = upper[site] = points
+            plans = _add_restricted_seating(
+                context.model, demands, capacities, upper,
+                prefix=f"seats:w{week}:{weekday.value}:{session.value}",
+            )
+            if plans:
+                state.site_seating[week, weekday, session] = plans
         if handles:
             # Attending-managed seats depend on who the solve sends to
             # precept, so the bound is a constraint on both sides.
@@ -546,6 +591,8 @@ def _add_half_day_capacity(
                     if state is not None
                     else {}
                 ),
+                site_demands=tuple(demands),
+                locked_overflow=locked_overflow,
             )
             continue
         capacity = sum(
@@ -571,6 +618,20 @@ def _add_half_day_capacity(
         most = handle.ratio * (handle.fixed + handle.generated_upper_bound)
         if locked_points.get((weekday, session, site_id), 0) <= most:
             context.model.Add(sum(literals) <= handle.capacity_points())
+
+
+def _add_restricted_seating(model, demands, capacities, upper, *, prefix):
+    """Keep the common unrestricted, unit-weight case as the pooled bound."""
+    if sum(upper.values()) > 0 and all(
+        demand.points == 1 and set(demand.sites) == set(capacities) for demand in demands
+    ):
+        return []
+    grouped = defaultdict(list)
+    for demand in demands:
+        grouped[demand.sites, demand.points].extend(demand.literals)
+    return add_site_seating(model, [SiteDemand(sites, points, tuple(literals))
+                                   for (sites, points), literals in grouped.items()],
+                            capacities, upper, prefix=prefix)
 
 
 def _counts_at_primary_site(

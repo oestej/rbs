@@ -2,7 +2,40 @@
 
 ## [Unreleased]
 
+### Added
+
+- `rbs ui` chooses an available local port and prints its address. An explicit
+  `--port` still selects a fixed port.
+
+- Choose eligible preceptors from either the attending or clinic editor. Existing
+  workspaces keep all existing attending-managed clinics selected; new attendings and clinics start
+  with no eligibility. Hand-entered and locked work can override eligibility.
+  Capacity-managed clinics receive no precepting assignments; switching to
+  capacity-managed clears eligibility and existing precepting work, including locks.
+  New documents use schema 14 (schemas 9–13 migrate); older builds cannot read
+  newly saved files. Solver protocol 9 requires matching solver binaries.
+
 ### Fixed
+
+- Clinic sessions restricted to selected sites use only those clinics' capacity.
+  Required sessions no longer disappear when staffing is missing, and allocation
+  can rearrange flexible sessions to avoid unnecessary overflow. Solve checks
+  identify missing required sessions and unusable clinic choices. Older incomplete
+  schedules still open as out of date, preserving their work for repair.
+
+- Removing a clinic requires reassigning precepting work held in the saved
+  schedule, including locked work and work hidden by vacation or schedule dates.
+  The removal dialog identifies the affected attendings before any work is lost.
+
+- Weekly attending totals no longer create unnecessary precepting assignments,
+  including with Flexible Precepting set to 0–0. Unfilled totals are reported in
+  Schedule checks and Solve details. Fixed precepting minimums and protected
+  work still apply.
+
+- Vacation and schedule-date changes preserve hand-entered and locked attending
+  work across solves and saved files. Hidden work returns with its lock when the
+  conflict is removed. Attending Schedule checks explain affected half-days, and
+  Solve details keeps warnings and solver notes available after a solve.
 
 - Saving an attending half-day without changes preserves the solved schedule
   and its metrics.

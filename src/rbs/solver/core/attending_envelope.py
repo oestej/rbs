@@ -45,6 +45,7 @@ from rbs.solver.attending_availability import (
     schedule_attending_coverage,
 )
 from rbs.solver.core.attending_rules import add_attending_week
+from rbs.solver.core.clinic_seating import SiteDemand, add_site_seating, solved_seating
 from rbs.solver.core.lexicographic import solve_in_tiers
 
 _PROFILE_WORK_LIMIT = 1.0
@@ -91,6 +92,8 @@ class HalfDayDemand:
     fixed_capacity: int
     pinned: dict[str, tuple[Any, ...]]
     share: dict[str, tuple[tuple[int, Any], ...]]
+    site_demands: tuple[SiteDemand, ...] = ()
+    locked_overflow: tuple[tuple[str, int], ...] = ()
 
 
 class AttendingEnvelope:
@@ -162,7 +165,7 @@ class AttendingEnvelope:
         """Preceptor handles for the half-days of one week that may hold residents."""
         if not self.managed or not half_days:
             return {}
-        supply: dict[HalfDay, list[tuple[Any, int]]] = defaultdict(list)
+        supply: dict[tuple[HalfDay, str], list[tuple[Any, int]]] = defaultdict(list)
         for index, (profile, members) in enumerate(self._classes(week)):
             usable = sorted(profile.half_days & half_days, key=half_day_sort_key)
             if not usable or profile.capacity <= 0:
@@ -179,7 +182,20 @@ class AttendingEnvelope:
             if profile.capacity < len(usable):
                 self.model.Add(sum(counts.values()) <= size * profile.capacity)
             for half_day, count in counts.items():
-                supply[half_day].append((count, size))
+                weekday, session = half_day
+                choices = []
+                for clinic_id in members[0].precepting_clinics:
+                    if clinic_id not in self.managed or not self._precepting_allowed_in_week(
+                        week, clinic_id, weekday, session
+                    ):
+                        continue
+                    choice = self.model.NewIntVar(
+                        0, size,
+                        f"precept_flow:w{week}:k{index}:{weekday.value}:{session.value}:{clinic_id}",
+                    )
+                    choices.append(choice)
+                    supply[half_day, clinic_id].append((choice, size))
+                self.model.Add(sum(choices) == count)
 
         preceptors: dict[HalfDay, list[ClinicPreceptors]] = {}
         for half_day in sorted(half_days, key=half_day_sort_key):
@@ -191,11 +207,10 @@ class AttendingEnvelope:
             ]
             if not open_clinics:
                 continue
-            terms = supply.get(half_day, [])
-            supply_limit = sum(size for _count, size in terms)
             handles: list[ClinicPreceptors] = []
-            generated: list[Any] = []
             for clinic_id in open_clinics:
+                terms = supply.get((half_day, clinic_id), [])
+                supply_limit = sum(size for _count, size in terms)
                 fixed = self.fixed[clinic_id, week, weekday, session]
                 # The clinic's maximum for this half-day bounds everyone who
                 # precepts there, hand-entered work included.
@@ -211,8 +226,10 @@ class AttendingEnvelope:
                     key = (clinic_id, week, weekday, session)
                     self.generated[key] = variable
                     self.generated_upper_bounds[key] = upper
-                    generated.append(variable)
+                    self.model.Add(variable == sum(count for count, _size in terms))
                     self._hint(variable, clinic_id, week, weekday, session, fixed, upper)
+                elif terms:
+                    self.model.Add(sum(count for count, _size in terms) == 0)
                 handles.append(
                     ClinicPreceptors(
                         clinic_id=clinic_id,
@@ -222,13 +239,6 @@ class AttendingEnvelope:
                         generated_upper_bound=upper if variable is not None else 0,
                     )
                 )
-            if generated:
-                # Class members counted as precepting here are exactly the
-                # preceptors the clinics receive, so no clinic's maximum can be
-                # met by attendings who are not there.
-                self.model.Add(sum(generated) == sum(count for count, _size in terms))
-            elif terms:
-                self.model.Add(sum(count for count, _size in terms) == 0)
             preceptors[half_day] = handles
         return preceptors
 
@@ -241,6 +251,8 @@ class AttendingEnvelope:
         fixed_capacity: int,
         pinned: dict[str, list[Any]],
         share: dict[str, list[tuple[int, Any]]],
+        site_demands: tuple[SiteDemand, ...] = (),
+        locked_overflow: tuple[tuple[str, int], ...] = (),
     ) -> None:
         """Remember what one half-day holds so staffing can be polished later."""
         self._demand[week][half_day] = HalfDayDemand(
@@ -248,10 +260,12 @@ class AttendingEnvelope:
             fixed_capacity=fixed_capacity,
             pinned={clinic_id: tuple(items) for clinic_id, items in pinned.items()},
             share={clinic_id: tuple(items) for clinic_id, items in share.items()},
+            site_demands=site_demands,
+            locked_overflow=locked_overflow,
         )
 
     def staffed_counts(
-        self, solver, *, deadline: float | None = None,
+        self, solver, *, deadline: float | None = None, seating: dict | None = None,
     ) -> dict[tuple[str, int, Weekday, Session], int]:
         """Preceptors each attending-managed half-day gets for a solved placement.
 
@@ -283,6 +297,7 @@ class AttendingEnvelope:
         )
         unstaffed_terms: list[Any] = []
         shortfall_terms: list[Any] = []
+        seating_plans = {}
         for week in sorted(self._demand):
             records = self._demand[week]
             preceptors = polish.week_preceptors(week, set(records))
@@ -291,6 +306,31 @@ class AttendingEnvelope:
                 variable_handles = [handle for handle in handles if handle.generated is not None]
                 if not variable_handles:
                     continue
+                if record.site_demands:
+                    weekday, session = half_day
+                    day = clinic_slot_date(self.problem.calendar.first_week_start, week, weekday)
+                    seats = {site: self.problem.clinic_max_capacity_on(site, day, session)
+                             for site in self.problem.clinic_policy.site_ids}
+                    upper = dict(seats)
+                    for handle in handles:
+                        seats[handle.clinic_id] = handle.capacity_points()
+                        upper[handle.clinic_id] = handle.ratio * (
+                            handle.fixed + handle.generated_upper_bound
+                        )
+                    for site, points in record.locked_overflow:
+                        seats[site] = upper[site] = points
+                    grouped = defaultdict(list)
+                    for demand in record.site_demands:
+                        grouped[demand.sites, demand.points].extend(
+                            int(solver.Value(literal)) for literal in demand.literals
+                        )
+                    plans = add_site_seating(
+                        model, [SiteDemand(sites, points, tuple(values))
+                                for (sites, points), values in grouped.items()],
+                        seats, upper, prefix=f"polish:w{week}:{weekday.value}:{session.value}",
+                    )
+                    if plans:
+                        seating_plans[week, weekday, session] = plans
                 occupied = sum(solver.Value(literal) for literal in record.occupied)
                 model.Add(
                     record.fixed_capacity
@@ -341,6 +381,9 @@ class AttendingEnvelope:
         )
         if polished is None:
             return searched
+        if seating is not None:
+            seating.update({key: solved_seating(plans, polished)
+                            for key, plans in seating_plans.items()})
         return {
             key: int(polished.Value(variable)) for key, variable in polish.generated.items()
         }

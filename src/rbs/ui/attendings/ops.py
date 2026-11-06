@@ -311,6 +311,8 @@ def apply_schedule_template(
     last = parse_academic_week(instance, last_week, label="Last week")
     if last < first:
         raise ValueError("last week cannot be before first week")
+    for half_day in template:
+        _require_managed_precepting(instance, half_day)
     by_week = {schedule.week: schedule for schedule in schedules}
     for week in range(first, last + 1):
         existing = by_week.get(week)
@@ -361,6 +363,15 @@ def move_work_half_day(
     ).half_days
 
 
+def _require_managed_precepting(
+    instance: SchedulerInput, assignment: AttendingWorkHalfDay | None,
+) -> None:
+    if (assignment is not None
+        and assignment.work_type is AttendingWorkType.PRECEPTING_CLINIC
+        and assignment.clinic_id not in instance.attending_managed_clinic_ids):
+        raise ValueError("Precepting Clinic work requires an attending-managed clinic.")
+
+
 def _validate_attending_work_slot(
     instance: SchedulerInput,
     attending_id: str,
@@ -396,6 +407,7 @@ def set_attending_work_half_day(
 ) -> SchedulerInput:
     """Accept one calendar edit while preserving other work and the week override."""
     _validate_attending_work_slot(instance, attending_id, week, weekday, session)
+    _require_managed_precepting(instance, assignment)
     if assignment is not None and (assignment.weekday, assignment.session) != (weekday, session):
         raise ValueError("The assignment must use the selected half-day.")
     schedules = list(instance.attending_schedule_weeks(attending_id))
@@ -431,6 +443,11 @@ def move_attending_work_half_day(
     _validate_attending_work_slot(instance, attending_id, week, target_weekday, target_session)
     schedules = list(instance.attending_schedule_weeks(attending_id))
     current = next((schedule for schedule in schedules if schedule.week == week), None)
+    for item in current.half_days if current is not None else []:
+        if (item.weekday, item.session) in (
+            (source_weekday, source_session), (target_weekday, target_session),
+        ):
+            _require_managed_precepting(instance, item)
     half_days = move_work_half_day(
         current.half_days if current is not None else [],
         source_weekday=source_weekday, source_session=source_session,
@@ -702,6 +719,7 @@ def set_attending_schedule_half_day(
             assignment=assignment,
         ), None
     _validate_attending_work_slot(instance, attending_id, week, weekday, session)
+    _require_managed_precepting(instance, assignment)
     if assignment is not None and (assignment.weekday, assignment.session) != (weekday, session):
         raise ValueError("The assignment must use the selected half-day.")
     # Compare only editable content before changing provenance or solve metadata.
@@ -765,6 +783,8 @@ def move_attending_schedule_half_day(
     target = visible[target_weekday, target_session]
     if source is None:
         raise ValueError("The work block being moved no longer exists.")
+    _require_managed_precepting(instance, source)
+    _require_managed_precepting(instance, target)
     if schedule is None:
         return move_attending_work_half_day(
             instance, attending_id, week=week,

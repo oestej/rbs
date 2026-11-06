@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
+import sys
 
 from fastapi import Request, Response
 
@@ -73,11 +75,25 @@ __all__ = [
 DEFAULT_DB = "rbs.sqlite"
 
 
+def _available_port(host: str) -> int:
+    """Ask the OS for an unused port on the interface this server will bind."""
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as candidate:
+        candidate.bind((host, 0))
+        return candidate.getsockname()[1]
+
+
+def _resolve_port(host: str, port: int | None) -> int:
+    if port is not None and not 0 <= port <= 65535:
+        raise ValueError("port must be between 0 and 65535")
+    return _available_port(host) if port in (None, 0) else port
+
+
 def run_app(
     store: WorkspaceRepository,
     *,
     host: str = "127.0.0.1",
-    port: int = 8080,
+    port: int | None = None,
     reload: bool = False,
     show: bool = True,
     mode: str = "local",
@@ -100,10 +116,16 @@ def run_app(
         local = build_host(store, mode)
         local.bootstrap()
         logger.info("database.initialized")
+        selected_port = _resolve_port(host, port)
+        browser_host = "127.0.0.1" if host == "0.0.0.0" else "::1" if host == "::" else host
+        if ":" in browser_host:
+            browser_host = f"[{browser_host}]"
+        # This is CLI navigation guidance, separate from structured operational logs.
+        print(f"RBS workspace: http://{browser_host}:{selected_port}/", file=sys.stderr, flush=True)
         serve(
             local,
             host=host,
-            port=port,
+            port=selected_port,
             reload=reload,
             show=show,
             exit_abruptly=True,
@@ -122,7 +144,7 @@ def serve(
     *,
     title: str = "RBS",
     host: str = "127.0.0.1",
-    port: int | None = 8080,
+    port: int | None = None,
     reload: bool = False,
     show: bool = True,
     native: bool = False,
@@ -140,6 +162,8 @@ def serve(
     from nicegui import ui
 
     _register(workspace_host)
+    if not native or port is not None:
+        port = _resolve_port(host, port)
 
     if exit_abruptly:
 

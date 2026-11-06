@@ -587,7 +587,8 @@
           "session": "afternoon"
         }
       ],
-      "schedule_template_half_days": []
+      "schedule_template_half_days": [],
+      "eligible_clinic_ids": []
     },
     {
       "id": "attending-003",
@@ -644,7 +645,8 @@
           "session": "morning"
         }
       ],
-      "schedule_template_half_days": []
+      "schedule_template_half_days": [],
+      "eligible_clinic_ids": []
     },
     {
       "id": "attending-007",
@@ -690,7 +692,8 @@
           "session": "afternoon"
         }
       ],
-      "schedule_template_half_days": []
+      "schedule_template_half_days": [],
+      "eligible_clinic_ids": []
     },
     {
       "id": "attending-006",
@@ -742,7 +745,8 @@
           "session": "afternoon"
         }
       ],
-      "schedule_template_half_days": []
+      "schedule_template_half_days": [],
+      "eligible_clinic_ids": []
     },
     {
       "id": "attending-005",
@@ -799,7 +803,8 @@
           "session": "morning"
         }
       ],
-      "schedule_template_half_days": []
+      "schedule_template_half_days": [],
+      "eligible_clinic_ids": []
     },
     {
       "id": "attending-008",
@@ -856,7 +861,8 @@
           "session": "morning"
         }
       ],
-      "schedule_template_half_days": []
+      "schedule_template_half_days": [],
+      "eligible_clinic_ids": []
     },
     {
       "id": "attending-001",
@@ -938,7 +944,8 @@
           "session": "morning"
         }
       ],
-      "schedule_template_half_days": []
+      "schedule_template_half_days": [],
+      "eligible_clinic_ids": []
     },
     {
       "id": "attending-002",
@@ -1015,7 +1022,8 @@
           "session": "afternoon"
         }
       ],
-      "schedule_template_half_days": []
+      "schedule_template_half_days": [],
+      "eligible_clinic_ids": []
     }
   ],
   "attending_schedules": [

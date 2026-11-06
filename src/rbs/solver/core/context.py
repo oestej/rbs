@@ -70,6 +70,7 @@ class ClinicModelState:
     quality_cost: Any = 0
     quality_bound: int = 0
     synthetic_reference_locks: set = field(default_factory=set)
+    site_seating: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

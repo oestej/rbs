@@ -6,7 +6,7 @@ CP-SAT search, so they stay outside the ``solve`` marker group.
 
 from rbs.catalog import sample_instance
 from rbs.models.attending import AttendingClinicCoverage
-from rbs.models.clinic import clinic_slot_date
+from rbs.models.clinic import ClinicHalfDayCapacity, clinic_slot_date
 from rbs.models.clinic_site import ClinicStaffingMode
 from rbs.models.elective import ElectiveRotationOption
 from rbs.models.enums import Session, Weekday
@@ -162,15 +162,22 @@ def test_repeatable_elective_locked_twice_is_silent() -> None:
 
 
 def _attending_managed_instance(**updates) -> SchedulerInput:
-    """Stock sample with Cedar on attending-managed staffing (no coverage)."""
+    """Cedar needs preceptors; Maple can host all unrestricted template sessions."""
     instance = sample_instance()
     sites = [
         site.model_copy(update={"staffing_mode": ClinicStaffingMode.ATTENDING_MANAGED})
         if site.id == "cedar"
-        else site
+        else site.revised(half_days=[
+            ClinicHalfDayCapacity(weekday=weekday, session=session, attendings=4)
+            for weekday in (Weekday.MONDAY, Weekday.TUESDAY, Weekday.WEDNESDAY,
+                            Weekday.THURSDAY, Weekday.FRIDAY)
+            for session in Session
+        ])
         for site in instance.clinic_policy.sites
     ]
     policy = instance.clinic_policy.model_copy(update={"sites": sites})
+    updates.setdefault("attendings", [person.revised(eligible_clinic_ids=["cedar"])
+                                    for person in instance.attendings])
     return instance.revised(clinic_policy=policy, **updates)
 
 

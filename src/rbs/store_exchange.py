@@ -37,13 +37,15 @@ class StoreExchangeMixin:
             instance = catalogs[workspace.catalog_id].apply(workspace.case)
             # A file is rejected for dangling or malformed data, never for a
             # rule only a solve can settle. Older builds could save work kept
-            # over a clinic's preceptor maximum without recording the override;
-            # that schedule opens as out of date and nothing in it is lost.
+            # over a clinic's preceptor maximum without recording the override,
+            # or silently omit a required clinic session. Those schedules open
+            # as out of date and nothing in them is lost.
             validate_persistable_schedule_or_raise(
                 instance,
                 workspace.schedule,
                 prior=workspace.schedule,
                 precepting_maximums=False,
+                required_clinic_sessions=False,
             )
         return state
 

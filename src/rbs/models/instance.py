@@ -585,6 +585,8 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
         """Check Precepting Clinic references and derive hand-entered coverage."""
         known_clinic_ids = set(self.clinic_policy.site_ids)
         for attending in self.attendings:
+            if set(attending.eligible_clinic_ids) - known_clinic_ids:
+                raise ValueError(f"{attending.id}: eligible clinics reference an unknown clinic")
             assignments = [
                 *attending.preferred_weekly_schedule_half_days,
                 *attending.schedule_template_half_days,
@@ -603,6 +605,13 @@ class SolverProblem(SolverIntegrityMixin, ElectiveQueriesMixin, SolverCase):
                         f"{attending.id}: Precepting Clinic work references unknown clinic "
                         f"{assignment.clinic_id!r}"
                     )
+        managed = self.attending_managed_clinic_ids
+        self.attendings = [
+            attending.revised(eligible_clinic_ids=[
+                clinic_id for clinic_id in attending.eligible_clinic_ids if clinic_id in managed
+            ]) if set(attending.eligible_clinic_ids) - managed else attending
+            for attending in self.attendings
+        ]
         self.attending_coverage = self.attending_coverage_for(
             self.effective_attending_weeks()
         )

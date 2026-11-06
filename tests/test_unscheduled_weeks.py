@@ -550,6 +550,8 @@ def test_managed_clinic_nobody_can_precept_at_blocks_the_solve() -> None:
     raw = sample_instance().model_dump(mode="json")
     site = next(site for site in raw["clinic_policy"]["sites"] if site["id"] == "cedar")
     site["staffing_mode"] = "attending_managed"
+    for person in raw["attendings"]:
+        person["eligible_clinic_ids"] = ["cedar"]
     staffed = SchedulerInput.model_validate(raw)
     raw["attendings"] = []
     raw["attending_schedules"] = []
@@ -562,6 +564,7 @@ def test_managed_clinic_nobody_can_precept_at_blocks_the_solve() -> None:
     assert not result.ready
     issue = next(
         issue for issue in result.issues if issue.code == "uncoverable_clinic_session"
+        and "Inpatient Peds Metro" in issue.message
     )
     assert "Inpatient Peds Metro" in issue.message
     assert "no attending is available to precept at Cedar" in issue.message

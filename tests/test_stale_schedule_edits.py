@@ -734,13 +734,14 @@ def test_left_out_messages_read_as_sentences() -> None:
 def _one_week(attending_id: str, name: str) -> Attending:
     first = blank_instance().calendar.first_week_start
     return Attending(
-        id=attending_id, name=name, half_days_per_week=1,
+        id=attending_id, name=name, half_days_per_week=1, eligible_clinic_ids=["clinic"],
         schedule_start_date=first, schedule_end_date=first + timedelta(days=6),
     )
 
 
 def _clinic_program(maximum: int, *, lock_through_today: bool) -> SchedulerInput:
     raw = blank_instance().model_dump(mode="json")
+    raw["clinic_policy"]["sites"][0]["staffing_mode"] = "attending_managed"
     raw["clinic_policy"]["sites"][0]["half_days"] = [
         {"weekday": MON.value, "session": AM.value, "attendings": maximum},
     ]

@@ -14,6 +14,7 @@ from rbs.models.attending import (
     AttendingWorkHalfDay,
     AttendingWorkType,
 )
+from rbs.models.clinic import ClinicStaffingMode
 from rbs.models.enums import Session, SolverStatus, Weekday
 from rbs.models.instance import SolverProblem
 from rbs.models.schedule import AssignedAttendingWork, ScheduleMetrics
@@ -35,6 +36,10 @@ from rbs.ui.attendings.ops import (
 
 def _instance():
     instance = blank_instance()
+    instance = instance.revised(clinic_policy=instance.clinic_policy.revised(sites=[
+        site.revised(staffing_mode=ClinicStaffingMode.ATTENDING_MANAGED)
+        for site in instance.clinic_policy.sites
+    ]))
     start = instance.calendar.first_week_start
     attending = Attending(
         id="attending-001", name="Ada Lovelace", half_days_per_week=2,

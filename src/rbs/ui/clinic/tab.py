@@ -27,10 +27,12 @@ from rbs.ui.clinic.ops import (
     _default_clinic_rule,
     _new_clinic_draft,
     add_clinic,
+    clinic_removal_attending_names,
     copy_clinic_closure_days,
     remove_clinic,
     replace_clinic,
     replace_primary_clinic,
+    set_clinic_eligible_attendings,
 )
 from rbs.ui.drafts import Draft
 from rbs.ui.editor_common import (
@@ -128,6 +130,7 @@ def render_clinic_tab(
                         selected_rotation_id=None,
                         on_save=on_save,
                         on_manage_attendings=on_manage_attendings,
+                        schedule=schedule,
                     )
                 elif name == "clinic_block_rules":
                     _clinic_block_rules_configuration(
@@ -1498,6 +1501,7 @@ def _clinic_directory_configuration(
     selected_rotation_id: str | None,
     on_save: SaveRotation,
     on_manage_attendings: Callable[[], None] | None = None,
+    schedule: Schedule | None = None,
 ) -> None:
     from nicegui import ui
 
@@ -1636,6 +1640,7 @@ def _clinic_directory_configuration(
                                             clinic.id,
                                             selected_rotation_id=selected_rotation_id,
                                             on_save=on_save,
+                                            schedule=schedule,
                                         ),
                                     ).classes("rbs-text-danger")
                                     if len(policy.sites) <= 1:
@@ -1796,6 +1801,11 @@ def _open_clinic_editor_dialog(
     draft["capacity_overrides"] = [dict(item) for item in existing.get("capacity_overrides", [])]
     draft["closure_days"] = [dict(item) for item in existing.get("closure_days", [])]
     draft["allocation_rules"] = [dict(item) for item in existing.get("allocation_rules", [])]
+    eligible_attending_ids = [
+        person.id for person in instance.attendings
+        if original_id in person.eligible_clinic_ids
+    ]
+    eligibility = {"attending_ids": list(eligible_attending_ids)}
     guard = EditorGuard(subject="this clinic", save_label="Save clinic")
 
     def close_editor() -> None:
@@ -1903,10 +1913,11 @@ def _open_clinic_editor_dialog(
                         ):
                             ui.label("Staffing source").classes("rbs-type-section-title")
                             ui.label(
-                                "Capacity-managed clinics are staffed by the attendings in "
+                                "Capacity-managed clinics use the capacity in "
                                 "their weekly schedule. At attending-managed clinics, the "
                                 "solve schedules attendings to precept, up to the weekly "
-                                "schedule's maximum for each half-day."
+                                "schedule's maximum for each half-day. Switching to "
+                                "capacity-managed clears eligibility and precepting work here."
                             ).classes("rbs-type-caption rbs-text-muted")
                             staffing_mode = (
                                 ui.select(
@@ -1978,6 +1989,18 @@ def _open_clinic_editor_dialog(
                                     ui.label(
                                         "Save this clinic before assigning attendings to it."
                                     ).classes("rbs-type-caption rbs-text-muted")
+                        eligibility_panel = ui.column().classes("w-full gap-3")
+                        with eligibility_panel:
+                            eligible_attendings = ui.select(
+                                {person.id: person.name for person in instance.attendings},
+                                value=eligible_attending_ids, multiple=True, with_input=True,
+                                label="Eligible attendings",
+                            ).props("outlined use-chips options-dense").classes("w-full")
+                            eligible_attendings.bind_value(eligibility, "attending_ids")
+                            ui.label(
+                                "Only selected attendings may be scheduled to precept here. "
+                                "Hand-entered and locked work may override eligibility."
+                            ).classes("rbs-type-caption rbs-text-muted")
                         grid_caption = ui.label().classes("rbs-type-caption rbs-text-muted")
                         capacity_refresh = _clinic_capacity_grid(draft)
 
@@ -1993,6 +2016,10 @@ def _open_clinic_editor_dialog(
 
         def show_staffing_mode(capacity_managed: bool) -> None:
             attending_managed_panel.set_visibility(not capacity_managed)
+            eligibility_panel.set_visibility(not capacity_managed)
+            if capacity_managed:
+                eligible_attendings.value = []
+                eligibility["attending_ids"] = []
             grid_caption.set_text(
                 "Choose staffed half-days from Monday through Sunday."
                 if capacity_managed
@@ -2031,6 +2058,11 @@ def _open_clinic_editor_dialog(
                         if original_id is not None
                         else add_clinic(instance, clinic)
                     )
+                    updated = set_clinic_eligible_attendings(
+                        updated, clinic.id,
+                        (eligibility["attending_ids"] or [])
+                        if clinic.id in updated.attending_managed_clinic_ids else [],
+                    )
                     on_save(updated, selected_rotation_id)
                     guard.clear()
                     close_editor()
@@ -2049,7 +2081,10 @@ def _open_clinic_editor_dialog(
                 on_click=save_clinic,
             ).props("unelevated no-caps")
     initial_draft = deepcopy(draft)
-    guard.is_dirty = lambda: draft != initial_draft
+    guard.is_dirty = lambda: (
+        draft != initial_draft or sorted(eligibility["attending_ids"] or [])
+        != sorted(eligible_attending_ids)
+    )
     guard.save = save_clinic
     dialog.open()
 
@@ -2653,12 +2688,31 @@ def _confirm_remove_clinic(
     *,
     selected_rotation_id: str | None,
     on_save: SaveRotation,
+    schedule: Schedule | None = None,
 ) -> None:
     from nicegui import ui
 
     clinic = instance.clinic_policy.site(clinic_id)
-    with ui.dialog() as dialog, ui.card().classes("w-[min(92vw,480px)] p-5"):
+    assigned_attendings = clinic_removal_attending_names(instance, clinic_id, schedule=schedule)
+    with (
+        ui.dialog() as dialog,
+        ui.card().classes("rbs-popout-dialog w-[min(92vw,480px)] p-5")
+        .style("max-height:85vh;overflow-y:auto"),
+    ):
         ui.label(f"Remove {clinic.name}?").classes("rbs-type-dialog-title")
+        if assigned_attendings:
+            ui.label(
+                "Reassign Precepting Clinic work before removing this clinic: "
+                + ", ".join(assigned_attendings)
+            ).classes("rbs-type-body")
+            ui.label(
+                "Review work and preferences in Attendings, including work hidden by vacation "
+                "or schedule dates. Unlock locked half-days before changing them."
+            ).classes("rbs-type-body rbs-text-muted")
+            with ui.row().classes("w-full justify-end pt-2"):
+                ui.button("Close", on_click=dialog.close).props(SECONDARY_BUTTON_PROPS)
+            dialog.open()
+            return
         ui.label(
             "Its allocation rule, staffing coverage, and closures will be removed. "
             "Rotation rules that only reference this clinic will fall back to any "
@@ -2669,10 +2723,10 @@ def _confirm_remove_clinic(
 
             def remove() -> None:
                 try:
-                    updated = remove_clinic(instance, clinic_id)
+                    updated = remove_clinic(instance, clinic_id, schedule=schedule)
+                    on_save(updated, selected_rotation_id)
                     dialog.close()
                     ui.notify("Clinic removed", type="positive")
-                    on_save(updated, selected_rotation_id)
                 except (ValidationError, ValueError) as exc:
                     ui.notify(_validation_message(exc), type="negative", multi_line=True)
 

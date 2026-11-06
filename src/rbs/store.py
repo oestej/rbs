@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from collections.abc import Callable, Iterator
@@ -10,6 +11,7 @@ from pathlib import Path
 
 from rbs.catalog import bootstrap_catalog, current_sample_instance
 from rbs.logging import get_logger
+from rbs.models.attending_eligibility import migrate_eligibility
 from rbs.models.workspace import (
     DeskFullError,
     Workspace,
@@ -187,12 +189,23 @@ class Store(StoreCatalogMixin, StoreWorkspaceMixin, StoreExchangeMixin):
     def init(self) -> None:
         """Create current-schema tables and seed the bundled catalog.
 
-        Only the current schema is supported: databases or documents written
-        by older builds fail validation with a descriptive error instead of
-        being upgraded in place.
+        Legacy attending eligibility is expanded once using the workspace's
+        own catalog, without changing document revisions or user work.
         """
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+            conn.execute("BEGIN IMMEDIATE")
+            for row in conn.execute(
+                "SELECT w.id, w.instance_json, c.catalog_json FROM workspaces w "
+                "JOIN catalogs c ON c.id = w.catalog_id"
+            ).fetchall():
+                case = json.loads(row["instance_json"])
+                migrated = migrate_eligibility(
+                    case, json.loads(row["catalog_json"])["clinic_policy"],
+                )
+                if migrated != case:
+                    conn.execute("UPDATE workspaces SET instance_json = ? WHERE id = ?",
+                                 (json.dumps(migrated), row["id"]))
             self._put_catalog(
                 conn,
                 "Bundled default",

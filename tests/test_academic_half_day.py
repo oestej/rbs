@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from rbs.catalog import sample_instance
 from rbs.models.case_blocks import AcademicHalfDayOverride
+from rbs.models.clinic import ClinicHalfDayCapacity
 from rbs.models.enums import Session, Weekday
 from rbs.models.rotation import ClinicSlot
 from rbs.ui.clinic.ops import (
@@ -162,12 +163,23 @@ def test_a_cancelling_override_round_trips_through_json() -> None:
 # ---- the solver sees it ------------------------------------------------
 
 
+def _with_clinic_on_recurring_half_day(instance):
+    site = instance.clinic_policy.sites[0]
+    replacement = site.revised(half_days=[
+        *site.half_days,
+        ClinicHalfDayCapacity(weekday=RECURRING[0], session=RECURRING[1], attendings=1),
+    ])
+    return instance.revised(clinic_policy=instance.clinic_policy.revised(
+        sites=[replacement, *instance.clinic_policy.sites[1:]],
+    ))
+
+
 def test_a_disabled_academic_half_day_opens_the_slot_in_the_clinic_model() -> None:
     from ortools.sat.python import cp_model
 
     from rbs.solver.core.compile import compile_problem
 
-    instance = disable_academic_half_day(_no_overrides())
+    instance = disable_academic_half_day(_with_clinic_on_recurring_half_day(_no_overrides()))
 
     problem = compile_problem(instance, instance.solver, cp_model)
     entries = [
@@ -189,7 +201,9 @@ def test_a_cancelled_week_opens_the_slot_only_for_that_week() -> None:
 
     from rbs.solver.core.compile import compile_problem
 
-    instance = cancel_academic_half_day_for_week(_no_overrides(), 11)
+    instance = cancel_academic_half_day_for_week(
+        _with_clinic_on_recurring_half_day(_no_overrides()), 11,
+    )
 
     problem = compile_problem(instance, instance.solver, cp_model)
 

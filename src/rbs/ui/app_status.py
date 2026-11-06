@@ -14,6 +14,7 @@ from rbs.ui.app_documents import (
     document_summary,
 )
 from rbs.ui.session import WorkspaceSession
+from rbs.ui.solve_details import refresh_solve_details_button
 from rbs.ui.workspaces import file_handle
 from rbs.ui.workspaces.status import (
     PILL_ALERT,
@@ -93,6 +94,7 @@ def _refresh_status_chips(session: WorkspaceSession) -> None:
     if workspace is None:
         return
     _refresh_download_chip(session, workspace)
+    refresh_solve_details_button(session)
     if session.solve_chip is None:
         return
     summary = solve_summary(workspace, session_readiness(session, workspace))

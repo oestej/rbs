@@ -329,7 +329,9 @@ def _validate_clinics(
         total = sum(counts.values())
         if total <= 0:
             continue
-        resident = next(item for item in instance.residents if item.id == resident_id)
+        resident = instance.residents_by_id.get(resident_id)
+        if resident is None:
+            continue  # Assignment validation already reports the dangling identity.
         for rule in policy.allocation_rules_for(
             pgy=resident.pgy,
             resident_id=resident_id,

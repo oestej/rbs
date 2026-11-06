@@ -623,7 +623,11 @@ def sample_instance(
             block_start_alignment=1,
         ),
         residents=residents,
-        attendings=sample_attendings(first_week_start),
+        attendings=[attending.revised(eligible_clinic_ids=[
+                        site.id for site in constraints.clinic_policy.sites
+                        if site.staffing_mode.value == "attending_managed"
+                    ])
+                    for attending in sample_attendings(first_week_start)],
         attending_schedules=sample_attending_schedules(),
         rotations=constraints.rotations,
         requirements=constraints.requirements,

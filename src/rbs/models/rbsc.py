@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_serializer, model_validator
 
+from rbs.models.attending_eligibility import migrate_eligibility
 from rbs.models.catalog import ConstraintCatalog
 from rbs.models.common import StrictModel
 from rbs.models.instance import SchedulingCase
@@ -16,12 +17,12 @@ from rbs.models.rotation import DEFAULT_ROTATION_COLOR, default_rotation_color
 from rbs.models.schedule import Schedule
 
 RBSC_FORMAT = "rbsc"
-# Schemas 9 through 12 migrate on import; older documents fail validation
+# Schemas 9 through 13 migrate on import; older documents fail validation
 # instead of being guessed forward. Portable documents omit
 # application-owned presentation (colors, solver tuning, automatic-locking
 # state) by design; import restores neutral defaults. A Save As deliberately
 # clears the bundled-sample flag before producing the user's document.
-RBSC_SCHEMA_VERSION = 13
+RBSC_SCHEMA_VERSION = 14
 _AUTOMATIC_LOCK_SOURCE = "through_today"
 _WEEKDAYS = (
     "monday",
@@ -110,6 +111,7 @@ def _hydrate_portable_preferences(value: object) -> object:
 def _migrate_portable_state(value: object) -> object:
     """Upgrade path for documents written by older schema versions.
 
+    Version 14 adds explicit attending clinic eligibility.
     Version 13 removes the minimum Attending Clinic days requirement.
     Version 12 folds dated attending shifts into their academic-week schedules,
     changes recurring category targets from one count to a minimum/maximum
@@ -128,22 +130,31 @@ def _migrate_portable_state(value: object) -> object:
     SQLite working copies and unversioned JSON carry those shapes too;
     new fields take their model defaults.
     """
-    if not isinstance(value, dict) or value.get("schema_version") not in (9, 10, 11, 12):
+    if not isinstance(value, dict) or value.get("schema_version") not in (9, 10, 11, 12, 13):
         return value
     source_version = value.get("schema_version")
     migrated = deepcopy(value)
     migrated["schema_version"] = RBSC_SCHEMA_VERSION
+    records = migrated.get("catalogs", [])
+    catalogs = {
+        record["id"]: record["catalog"]
+        for record in records if isinstance(record, dict)
+        and isinstance(record.get("id"), int) and isinstance(record.get("catalog"), dict)
+    } if isinstance(records, list) else {}
     for workspace in migrated.get("workspaces", []):
         if not isinstance(workspace, dict):
             continue
         case = workspace.get("case")
         if not isinstance(case, dict):
             continue
+        policy = catalogs.get(workspace.get("catalog_id"), {}).get("clinic_policy", {})
+        case = migrate_eligibility(case, policy)
+        workspace["case"] = case
         if source_version in (9, 10):
             case.setdefault("attendings", [])
             case.setdefault("attending_schedules", [])
             continue
-        if source_version == 12:
+        if source_version in (12, 13):
             continue
         calendar = case.get("calendar")
         first_week_start = (
@@ -306,7 +317,7 @@ class RBSCState(StrictModel):
     """The complete portable state of one RBS SQLite database."""
 
     format: Literal["rbsc"] = RBSC_FORMAT
-    schema_version: Literal[13] = RBSC_SCHEMA_VERSION
+    schema_version: Literal[14] = RBSC_SCHEMA_VERSION
     exported_at: str
     current_workspace_id: int | None = Field(default=None, ge=1)
     app_metadata: dict[str, str] = Field(default_factory=dict)

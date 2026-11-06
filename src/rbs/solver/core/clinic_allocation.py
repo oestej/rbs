@@ -19,6 +19,7 @@ from rbs.models.enums import RotationKind
 from rbs.models.instance import SolverProblem
 from rbs.models.rotation import Rotation
 from rbs.models.schedule import AssignedClinic, Assignment, Schedule
+from rbs.solver.clinic_sites import clinic_directory_is_open
 from rbs.solver.reference import (
     reference_clinic_metadata,
     reference_clinic_sites,
@@ -58,6 +59,7 @@ class _Candidate:
     capacity_points: int = 1
     preferred_clinic_id: str | None = None
     locked_clinic_id: str | None = None
+    seating_sites: frozenset[str] | None = None
 
     @property
     def key(self) -> _SlotKey:
@@ -70,6 +72,8 @@ def assign_clinic_sites(
     assignments: list[Assignment],
     *,
     reference_schedule: Schedule | None = None,
+    deadline: float | None = None,
+    seating: dict | None = None,
 ) -> ClinicAllocationResult:
     policy = instance.clinic_policy
     residents = instance.residents_by_id
@@ -119,15 +123,24 @@ def assign_clinic_sites(
                 slot.week,
                 slot.weekday,
             )
-            allowed = [
-                clinic_id
-                for clinic_id in policy.open_site_ids(calendar_day, allowed)
-                if instance.clinic_max_capacity_on(clinic_id, calendar_day, slot.session) > 0
-            ]
-            if not allowed:
-                # A closure or a clinic with no coverage removes this occurrence,
-                # just as an individual day off does.
+            if not clinic_directory_is_open(instance, calendar_day, slot.session):
                 continue
+            allowed = policy.open_site_ids(calendar_day, allowed)
+            if not allowed:
+                # A closure cancels this occurrence. Missing staffing must
+                # remain visible as a capacity failure, never a deleted session.
+                continue
+            staffed = [site for site in allowed
+                       if instance.clinic_max_capacity_on(site, calendar_day, slot.session) > 0]
+            pinned = protected_sites.get(occurrence_key) or slot.site
+            seating_sites = frozenset([pinned] if pinned in allowed else allowed)
+            # Keep zero-seat choices only when none can seat the session or
+            # a protected/source placement holds it there. Otherwise preserve
+            # the allocator's single-option-first ordering and target choices.
+            if staffed:
+                if pinned in allowed and pinned not in staffed:
+                    staffed.append(pinned)
+                allowed = staffed
             retained.append(slot)
             candidates.append(
                 _Candidate(
@@ -142,6 +155,7 @@ def assign_clinic_sites(
                     ),
                     preferred_clinic_id=preferred_sites.get(occurrence_key),
                     locked_clinic_id=protected_sites.get(occurrence_key),
+                    seating_sites=seating_sites,
                 )
             )
         assignment.clinic_slots = retained
@@ -186,12 +200,14 @@ def assign_clinic_sites(
 
     # Source-pinned and single-option sessions are immutable. They consume
     # coverage before flexible sessions are considered.
+    fixed_sites: dict[int, str] = {}
     for candidate in candidates:
         clinic_id = _fixed_site(candidate)
         if clinic_id is None:
             candidate.slot.site = None
             unassigned.append(candidate)
             continue
+        fixed_sites[id(candidate)] = clinic_id
         _assign(
             candidate,
             clinic_id,
@@ -326,6 +342,23 @@ def assign_clinic_sites(
             weekly_by_clinic,
         )
 
+    # Greedy target allocation can paint a restricted session into a corner.
+    # Repair only overflowing half-days; already valid allocations stay put.
+    by_half_day: dict[_SlotKey, list[_Candidate]] = defaultdict(list)
+    for candidate in candidates:
+        by_half_day[candidate.key].append(candidate)
+    for half_day, members in by_half_day.items():
+        if any(filled[site, *half_day] > instance.clinic_max_capacity_on(
+            site, members[0].calendar_day, members[0].slot.session,
+        ) for site in policy.site_ids):
+            _repair_half_day(
+                instance, members, fixed_sites, deadline=deadline,
+                seating=(seating or {}).get(half_day),
+            )
+    assigned_by_clinic = defaultdict(int)
+    for candidate in candidates:
+        assigned_by_clinic[candidate.slot.site] += 1
+
     target_sessions = sum(target_by_clinic.values())
     assigned_target_sessions = sum(
         min(target, assigned_by_clinic.get(clinic_id, 0))
@@ -338,6 +371,148 @@ def assign_clinic_sites(
         target_by_clinic=dict(target_by_clinic),
         assigned_by_clinic=dict(assigned_by_clinic),
     )
+
+
+def _repair_half_day(instance, candidates, fixed_sites, *, deadline, seating=None):
+    """Find a complete legal seating, retaining locks and source pins."""
+    if seating and _use_proven_seating(instance, candidates, fixed_sites, seating):
+        return
+    if len({candidate.capacity_points for candidate in candidates}) == 1:
+        # Equal weights form an ordinary capacitated matching problem. An
+        # augmenting path is exact and needs no remaining search budget.
+        _repair_equal_weights(instance, candidates, fixed_sites)
+        return
+    from ortools.sat.python import cp_model
+
+    from rbs.solver.core.lexicographic import solve_in_tiers
+
+    model = cp_model.CpModel()
+    choices = []
+    loads = defaultdict(list)
+    previous_changes = []
+    greedy_changes = []
+    for index, candidate in enumerate(candidates):
+        fixed = fixed_sites.get(id(candidate))
+        allowed = [fixed] if fixed is not None else candidate.clinic_ids
+        options = {}
+        for site in allowed:
+            variable = model.NewBoolVar(f"seat:{index}:{site}")
+            options[site] = variable
+            loads[site].append(candidate.capacity_points * variable)
+            model.AddHint(variable, int(site == candidate.slot.site))
+        model.Add(sum(options.values()) == 1)
+        if candidate.preferred_clinic_id in options:
+            previous_changes.append(1 - options[candidate.preferred_clinic_id])
+        greedy_changes.append(1 - options[candidate.slot.site])
+        choices.append(options)
+    for site, terms in loads.items():
+        model.Add(sum(terms) <= instance.clinic_max_capacity_on(
+            site, candidates[0].calendar_day, candidates[0].slot.session,
+        ))
+    solver = solve_in_tiers(
+        model, [previous_changes, greedy_changes],
+        [literal for options in choices for literal in options.values()], cp_model,
+        deadline=deadline,
+    )
+    if solver is None:
+        return  # Preserve the sessions so validation can report the shortfall.
+    for candidate, options in zip(candidates, choices, strict=True):
+        candidate.slot.site = next(
+            site for site, literal in options.items() if solver.Value(literal)
+        )
+
+
+def _repair_equal_weights(instance, candidates, fixed_sites):
+    points = candidates[0].capacity_points
+    room = {site: instance.clinic_max_capacity_on(
+        site, candidates[0].calendar_day, candidates[0].slot.session,
+    ) // points for site in instance.clinic_policy.site_ids}
+    owners = defaultdict(list)
+    placed = {}
+    fixed = set()
+
+    def assign(index, site):
+        previous = placed.get(index)
+        if previous is not None:
+            owners[previous].remove(index)
+        owners[site].append(index)
+        placed[index] = site
+
+    for index, candidate in enumerate(candidates):
+        site = fixed_sites.get(id(candidate))
+        if site is not None:
+            if len(owners[site]) >= room[site]:
+                return
+            assign(index, site)
+            fixed.add(index)
+
+    def augment(index, visited):
+        if index in visited:
+            return False
+        visited.add(index)
+        candidate = candidates[index]
+        options = sorted(candidate.clinic_ids, key=lambda site: (
+            site != candidate.preferred_clinic_id, site != candidate.slot.site,
+            candidate.clinic_ids.index(site),
+        ))
+        for site in options:
+            if site == placed.get(index):
+                continue
+            if len(owners[site]) < room[site]:
+                assign(index, site)
+                return True
+            for other in tuple(owners[site]):
+                if other not in fixed and augment(other, visited):
+                    assign(index, site)
+                    return True
+        return False
+
+    order = sorted(range(len(candidates)), key=lambda index: len(candidates[index].clinic_ids))
+    if any(index not in fixed and not augment(index, set()) for index in order):
+        return  # Keep the original sessions for a concrete capacity error.
+    for index, candidate in enumerate(candidates):
+        candidate.slot.site = placed[index]
+
+
+def _use_proven_seating(instance, candidates, fixed_sites, seating) -> bool:
+    """Realize the search's group counts without another search or time budget."""
+    remaining = {key: dict(counts) for key, counts in seating.items()}
+    selected = {}
+    for index, candidate in enumerate(candidates):
+        key = (candidate.seating_sites, candidate.capacity_points)
+        if key not in remaining:
+            return False
+        fixed = fixed_sites.get(id(candidate))
+        if fixed is not None:
+            if remaining[key].get(fixed, 0) <= 0:
+                return False
+            remaining[key][fixed] -= 1
+            selected[index] = fixed
+    for index, candidate in enumerate(candidates):
+        if index in selected:
+            continue
+        key = (candidate.seating_sites, candidate.capacity_points)
+        options = [site for site in candidate.clinic_ids if remaining[key].get(site, 0) > 0]
+        if not options:
+            return False
+        site = min(options, key=lambda site: (
+            site != candidate.preferred_clinic_id, site != candidate.slot.site,
+            candidate.clinic_ids.index(site),
+        ))
+        selected[index] = site
+        remaining[key][site] -= 1
+    if any(count for counts in remaining.values() for count in counts.values()):
+        return False
+    loads = defaultdict(int)
+    for index, site in selected.items():
+        loads[site] += candidates[index].capacity_points
+    if any(load > instance.clinic_max_capacity_on(
+        site, candidates[0].calendar_day, candidates[0].slot.session,
+    ) for site, load in loads.items()):
+        return False  # Impossible locks still need the normal capacity diagnostic.
+    for index, site in selected.items():
+        candidates[index].slot.site = site
+    return True
 
 
 def _allocation_targets(

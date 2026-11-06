@@ -44,8 +44,13 @@ class AttendingWeekModel:
     generated: dict[AttendingWorkType, list[Any]] = field(
         default_factory=lambda: defaultdict(list)
     )
-    violations: list[tuple[Any, int]] = field(default_factory=list)
-    """Relaxed-rule shortfalls as ``(expression, upper bound)`` pairs."""
+    fixed_shortfalls: list[tuple[Any, int]] = field(default_factory=list)
+    total_shortfalls: list[tuple[Any, int]] = field(default_factory=list)
+
+    @property
+    def violations(self) -> tuple[tuple[Any, int], ...]:
+        """All relaxed-rule shortfalls as ``(expression, upper bound)`` pairs."""
+        return (*self.fixed_shortfalls, *self.total_shortfalls)
 
     def generated_count(self, work_type: AttendingWorkType):
         return sum(self.generated.get(work_type, ()))
@@ -99,7 +104,7 @@ def add_attending_week(
     if facts.full_week and remaining > 0:
         _at_least(
             model,
-            handles,
+            handles.total_shortfalls,
             sum(all_generated),
             remaining,
             relaxed=relaxed,
@@ -114,7 +119,7 @@ def add_attending_week(
         if facts.full_week and minimum > fixed:
             _at_least(
                 model,
-                handles,
+                handles.fixed_shortfalls,
                 generated,
                 minimum - fixed,
                 relaxed=relaxed,
@@ -126,7 +131,7 @@ def add_attending_week(
 
 def _at_least(
     model,
-    handles: AttendingWeekModel,
+    shortfalls: list[tuple[Any, int]],
     expression,
     minimum: int,
     *,
@@ -139,14 +144,14 @@ def _at_least(
         if not relaxed:
             model.AddBoolOr([])  # No open half-day can satisfy this rule.
             return
-        handles.violations.append((minimum - expression, minimum - expression))
+        shortfalls.append((minimum - expression, minimum - expression))
         return
     if not relaxed:
         model.Add(expression >= minimum)
         return
     shortfall = model.NewIntVar(0, minimum, f"{name}:short")
     model.Add(expression + shortfall >= minimum)
-    handles.violations.append((shortfall, minimum))
+    shortfalls.append((shortfall, minimum))
 
 
 __all__ = ["AttendingWeekModel", "ChoiceKey", "ClinicOpen", "add_attending_week"]

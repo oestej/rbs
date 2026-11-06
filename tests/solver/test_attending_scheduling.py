@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import random
 from collections import Counter
+from dataclasses import replace
 from datetime import date, timedelta
 
 import pytest
@@ -140,6 +141,7 @@ def _first_day() -> date:
 def _one_week(attending_id: str, name: str, **fields) -> Attending:
     """An attending whose schedule dates cover only academic week 1."""
     first = _first_day()
+    fields.setdefault("eligible_clinic_ids", [CLINIC])
     return Attending(
         id=attending_id,
         name=name,
@@ -202,6 +204,7 @@ def test_attendings_cross_the_solver_boundary_without_their_template() -> None:
     attending = Attending(
         id="attending-001",
         name="Ada Lovelace",
+        eligible_clinic_ids=[CLINIC],
         weekly_shift_targets=[_target(AC, 2, 4)],
         preferred_weekly_schedule_half_days=[_work(MON, AM, AC)],
         schedule_template_half_days=[_work(TUE, AM, ADMIN)],
@@ -287,6 +290,7 @@ def test_week_facts_place_configured_categories_plus_needed_precepting() -> None
     configured = Attending(
         id="attending-001",
         name="Ada Lovelace",
+        eligible_clinic_ids=[CLINIC],
         weekly_shift_targets=[_target(AC, 2, 4), _target(ADMIN, 1, 1, FIXED)],
         preferred_weekly_schedule_half_days=[_work(MON, AM, IS)],
     )
@@ -348,7 +352,8 @@ def test_locked_and_special_work_is_kept_and_other_work_only_guides() -> None:
     assert (THU, PM) not in week_one.open_half_days
     assert week_one.locked_work == (locked, meeting)
     assert week_one.reference == {(TUE, AM): guide}
-    assert facts[2][0].released_locks == (on_vacation,)
+    assert facts[2][0].released_locks == ()
+    assert facts[2][0].suppressed_work == (on_vacation,)
 
 
 def test_work_inside_the_automatic_lock_window_is_kept() -> None:
@@ -380,10 +385,11 @@ def test_work_inside_the_automatic_lock_window_is_kept() -> None:
 
 def test_potential_coverage_counts_every_attending_who_could_precept() -> None:
     first = _first_day()
-    available = Attending(id="attending-001", name="Ada Lovelace")
+    available = Attending(id="attending-001", name="Ada Lovelace", eligible_clinic_ids=[CLINIC])
     away_monday = Attending(
         id="attending-002",
         name="Grace Hopper",
+        eligible_clinic_ids=[CLINIC],
         vacation_ranges=[AttendingVacation(start_date=first, end_date=first)],
     )
     holiday = first + timedelta(days=1)
@@ -407,6 +413,7 @@ def test_schedule_view_counts_scheduled_precepting_where_it_can_happen() -> None
     scheduled = Attending(
         id="attending-002",
         name="Grace Hopper",
+        eligible_clinic_ids=[CLINIC],
         vacation_ranges=[
             AttendingVacation(
                 start_date=first + timedelta(days=2),
@@ -499,13 +506,18 @@ def test_no_clinic_half_day_gets_more_preceptors_than_its_maximum(managed: bool)
     precepting = Counter(
         (item.weekday, item.session) for item in result.work if item.work_type is PC
     )
-    assert precepting == {(TUE, AM): 1, (THU, AM): 1, (FRI, AM): 1}
-    assert result.relaxed_weeks == ()
+    if managed:
+        assert precepting == {(TUE, AM): 1, (THU, AM): 1, (FRI, AM): 1}
+        assert result.relaxed_weeks == ()
+    else:
+        assert precepting == {}
+        assert result.relaxed_weeks == (1,)
 
 
 def test_precepting_capacity_stops_at_the_clinic_maximum() -> None:
     attendings = [
-        Attending(id=f"attending-00{index}", name=f"Attending {index}")
+        Attending(id=f"attending-00{index}", name=f"Attending {index}",
+                  eligible_clinic_ids=[CLINIC])
         for index in range(1, 4)
     ]
     problem = _problem(attendings, grid=[(TUE, AM, 2)])
@@ -526,7 +538,8 @@ def test_precepting_capacity_stops_at_the_clinic_maximum() -> None:
 
 def test_validation_rejects_precepting_beyond_a_clinics_maximum() -> None:
     attendings = [
-        Attending(id=f"attending-00{index}", name=f"Attending {index}")
+        Attending(id=f"attending-00{index}", name=f"Attending {index}",
+                  eligible_clinic_ids=[CLINIC])
         for index in range(1, 3)
     ]
     problem = _problem(attendings, grid=[(TUE, AM, 1)])
@@ -916,6 +929,93 @@ def test_weekly_pass_never_books_a_preceptor_without_residents() -> None:
     assert _counts(result.work, contracted.id, PC) == 2
 
 
+@pytest.mark.parametrize("target", [None, (0, 0), (3, 5)])
+@pytest.mark.parametrize("residents", [0, 1, 5])
+@pytest.mark.parametrize("preferred", [False, True])
+def test_weekly_total_does_not_create_unneeded_precepting(target, residents, preferred) -> None:
+    """A short weekly total is preferable to staffing empty clinic half-days."""
+    attending = _one_week(
+        "attending-001", "Ada Lovelace",
+        weekly_shift_targets=[_target(PC, *target)] if target else [],
+        preferred_weekly_schedule_half_days=[_work(MON, AM, PC, CLINIC)] if preferred else [],
+    )
+    problem = _problem([attending])
+    demand = {(1, TUE, AM): residents} if residents else {}
+    result = schedule_attending_work(
+        problem, _demand(problem, demand), attending_week_facts(problem), cp_model,
+    )
+
+    required = (residents + 3) // 4
+    # Only one attending can cover this half-day; excess demand is reported.
+    assert _counts(result.work, attending.id, PC) == min(1, required)
+    assert all((item.weekday, item.session) == (TUE, AM) for item in result.work)
+    assert result.precepting_half_days == min(1, required)
+    assert result.relaxed_weeks == (1,)
+    assert dict(result.uncovered) == (
+        {(CLINIC, 1, TUE, AM): required - 1} if required > 1 else {}
+    )
+
+
+def test_weekly_total_does_not_overstaff_a_half_day_with_residents() -> None:
+    attendings = [
+        _one_week(
+            f"attending-{index:03d}", f"Attending {index}",
+            weekly_shift_targets=[_target(PC, 0, 0)],
+        )
+        for index in range(3)
+    ]
+    problem = _problem(attendings)
+    result = schedule_attending_work(
+        problem, _demand(problem, {(1, TUE, AM): 5}),
+        attending_week_facts(problem), cp_model,
+    )
+
+    assert len(result.work) == result.precepting_half_days == 2
+    assert all((item.weekday, item.session) == (TUE, AM) for item in result.work)
+    assert result.relaxed_weeks == (1,)
+    assert not result.uncovered
+
+
+@pytest.mark.parametrize("protected", [None, "locked", "hand_entered"])
+def test_resolve_removes_unneeded_reference_precepting_but_preserves_inputs(protected) -> None:
+    from time import perf_counter
+
+    from rbs.attending_schedule import attending_schedule_report
+    from rbs.solver.core.cp_sat import _with_attending_work
+    from rbs.ui.clinic.schedule_csv import build_clinic_schedule_csv
+
+    attending = _one_week(
+        "attending-001", "Ada Lovelace", weekly_shift_targets=[_target(PC, 0, 0)],
+    )
+    instance = _configured([attending])
+    problem = SolverProblem.from_instance(instance)
+    previous = AssignedAttendingWork(
+        attending_id=attending.id, week=1, weekday=MON, session=AM,
+        work_type=PC, clinic_id=CLINIC, manual_override=protected == "hand_entered",
+        **({protected: True} if protected else {}),
+    )
+    solved = _with_attending_work(
+        problem, _schedule(problem),
+        attending_week_facts(problem, _schedule(problem, [previous])),
+        options=instance.solver.revised(num_workers=1), deadline=perf_counter() + 5,
+    )
+    reopened = Schedule.model_validate_json(solved.model_dump_json())
+
+    assert validate_schedule(problem, reopened).valid
+    assert reopened.attending_work == ([previous] if protected else [])
+    assert reopened.meta.metrics.attending_precepting_half_days == int(bool(protected))
+    assert reopened.meta.metrics.attending_relaxed_weeks == 1
+    assert any("attending rules could not all be met in 1 week" in n for n in reopened.meta.notes)
+    assert any(
+        issue.code == "attending_half_day_total" and issue.week == 1
+        for issue in attending_schedule_report(instance, schedule=reopened).errors
+    )
+    coverage = schedule_capacity_view(problem, reopened).attending_coverage
+    assert sum(item.attendings for item in coverage) == int(bool(protected))
+    exported = build_clinic_schedule_csv(instance, reopened, view="attendings")
+    assert ("Precepting Clinic" in exported) is bool(protected)
+
+
 def test_weekly_pass_keeps_previous_work_and_honors_preferences() -> None:
     attending = _one_week(
         "attending-001",
@@ -1130,6 +1230,7 @@ def _managed_sample(attendings: int) -> SolverProblem:
         Attending(
             id=f"attending-{index:03d}",
             name=f"Attending {index:03d}",
+            eligible_clinic_ids=["cedar", "maple"],
             weekly_shift_targets=[
                 _target(AC, 3, 6),
                 _target(PC, 1, 4),
@@ -1140,6 +1241,28 @@ def _managed_sample(attendings: int) -> SolverProblem:
     ]
     raw["attending_schedules"] = []
     return SolverProblem.from_instance(SchedulerInput.model_validate(raw))
+
+
+def test_envelope_routes_attending_supply_only_to_eligible_clinics() -> None:
+    raw = sample_instance().model_dump(mode="json")
+    for site in raw["clinic_policy"]["sites"]:
+        site["staffing_mode"] = "attending_managed"
+        site["half_days"] = [{"weekday": "monday", "session": "morning", "attendings": 2}]
+        site["capacity_overrides"] = []
+    raw["attendings"] = [
+        _one_week("one", "One", eligible_clinic_ids=["cedar", "maple"]).model_dump(mode="json")
+    ]
+    raw["attending_schedules"] = []
+    problem = SolverProblem.from_instance(SchedulerInput.model_validate(raw))
+    clinics = sorted(problem.attending_managed_clinic_ids)
+    facts = attending_week_facts(problem)[1]
+    facts = [replace(facts[0], precepting_clinics=(clinics[0],))]
+    model = cp_model.CpModel()
+    envelope = AttendingEnvelope(problem, {1: facts}, model, cp_model)
+    handles = envelope.week_preceptors(1, {(MON, AM)})[MON, AM]
+    by_clinic = {handle.clinic_id: handle for handle in handles}
+    assert by_clinic[clinics[0]].generated is not None
+    assert by_clinic[clinics[1]].generated is None
 
 
 def test_compile_reuses_the_facts_and_readiness_a_solve_already_built(monkeypatch) -> None:
@@ -1471,3 +1594,50 @@ def test_attending_only_solve_preserves_locked_work_and_fills_open_half_days() -
     assert locked in schedule.attending_work
     assert _counts(schedule.attending_work, attending.id, AC) == 2
     assert validate_schedule(problem, schedule).valid
+
+
+@pytest.mark.parametrize("clinics", [("cedar", "maple"), ("maple", "maple")])
+def test_clinic_eligibility_agrees_between_envelope_and_weekly_assignment(clinics):
+    raw = sample_instance().model_dump(mode="json")
+    raw["clinic_policy"]["academic_half_day_is_attending_admin_time"] = False
+    for site in raw["clinic_policy"]["sites"]:
+        site["staffing_mode"] = "attending_managed"
+        site["half_days"] = [{"weekday": "monday", "session": "morning", "attendings": 2}]
+        site["capacity_overrides"] = []
+    raw["attendings"] = [
+        _one_week(str(index), str(index), half_days_per_week=1,
+                  eligible_clinic_ids=[clinic]).model_dump(mode="json")
+        for index, clinic in enumerate(clinics)
+    ]
+    raw["attending_schedules"] = []
+    problem = SolverProblem.from_instance(SchedulerInput.model_validate(raw))
+    facts = attending_week_facts(problem)
+    model = cp_model.CpModel()
+    handles = AttendingEnvelope(problem, facts, model, cp_model).week_preceptors(1, {(MON, AM)})
+    for handle in handles[MON, AM]:
+        model.Add((handle.generated if handle.generated is not None else 0) >= 1)
+    solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = 1
+    status = solver.Solve(model)
+    work, _, uncovered = _solve_week(
+        problem, 1, facts[1], {("cedar", MON, AM): 1, ("maple", MON, AM): 1}, cp_model,
+    )
+    if clinics == ("cedar", "maple"):
+        assert status == cp_model.OPTIMAL and not uncovered
+    else:
+        assert status == cp_model.INFEASIBLE and uncovered
+    people = {person.id: person for person in problem.attendings}
+    assert all(item.clinic_id in people[item.attending_id].eligible_clinic_ids for item in work)
+
+
+def test_a_lock_cannot_keep_precepting_at_a_capacity_managed_clinic():
+    person = _one_week("one", "One")
+    problem = _problem([person], managed=False)
+    work = AssignedAttendingWork(
+        attending_id=person.id, week=1, weekday=MON, session=AM,
+        work_type=PC, clinic_id=CLINIC, locked=True,
+    )
+    facts = attending_week_facts(problem, _schedule(problem, [work]))[1][0]
+    assert not facts.can_precept
+    assert facts.locked_work == ()
+    assert facts.released_locks == (work,)

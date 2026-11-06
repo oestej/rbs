@@ -8,6 +8,7 @@ from datetime import date
 from functools import partial
 from time import monotonic
 
+from rbs.attending_schedule import preserved_attending_work_issues
 from rbs.logging import (
     get_logger,
 )
@@ -26,6 +27,7 @@ from rbs.ui.app_documents import _document_io
 from rbs.ui.app_status import _refresh_status_chips
 from rbs.ui.locks import refresh_locks_through_today
 from rbs.ui.session import WorkspaceSession
+from rbs.ui.solve_details import render_solver_notes
 from rbs.workspaces import InstanceEditImpact, WorkspaceController
 
 
@@ -170,9 +172,16 @@ async def _solve(session: WorkspaceSession) -> None:
             elif schedule.meta.validation_errors:
                 result_message += " · result not saved"
             result_message += " · explanation opened"
+        preserved = preserved_attending_work_issues(instance, schedule) if ok else ()
+        if preserved:
+            count = len(preserved)
+            result_message += (
+                f" · {count} protected {'half-day' if count == 1 else 'half-days'} "
+                "preserved while unavailable; review Solve details"
+            )
         ui.notify(
             result_message,
-            type="positive" if ok else "warning",
+            type="positive" if ok and not preserved else "warning",
         )
         logger.info(
             (
@@ -212,6 +221,7 @@ async def _solve(session: WorkspaceSession) -> None:
                 draft_kept=draft_kept,
                 title=outcome.title,
                 detail=outcome.detail,
+                notes=schedule.meta.notes,
                 session=session,
             )
 
@@ -263,6 +273,7 @@ def _open_solver_diagnostics(
     draft_kept: bool,
     title: str = "No feasible block schedule",
     detail: str | None = None,
+    notes: list[str] | None = None,
     session: WorkspaceSession | None = None,
 ) -> None:
     """Keep an actionable solve explanation visible until the user dismisses it."""
@@ -327,6 +338,8 @@ def _open_solver_diagnostics(
                             section="special_configuration",
                         ),
                     ).props("outline no-caps")
+        if notes:
+            render_solver_notes(notes)
     dialog.open()
 
 

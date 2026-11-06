@@ -68,6 +68,7 @@ def _managed_program(locks=(), maple_half_days=None) -> SchedulerInput:
         Attending(
             id=f"attending-{index:03d}",
             name=f"Attending {index:03d}",
+            eligible_clinic_ids=["maple", "cedar"],
             weekly_shift_targets=[
                 _target(AttendingWorkType.ATTENDING_CLINIC, 3, 6),
                 _target(AttendingWorkType.PRECEPTING_CLINIC, 1, 4),

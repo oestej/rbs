@@ -65,6 +65,7 @@ from rbs.ui.session import TAB_NAMES, WorkspaceSession
 from rbs.ui.settings.view import (
     _settings_tab,
 )
+from rbs.ui.solve_details import solve_details_button
 from rbs.ui.workspaces.io import (
     _open_workspace_file,
     _rbsc_restore_upload,
@@ -129,6 +130,7 @@ def _mount_shell(session: WorkspaceSession) -> None:
                 with ui.row().classes("rbs-header-actions items-center gap-2 shrink-0"):
                     _download_chip(session, workspace)
                     _solve_chip(session, workspace)
+                    solve_details_button(session)
                     solve_button = (
                         ui.button(
                             "Solve",

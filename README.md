@@ -14,7 +14,7 @@ pip install -e ".[dev]"
 
 rbs validate data/sample_input.json
 rbs schedule data/sample_input.json -o schedule.json
-rbs ui                      # browser workspace at http://127.0.0.1:8080
+rbs ui                      # opens a browser workspace on an available local port
 ```
 
 ## The workspace
@@ -29,11 +29,15 @@ category, an independent schedule for every academic week, schedule dates, and
 day-level vacation ranges. A preferred weekly schedule records soft placement
 preferences without creating work. Special/Other work is scheduled manually
 and can carry a free-text description. Adding an attending starts with only
-their name, schedule dates, and weekly half-day total. Edit attending contains
+their name, schedule dates, weekly half-day total, and eligible clinics. Edit attending contains
 Details, Targets, Preferences, and Vacation. Edit schedule works directly in the
 full academic-year calendar, with changes saved immediately. Work half-days can
 be locked individually or together to protect their placement during editing
-and future solves. Hand-entered work is always kept by a solve, locked or not;
+and future solves. Vacation and schedule-date conflicts temporarily hide protected
+work without deleting it; its lock state survives solves and saved files. Attending
+Schedule checks identify affected dates. The Solve details button keeps live
+warnings and saved solver notes available, including after reopening a file.
+Hand-entered work is always kept by a solve, locked or not;
 automatic locking through today also covers attending work, and explicit
 unlocks allow those half-days to be edited. Weekly and preferred
 half-days use the same click-to-edit and drag-to-move grid as resident clinic
@@ -50,6 +54,19 @@ well: each attending's open half-days are filled from their weekly total,
 category ranges, and preferred weekly schedule,
 around hand-entered work and the academic half-day's Admin Time, and every
 attending-managed clinic gets the precepting its residents need.
+Capacity checks respect each session's allowed clinics and its training level's
+capacity weight. Missing staffing leaves a required session visible as a solve
+problem; site allocation can rearrange flexible sessions to fit available seats.
+Dated closures and half-days when no clinic operates still cancel clinic sessions.
+Older saved schedules missing required sessions open as out of date, preserving
+their assignments until they can be repaired.
+The weekly total does not add precepting beyond resident demand. If other
+configured work cannot fill the total, Schedule checks report the shortfall.
+Fixed precepting minimums, hand-entered work, and locks still apply even
+when residents do not need that coverage. Flexible precepting ranges can be
+exceeded to cover residents, including a Flexible 0–0 range.
+Before removing a clinic, reassign or clear its precepting work and preferences,
+including locked work and saved work hidden by vacation or schedule dates.
 An automatic soft preference shares Precepting Clinic half-days within weeks
 and across the academic year, in proportion to available work and configured
 precepting ranges. Required coverage, existing assignments, category ranges,
@@ -71,10 +88,18 @@ it alongside what is already open — never a replace.
 | `rbs schema input\|case\|catalog\|output` | Print JSON Schema |
 | `rbs dump-sample -o PATH` | Write the bundled example case |
 | `rbs dump-catalog -o PATH` | Write the default rotation catalog |
-| `rbs ui [--db PATH] [--port N] [--desktop\|--cloud]` | Local browser workspace + packaging previews |
+| `rbs ui [--db PATH] [--port N] [--desktop\|--cloud]` | Local browser workspace + packaging previews; chooses an available port by default |
 | `rbs-desktop [WORKSPACE.rbsc]` | Native document application |
 | `rbs-cloud [--host H] [--port P] [--sweep-only]` | Hosted multi-user build (in development) |
 | `rbs-solver < REQUEST.json > RESPONSE.json` | Standalone JSON solver process |
+
+Eligible clinics control where each attending may be scheduled for Precepting Clinic
+work at attending-managed clinics. Capacity-managed clinics use their configured
+capacity and receive no precepting assignments. Switching to capacity-managed
+clears eligibility and precepting work, including locked placements. Edit the selections from either the attending editor or a clinic's Staffing &
+capacity tab. Empty selections allow no clinics. New attendings and clinics start
+without eligibility; migrated workspaces select all existing attending-managed clinics. Hand-entered
+and locked work may override eligibility and appears in Schedule checks.
 
 The normal case JSON omits `rotations`, `requirements`, and `clinic_policy`;
 the runner fills those from `--catalog` or the bundled `data/catalog.json`.
@@ -91,6 +116,10 @@ the runner fills those from `--catalog` or the bundled `data/catalog.json`.
 Build the desktop artifact with `tools/build_desktop.sh` (`dist/RBS Desktop.app`,
 self-contained, no system Python needed) and wrap it for distribution with
 `tools/package_dmg.sh`, which produces a drag-to-Applications disk image.
+`rbs ui` prints its selected address in the terminal and opens it in the browser.
+Use `--port N` to request a specific port, or `--no-browser` to open the printed
+address yourself.
+
 `rbs ui --desktop` previews desktop chrome locally (native file actions stay
 inert); `--cloud` previews hosted chrome while remaining single-user with no
 retention.
@@ -112,10 +141,11 @@ already exist in `rbs.cloud` and surface in the UI behind `rbs ui --cloud`.
 
 ## File formats
 
-- `.rbsc` workspaces use schema v13; v9 through v12 documents migrate
+- `.rbsc` workspaces use schema v14; v9 through v13 documents migrate
   (versions 9 and 10 gain an empty attending directory, version 11 migrates
   attending work into week-specific schedules, and version 12 drops the retired
-  minimum Attending Clinic days setting). Earlier versions are rejected.
+  minimum Attending Clinic days setting). Migrated attendings are eligible
+  at all attending-managed clinics already in their workspace. Earlier versions are rejected.
 - Constraint catalogs (rotations, curricula, clinic policy) are schema v10
   (v8 and v9 migrate automatically); `data/catalog.json` is the bundled default.
 - Clinic block training-level rules set `capacity_per_resident` (positive integer,
@@ -131,7 +161,7 @@ already exist in `rbs.cloud` and surface in the UI behind `rbs ui --cloud`.
 
 The UI never calls CP-SAT directly. It shells out to `rbs-solver` with one
 JSON document on stdin and reads one back on stdout
-(`protocol: "rbs.solve"`, version 8). Set `RBS_SOLVER_COMMAND` to swap the
+(`protocol: "rbs.solve"`, version 9). Set `RBS_SOLVER_COMMAND` to swap the
 executable; the desktop bundle ships its own so no system Python is needed.
 
 Attendings reach the block search only as preceptor counts per

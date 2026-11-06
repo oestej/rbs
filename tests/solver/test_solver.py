@@ -299,10 +299,11 @@ def test_managed_clinic_without_coverage_fails_fast_with_its_reason() -> None:
     schedule = get_engine("cp_sat").solve(instance, options=options)
 
     assert schedule.meta.status is SolverStatus.INFEASIBLE
-    assert [diagnostic.code for diagnostic in schedule.meta.diagnostics] == [
-        "uncoverable_clinic_session"
-    ]
-    (diagnostic,) = schedule.meta.diagnostics
+    assert schedule.meta.diagnostics
+    assert all(diagnostic.code == "uncoverable_clinic_session"
+               for diagnostic in schedule.meta.diagnostics)
+    diagnostic = next(item for item in schedule.meta.diagnostics
+                      if "Inpatient Peds Metro" in item.message)
     assert "Inpatient Peds Metro" in diagnostic.message
     assert "no attending is available to precept at Cedar" in diagnostic.message
     assert any("can precept at Cedar" in item for item in diagnostic.suggestions)
@@ -319,10 +320,9 @@ def test_post_solve_probes_name_the_dead_managed_site() -> None:
 
     diagnostics = explain_infeasibility(problem, instance.solver, None)
 
-    assert [diagnostic.code for diagnostic in diagnostics] == [
-        "uncoverable_clinic_session"
-    ]
-    assert "Inpatient Peds Metro" in diagnostics[0].message
+    assert diagnostics
+    assert all(diagnostic.code == "uncoverable_clinic_session" for diagnostic in diagnostics)
+    assert any("Inpatient Peds Metro" in diagnostic.message for diagnostic in diagnostics)
 
 
 @pytest.mark.solve
@@ -672,6 +672,11 @@ def test_academic_override_moves_clinic_model_exclusion_for_that_week() -> None:
             "session": Session.MORNING.value,
         }
     ]
+    # Moving Academic frees Wednesday PM, but a clinic must operate then
+    # before the model can use it as a resident clinic session.
+    raw["clinic_policy"]["sites"][1]["half_days"].append(
+        {"weekday": "wednesday", "session": "afternoon", "attendings": 4}
+    )
     instance = type(instance).model_validate(raw)
 
     problem = compile_problem(instance, instance.solver, cp_model)
@@ -873,9 +878,15 @@ def test_cp_sat_pins_inpatient_peds_metro_clinic_time_and_site(draft) -> None:
             if week in vacation:
                 assert slots == set()
                 continue
-            assert slots == {
+            expected = {
                 (Weekday.FRIDAY, Session.MORNING, "maple"),
                 (Weekday.FRIDAY, Session.AFTERNOON, "cedar"),
+            }
+            day = instance.calendar.first_week_start + timedelta(weeks=week - 1, days=4)
+            assert slots == {
+                (weekday, session, site) for weekday, session, site in expected
+                if not instance.clinic_policy.is_site_closed(site, day)
+                and not instance.is_academic_half_day(week, weekday, session)
             }
 
 

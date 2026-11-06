@@ -1939,10 +1939,21 @@ def test_clinic_editor_keeps_the_weekly_grid_as_maximums_when_attending_managed(
             if element.__class__.__name__ == "Number"
         }
 
+    eligible = next(element for element in created
+                    if element.__class__.__name__ == "Select"
+                    and element._props.get("label") == "Eligible attendings")
+    assert eligible.value == []
+    assert eligible.parent_slot.parent.visible is False
     assert staffing.value == ClinicStaffingMode.CAPACITY_MANAGED.value
     assert "Attendings" in number_labels()
     assert "Max attendings" not in number_labels()
     staffing.value = ClinicStaffingMode.ATTENDING_MANAGED.value
+    assert eligible.parent_slot.parent.visible is True
+    eligible.value = [instance.attendings[0].id]
+    staffing.value = ClinicStaffingMode.CAPACITY_MANAGED.value
+    assert eligible.value == []
+    staffing.value = ClinicStaffingMode.ATTENDING_MANAGED.value
+    eligible.value = [instance.attendings[0].id]
     # The same weekly grid now caps how many attendings may precept.
     assert "Max attendings" in number_labels()
     next(iter(save._event_listeners.values())).handler(None)
@@ -1952,6 +1963,8 @@ def test_clinic_editor_keeps_the_weekly_grid_as_maximums_when_attending_managed(
     assert updated.staffing_mode is ClinicStaffingMode.ATTENDING_MANAGED
     assert updated.half_days == original.half_days
     assert updated.capacity_overrides == original.capacity_overrides
+    assert [person.id for person in saved[0][0].attendings
+            if "maple" in person.eligible_clinic_ids] == [instance.attendings[0].id]
 
 
 @pytest.mark.parametrize(

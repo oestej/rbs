@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 from rbs.emit import dumps
+from rbs.models.attending import AttendingWorkType
 from rbs.models.catalog import ConstraintCatalog
 from rbs.models.instance import SchedulerInput, SchedulingCase
 from rbs.models.schedule import Schedule
@@ -142,8 +143,28 @@ class StoreWorkspaceMixin:
                 schedule = workspace.schedule
             else:
                 schedule = None
+            capacity_managed_ids = (
+                set(instance.clinic_policy.site_ids) - instance.attending_managed_clinic_ids
+            )
+
+            def without_capacity_precepting(value: Schedule) -> Schedule:
+                work = [
+                    item for item in value.attending_work
+                    if item.work_type is not AttendingWorkType.PRECEPTING_CLINIC
+                    or item.clinic_id not in capacity_managed_ids
+                ]
+                return value if work == value.attending_work else value.revised(attending_work=work)
+
+            # Clear these placements from current or stale output in this same
+            # revision-checked transaction. Retained output keeps its old revision.
+            retained_json = row["schedule_json"]
+            if workspace.latest_schedule is not None:
+                retained = without_capacity_precepting(workspace.latest_schedule)
+                if retained != workspace.latest_schedule:
+                    retained_json = dumps(retained)
             write_schedule = schedule is not None or discard_schedule
             if schedule is not None:
+                schedule = without_capacity_precepting(schedule)
                 schedule = validate_persistable_schedule_or_raise(
                     instance,
                     schedule,
@@ -186,7 +207,7 @@ class StoreWorkspaceMixin:
                 cursor = conn.execute(
                     """
                     UPDATE workspaces
-                    SET academic_year = ?, catalog_id = ?, instance_json = ?,
+                    SET academic_year = ?, catalog_id = ?, instance_json = ?, schedule_json = ?,
                         instance_revision = instance_revision + 1,
                         workspace_revision = workspace_revision + 1, updated_at = ?
                     WHERE id = ? AND workspace_revision = ?
@@ -195,6 +216,7 @@ class StoreWorkspaceMixin:
                         instance.academic_year,
                         catalog_id,
                         dumps(instance.scheduling_case()),
+                        retained_json,
                         _now(),
                         workspace_id,
                         expected_workspace_revision,

@@ -7,6 +7,7 @@ from rbs.models.instance import SolverProblem
 from rbs.models.rotation import RotationBlockConfig
 from rbs.models.schedule import Schedule
 from rbs.solver.attending_availability import schedule_capacity_view
+from rbs.solver.clinic_requirements import missing_required_clinic_sessions
 from rbs.solver.validation_assignments import _validate_assignments
 from rbs.solver.validation_attendings import _validate_attending_work
 from rbs.solver.validation_coverage import (
@@ -46,6 +47,7 @@ def validate_schedule(
     schedule: Schedule,
     *,
     precepting_maximums: bool = True,
+    required_clinic_sessions: bool = True,
 ) -> ScheduleValidationResult:
     """Validate a schedule through independent identity, block, and clinic rules.
 
@@ -76,6 +78,8 @@ def validate_schedule(
     )
     _validate_elective_policies(instance, schedule, errors)
     successful = _successful_schedule(schedule)
+    if successful and required_clinic_sessions:
+        errors.extend(missing_required_clinic_sessions(instance, schedule))
     _validate_resident_coverage(
         instance,
         schedule,
@@ -200,8 +204,12 @@ def validate_schedule_or_raise(
     schedule: Schedule,
     *,
     precepting_maximums: bool = True,
+    required_clinic_sessions: bool = True,
 ) -> None:
-    result = validate_schedule(instance, schedule, precepting_maximums=precepting_maximums)
+    result = validate_schedule(
+        instance, schedule, precepting_maximums=precepting_maximums,
+        required_clinic_sessions=required_clinic_sessions,
+    )
     if result.errors:
         preview = "; ".join(result.errors[:5])
         raise ValueError(f"schedule does not match instance: {preview}")
@@ -213,6 +221,7 @@ def validate_persistable_schedule_or_raise(
     *,
     prior: Schedule | None = None,
     precepting_maximums: bool = True,
+    required_clinic_sessions: bool = True,
 ) -> Schedule:
     """Return revalidated output, permitting an explicitly unsolved working draft.
 
@@ -237,5 +246,8 @@ def validate_persistable_schedule_or_raise(
             preview = "; ".join(result.errors[:5])
             raise ValueError(f"working draft does not match instance: {preview}")
         return schedule
-    validate_schedule_or_raise(instance, schedule, precepting_maximums=precepting_maximums)
+    validate_schedule_or_raise(
+        instance, schedule, precepting_maximums=precepting_maximums,
+        required_clinic_sessions=required_clinic_sessions,
+    )
     return schedule

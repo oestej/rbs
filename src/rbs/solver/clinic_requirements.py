@@ -1,16 +1,13 @@
 """Conclusive contradictions between required clinic sessions and site seats.
 
-A rotation clinic template can pin sessions to one site, and the compiler
-turns a pinned session at a site with no seats into a hard ``literal == 0``
-(see ``_counts_at_primary_site`` in ``objective_entries.py``). Required
-sessions still count toward the occupancy floor (see ``_occupancy_floor`` in
-``objective_slots.py``), so when every week a block could cover needs more
-sessions than its live slots supply, the block is unplaceable and the whole
-model is infeasible. The classic trigger is an attending-managed clinic with
-no precepting coverage: every one of its half-days has zero seats.
+Clinic templates and resident continuity sessions can restrict site choices.
+When no allowed site can seat one resident, the compiler cannot select that
+session. If every placement of a block needs more sessions than its usable
+half-days supply, the block is unplaceable. A common trigger is an
+attending-managed clinic with no precepting coverage.
 
 This module replays that compiler logic with static inputs only: template
-domains, site pinning, per-week seat counts, vacation weeks, days off, and
+domains, allowed sites, per-week seat counts, vacation weeks, days off, and
 special rotations. It runs no search, so it stays deterministic and fast. It
 mirrors the compiler entry builders exactly:
 
@@ -22,7 +19,7 @@ mirrors the compiler entry builders exactly:
 - dedicated Clinic blocks (``_clinic_kind_occupancy``) as plain entries, or
   negated conditional entries where an admin decision applies
   (``clinic_kind.constraints``),
-- academic-half-day, day-off, and special-rotation filtering
+- academic-half-day, directory opening, closure, day-off, and special-rotation filtering
   (``_available_week_entries``), entry order and deduplication
   (``_deduplicate_entries``), and the zero-seat forcing rule.
 
@@ -49,6 +46,7 @@ from rbs.models.enums import RotationKind
 from rbs.models.instance import SolverProblem
 from rbs.models.schedule import Schedule, SolverDiagnostic
 from rbs.solver.attending_availability import attending_week_facts, potential_capacity_view
+from rbs.solver.clinic_sites import clinic_directory_is_open, declared_clinic_sites
 from rbs.solver.planning import (
     Occurrence,
     covers,
@@ -226,40 +224,36 @@ class _Probe:
                 seen.add((shape[0], shape[1]))
                 unique.append(shape)
         instance = self.problem
-        dead_slots = {
-            (weekday, session)
-            for weekday, session, pinned, _conditional in unique
-            if pinned is not None
-            and instance.clinic_max_capacity_on(
-                pinned,
-                clinic_slot_date(instance.calendar.first_week_start, week, weekday),
-                session,
-            )
-            <= 0
-        }
-        # Without a dead site the week is never reported (see below), so most
-        # resident-weeks stop here before the per-half-day availability checks.
+        dead_slots = {}
+        surviving = []
+        for shape in unique:
+            weekday, session, _pinned, _conditional = shape
+            if instance.resident_clinic_is_blocked(resident.id, week, weekday, session):
+                continue
+            sites = _open_session_sites(instance, resident, rotation, week, weekday, session)
+            if not sites:
+                continue
+            surviving.append(shape)
+            points = instance.clinic_capacity_for_pgy(resident.pgy)
+            if not any(instance.clinic_max_capacity_on(
+                site, clinic_slot_date(instance.calendar.first_week_start, week, weekday), session,
+            ) >= points for site in sites):
+                dead_slots[weekday, session] = sites
+        # A week without a dead site needs no contradiction check.
         if not dead_slots:
             return None
         forced: set[str] = set()
         forced_plain = False
-        plain = 0
-        conditionals = 0
+        plain = sum(shape[3] is None for shape in surviving)
+        conditionals = len(surviving) - plain
         live = 0
-        for weekday, session, pinned, conditional in unique:
-            if instance.resident_clinic_is_blocked(resident.id, week, weekday, session):
-                continue
+        for weekday, session, _pinned, conditional in surviving:
             if (weekday, session) in dead_slots:
-                assert pinned is not None
-                forced.add(pinned)
+                forced.update(dead_slots[weekday, session])
                 if conditional is None:
                     forced_plain = True
                 continue
             live += 1
-            if conditional is None:
-                plain += 1
-            else:
-                conditionals += 1
         if params is not None and conditionals:
             pick, domain_size, negated = params
             floor = plain + _occupancy_floor(conditionals, pick, domain_size, negated)
@@ -279,8 +273,13 @@ class _Probe:
     ) -> tuple[list[tuple], tuple[int, int, bool] | None]:
         """Static entry shapes mirroring the compiler's week entry builders."""
         instance = self.problem
+        if rotation.away:
+            return [], None
         resident_slots = bool(resident.clinic_half_days) and not rotation.away
         if rotation.clinic_hours_disabled and not resident_slots:
+            return [], None
+        if (not resident_slots and rotation.kind is not RotationKind.CLINIC
+                and (rotation.clinic is None or rotation.clinic.half_days_per_week <= 0)):
             return [], None
         shapes: list[tuple] = []
         if not rotation.away:
@@ -344,11 +343,7 @@ class _Probe:
                 instance.calendar.first_week_start, week, half_day.weekday
             )
             allowed = policy.resolve_site_ids(half_day.sites) or list(policy.site_ids)
-            open_sites = [
-                site_id
-                for site_id in policy.open_site_ids(calendar_day, allowed)
-                if instance.clinic_max_capacity_on(site_id, calendar_day, half_day.session) > 0
-            ]
+            open_sites = policy.open_site_ids(calendar_day, allowed)
             if open_sites:
                 shapes.append(
                     (half_day.weekday, half_day.session, self._pinned_site(open_sites), None)
@@ -437,6 +432,65 @@ class _Probe:
         return self._pinned[key]
 
 
+def _open_session_sites(problem, resident, rotation, week, weekday, session):
+    policy = problem.clinic_policy
+    allowed = policy.resolve_site_ids(declared_clinic_sites(resident, rotation, weekday, session))
+    day = clinic_slot_date(problem.calendar.first_week_start, week, weekday)
+    if not clinic_directory_is_open(problem, day, session):
+        return []
+    return policy.open_site_ids(day, allowed or list(policy.site_ids))
+
+
+def missing_required_clinic_sessions(problem: SolverProblem, schedule: Schedule) -> list[str]:
+    """Check required template and continuity sessions without compiled literals.
+
+    Working drafts may be incomplete; call this only for successful schedules.
+    Accepted manual half-day edits carry their own weekly baselines.
+    """
+    probe = _Probe(problem, set())
+    errors = []
+    for assignment in schedule.assignments:
+        resident = problem.residents_by_id.get(assignment.resident_id)
+        rotation = problem.rotations_by_id.get(assignment.rotation_id)
+        if resident is None or rotation is None:
+            continue
+        for week in assignment.weeks:
+            if week in resident.vacation_weeks or week in assignment.manual_clinic_baselines:
+                continue
+            actual = [slot for slot in assignment.clinic_slots if slot.week in (None, week)]
+            if any(slot.manual_override for slot in actual):
+                continue
+            shapes, params = probe._week_shapes(resident, rotation, week)
+            unique = {}
+            for shape in shapes:
+                weekday, session, _pin, _conditional = shape
+                if (problem.resident_clinic_is_blocked(resident.id, week, weekday, session)
+                        or not _open_session_sites(
+                            problem, resident, rotation, week, weekday, session,
+                        )):
+                    continue
+                unique.setdefault((weekday, session), shape)
+            plain = {key for key, shape in unique.items() if shape[3] is None}
+            present = {(slot.weekday, slot.session) for slot in actual if not slot.admin}
+            missing = plain - present
+            for weekday, session in sorted(missing):
+                sites = _open_session_sites(problem, resident, rotation, week, weekday, session)
+                names = ", ".join(problem.clinic_policy.site_name(site) for site in sites)
+                half_day = "AM" if session.value == "morning" else "PM"
+                errors.append(
+                    f"{resident.name} · week {week}: required clinic session missing on "
+                    f"{weekday.value.title()} {half_day} (allowed clinics: {names})"
+                )
+            conditional = len(unique) - len(plain)
+            minimum = len(plain) + (_occupancy_floor(conditional, *params) if params else 0)
+            if not missing and len(present & set(unique)) < minimum:
+                errors.append(
+                    f"{resident.name} · week {week}: {len(present & set(unique))} clinic "
+                    f"sessions assigned, but at least {minimum} are required"
+                )
+    return errors
+
+
 def _occupancy_floor(surviving: int, pick: int, domain_size: int, negated: bool) -> int:
     """Mirror ``objective_slots._occupancy_floor`` exactly (kept in sync by test)."""
     if negated:
@@ -486,7 +540,8 @@ def _diagnostic(
         sites = ", ".join(managed)
         suggestions.append(
             f"Make sure an attending can precept at {sites} on those half-days: check "
-            "their schedule dates, vacation, weekly totals, and Fixed ranges, or add "
+            "their eligible clinics, schedule dates, vacation, weekly totals, "
+            "and Fixed ranges, or add "
             "an attending."
         )
         suggestions.append(
@@ -514,4 +569,4 @@ def _diagnostic(
     )
 
 
-__all__ = ["CODE", "uncoverable_clinic_sessions"]
+__all__ = ["CODE", "uncoverable_clinic_sessions", "missing_required_clinic_sessions"]

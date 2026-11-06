@@ -7,6 +7,7 @@ from rbs.models.elective import PLACEHOLDER_ELECTIVE_ID
 from rbs.models.instance import SolverProblem
 from rbs.models.rotation import RotationBlockConfig
 from rbs.models.schedule import Schedule
+from rbs.solver.clinic_sites import declared_clinic_sites
 from rbs.solver.validation_inherited import InheritedWork
 
 
@@ -194,7 +195,13 @@ def _validate_assignment_clinic_slot(
             f"{assignment.resident_id} week {display_week}: "
             f"clinic site {slot.site!r} is not configured"
         )
-    allowed_sites = instance.clinic_policy.resolve_site_ids(slot.allowed_sites)
+    rotation = instance.rotations_by_id[assignment.rotation_id]
+    source_sites = instance.clinic_policy.resolve_site_ids(
+        declared_clinic_sites(resident, rotation, slot.weekday, slot.session)
+    )
+    allowed_sites = instance.clinic_policy.resolve_site_ids(
+        slot.allowed_sites or declared_clinic_sites(resident, rotation, slot.weekday, slot.session)
+    )
     unknown_allowed_sites = sorted(set(allowed_sites) - configured_sites)
     if unknown_allowed_sites:
         errors.append(
@@ -209,7 +216,10 @@ def _validate_assignment_clinic_slot(
         )
     if not must_fit:
         return
-    if not slot.manual_override and allowed_sites and slot.site not in allowed_sites:
+    if not slot.admin and not slot.manual_override and (
+        allowed_sites and slot.site not in allowed_sites
+        or source_sites and slot.site not in source_sites
+    ):
         errors.append(
             f"{assignment.resident_id} week {display_week}: clinic site "
             f"{slot.site or 'none'} is not allowed for "

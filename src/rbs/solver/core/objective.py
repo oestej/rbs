@@ -120,6 +120,8 @@ class _ClinicObjectiveState:
     locked_to_managed: dict = field(default_factory=lambda: defaultdict(int))
     """This week's capacity points locked at an attending-managed clinic, by half-day."""
     resident_managed_shares: dict = field(default_factory=dict)
+    site_demands: dict = field(default_factory=lambda: defaultdict(list))
+    site_seating: dict = field(default_factory=dict)
 
 
 def add_clinic_objective(
@@ -155,14 +157,11 @@ def add_clinic_objective(
         else {}
     )
     occurrences = _include_honored_occurrences(context, occurrences, viable_locks)
-    envelope = getattr(context, "attending_envelope", None)
     state = _ClinicObjectiveState(
         # Allocation never moves a locked session, so its clinic needs preceptors
         # exactly as if the rotation template had pinned the session there.
         locked_sites=(
             reference_locked_clinic_sites(context.instance, reference_schedule)
-            if envelope is not None and envelope.active
-            else {}
         ),
     )
     pgys = [
@@ -368,4 +367,5 @@ def _finish_clinic_objective(
         quality_cost=quality,
         quality_bound=quality_bound,
         synthetic_reference_locks=set(state.synthetic_reference_locks),
+        site_seating=dict(state.site_seating),
     )

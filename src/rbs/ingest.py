@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from rbs.catalog import catalog_dict
+from rbs.models.attending_eligibility import migrate_eligibility
 from rbs.models.instance import SchedulerInput
 from rbs.models.schedule import Schedule
 from rbs.solver.validation import validate_persistable_schedule_or_raise
@@ -36,7 +37,7 @@ def merge_catalog(raw: dict[str, Any], catalog_path: PathLike | None = None) -> 
         and not needs_electives
         and not needs_rotation_groups
     ):
-        return raw
+        return migrate_eligibility(raw, raw["clinic_policy"])
 
     if catalog_path is not None:
         catalog = load_json(catalog_path)
@@ -60,7 +61,7 @@ def merge_catalog(raw: dict[str, Any], catalog_path: PathLike | None = None) -> 
         merged["electives"] = catalog["electives"]
     if needs_policy and catalog.get("clinic_policy"):
         merged["clinic_policy"] = catalog["clinic_policy"]
-    return merged
+    return migrate_eligibility(merged, merged.get("clinic_policy", {}))
 
 
 def load_instance(path: PathLike, catalog_path: PathLike | None = None) -> SchedulerInput:

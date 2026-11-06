@@ -17,6 +17,7 @@ descriptions.
 | Academic half-day attending rule | Reserve the academic half-day as Admin Time for attendings | attending availability |
 | Attending category shift goal | weekly category target; Minimum shifts per week; Maximum shifts per week; Fixed; Flexible; No target | quota; limit; Special/Other target |
 | Explanation of Special/Other attending work | Description | weekly target; generic note |
+| Clinics where an attending may precept | Eligible clinics; Eligible attendings; eligibility override | availability |
 | Attending schedule diagnostics | Schedule checks; error; warning | solver error; infeasible |
 | Source of resident clinic capacity | Capacity-managed; Attending-managed | automatic capacity; manual capacity |
 | Most attendings who may precept at a clinic half-day | Max attendings; Override max attendings | preceptor cap; room limit |

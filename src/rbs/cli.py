@@ -68,7 +68,10 @@ def build_parser() -> argparse.ArgumentParser:
     ui_cmd = sub.add_parser("ui", help="Open the NiceGUI workspace (SQLite + JSON import/export)")
     ui_cmd.add_argument("--db", default="rbs.sqlite", help="SQLite path (default: rbs.sqlite)")
     ui_cmd.add_argument("--host", default="127.0.0.1")
-    ui_cmd.add_argument("--port", type=int, default=8080)
+    ui_cmd.add_argument(
+        "--port", type=int, default=None,
+        help="Port to listen on (default: choose an available port; 0 also chooses automatically)",
+    )
     ui_cmd.add_argument("--reload", action="store_true")
     ui_cmd.add_argument("--no-browser", action="store_true", help="Do not open a browser window")
     packaging = ui_cmd.add_mutually_exclusive_group()

@@ -63,11 +63,11 @@ def precepting_allowed(
 ) -> bool:
     """Whether any attending may precept at a clinic on one date and session.
 
-    Every clinic's weekly grid and dated overrides set a maximum number of
+    An attending-managed clinic's weekly grid and dated overrides set a maximum number of
     attendings per half-day; a clinic with no maximum then, or closed that
     day, has no precepting at all.
     """
-    if clinic_id not in problem.clinic_policy.site_ids:
+    if clinic_id not in problem.attending_managed_clinic_ids:
         return False
     return problem.clinic_max_attendings_on(clinic_id, calendar_day, session) > 0
 
@@ -93,6 +93,7 @@ class AttendingWeekFacts:
     preferred: dict[HalfDay, AttendingWorkHalfDay] = field(default_factory=dict)
     reference: dict[HalfDay, AssignedAttendingWork] = field(default_factory=dict)
     released_locks: tuple[AssignedAttendingWork, ...] = ()
+    suppressed_work: tuple[AssignedAttendingWork, ...] = ()
 
     @property
     def remaining(self) -> int:
@@ -138,9 +139,10 @@ def attending_week_facts(
 
     ``reference`` is the previous schedule. Its locked attending work, work
     inside the automatic lock window, and hand-entered work are kept exactly;
-    its other work only guides stability. Kept work that no longer fits the
-    attending's dates, vacation, other hand-entered work, or Admin Time is
-    released.
+    its other work only guides stability. Durable protected work that is
+    temporarily covered by dates, vacation, other work, or Admin Time stays
+    in ``suppressed_work`` without supplying staffing. Changing a clinic to
+    capacity-managed still releases its precepting work.
     """
     reference_items = problem.scheduled_attending_work(reference)
     managed = sorted(problem.attending_managed_clinic_ids)
@@ -160,8 +162,7 @@ def attending_week_facts(
             if facts is not None:
                 by_week[week].append(facts)
     return {
-        week: _with_kept_overrides_recorded(problem, weekly)
-        for week, weekly in by_week.items()
+        week: _with_kept_overrides_recorded(problem, weekly) for week, weekly in by_week.items()
     }
 
 
@@ -184,9 +185,7 @@ def _with_kept_overrides_recorded(
                 kept[
                     assignment.clinic_id, facts.date_of(assignment.weekday), assignment.session
                 ] += 1
-    over = {
-        key for key, count in kept.items() if count > problem.clinic_max_attendings_on(*key)
-    }
+    over = {key for key, count in kept.items() if count > problem.clinic_max_attendings_on(*key)}
     if not over:
         return weekly
     return [
@@ -218,8 +217,8 @@ def _week_facts(
     if not hand_entered.is_active_week:
         if not prior:
             return None
-        # Outside the attending's schedule dates nothing can be kept. Report
-        # the locked work being released instead of dropping it silently.
+        # No work participates outside schedule dates. Retain durable input
+        # so correcting those dates can restore it, with its lock unchanged.
         return AttendingWeekFacts(
             attending_id=attending.id,
             name=attending.name,
@@ -235,40 +234,51 @@ def _week_facts(
             work_types=frozenset(),
             precepting_clinics=(),
             fill_goal=0,
+            suppressed_work=tuple(
+                item
+                for item in prior
+                if item.is_protected_input
+                and (
+                    item.clinic_id is None or item.clinic_id in problem.attending_managed_clinic_ids
+                )
+            ),
             released_locks=tuple(
                 item
                 for item in prior
-                if item.work_type is AttendingWorkType.SPECIAL_OTHER
-                or item.hand_entered
-                or attending_work_is_locked(problem, item, today=today)
+                if (item.is_protected_input or attending_work_is_locked(problem, item, today=today))
+                and (
+                    not item.is_protected_input
+                    or item.clinic_id is not None
+                    and item.clinic_id not in problem.attending_managed_clinic_ids
+                )
             ),
         )
-    occupied = {
-        (assignment.weekday, assignment.session)
-        for assignment in hand_entered.assignments
-    }
+    occupied = {(assignment.weekday, assignment.session) for assignment in hand_entered.assignments}
     available_days = hand_entered.available_weekdays
     preferred_by_slot = {
-        (item.weekday, item.session): item
-        for item in attending.preferred_weekly_schedule_half_days
+        (item.weekday, item.session): item for item in attending.preferred_weekly_schedule_half_days
     }
-    automatic_slots = {
-        (weekday, session)
-        for weekday in WEEKDAYS_MF
-        for session in Session
-    } | set(preferred_by_slot)
+    automatic_slots = {(weekday, session) for weekday in WEEKDAYS_MF for session in Session} | set(
+        preferred_by_slot
+    )
     schedulable = {
-        slot
-        for slot in automatic_slots
-        if slot[0] in available_days and slot not in occupied
+        slot for slot in automatic_slots if slot[0] in available_days and slot not in occupied
     }
 
     locked: list[AssignedAttendingWork] = []
     released: list[AssignedAttendingWork] = []
+    suppressed: list[AssignedAttendingWork] = []
     reference: dict[HalfDay, AssignedAttendingWork] = {}
     for item in prior:
         slot = (item.weekday, item.session)
-        viable = item.weekday in available_days and slot not in occupied
+        viable = (
+            item.weekday in available_days
+            and slot not in occupied
+            and (
+                item.work_type is not AttendingWorkType.PRECEPTING_CLINIC
+                or item.clinic_id in problem.attending_managed_clinic_ids
+            )
+        )
         # A solve never places Special/Other work, so it cannot recreate an
         # unlocked copy either. Keep it rather than silently dropping it, and
         # keep hand-entered work whether or not it is locked.
@@ -278,10 +288,19 @@ def _week_facts(
             or attending_work_is_locked(problem, item, today=today)
         ):
             if viable:
-                locked.append(item)
+                locked.append(
+                    item.revised(manual_override=True)
+                    if item.work_type is AttendingWorkType.PRECEPTING_CLINIC
+                    and item.clinic_id not in attending.eligible_clinic_ids
+                    else item
+                )
+            elif item.is_protected_input and (
+                item.clinic_id is None or item.clinic_id in problem.attending_managed_clinic_ids
+            ):
+                suppressed.append(item)
             else:
                 released.append(item)
-        elif slot in schedulable:
+        elif viable and slot in schedulable:
             reference[slot] = item
     locked_slots = {(item.weekday, item.session) for item in locked}
     fixed = (
@@ -297,9 +316,7 @@ def _week_facts(
             for item in locked
         ),
     )
-    open_half_days = tuple(
-        sorted(schedulable - locked_slots, key=half_day_sort_key)
-    )
+    open_half_days = tuple(sorted(schedulable - locked_slots, key=half_day_sort_key))
     fixed_ranges = tuple(
         (target.work_type, (target.minimum_shifts_per_week, target.maximum_shifts_per_week))
         for target in attending.weekly_shift_targets
@@ -321,23 +338,17 @@ def _week_facts(
     )
     work_types = {work_type for work_type in configured if work_type in SCHEDULED_WORK_TYPES}
     if managed_clinic_ids and precepting_room:
+        # This is potential supply, before residents have been placed. Even
+        # Flexible 0–0 may cover residents; the weekly pass prefers leaving a
+        # total short over placing precepting that residents do not need.
         work_types.add(AttendingWorkType.PRECEPTING_CLINIC)
     if not precepting_room:
         work_types.discard(AttendingWorkType.PRECEPTING_CLINIC)
-    candidates = [
-        *managed_clinic_ids,
-        *sorted(
-            item.clinic_id
-            for item in attending.preferred_weekly_schedule_half_days
-            if item.work_type is AttendingWorkType.PRECEPTING_CLINIC
-            and item.clinic_id is not None
-        ),
-    ]
-    if AttendingWorkType.PRECEPTING_CLINIC in configured:
-        # Precepting the attending is asked for can always fall back to the
-        # primary clinic when the clinics they prefer are full or closed.
-        candidates.append(problem.clinic_policy.primary_site_id)
-    precepting_clinics = tuple(dict.fromkeys(candidates))
+    precepting_clinics = tuple(
+        clinic for clinic in managed_clinic_ids if clinic in attending.eligible_clinic_ids
+    )
+    if not precepting_clinics:
+        work_types.discard(AttendingWorkType.PRECEPTING_CLINIC)
     full_week = hand_entered.is_full_schedule_week and not hand_entered.has_vacation
     target = hand_entered.target_half_days
     remaining = max(0, target - len(fixed))
@@ -370,6 +381,7 @@ def _week_facts(
         },
         reference=reference,
         released_locks=tuple(released),
+        suppressed_work=tuple(suppressed),
     )
 
 
@@ -379,7 +391,7 @@ def potential_attending_coverage(
 ) -> list[AttendingClinicCoverage]:
     """Most preceptors each attending-managed clinic half-day could receive.
 
-    Each attending who could precept on a half-day counts toward every
+    Each attending who could precept on a half-day counts toward each eligible
     attending-managed clinic open then, on top of fixed Precepting Clinic
     work there. This is an upper bound for filtering and readiness; the
     solve itself decides who precepts where.
@@ -387,9 +399,7 @@ def potential_attending_coverage(
     managed = problem.attending_managed_clinic_ids
     if not managed:
         return list(problem.attending_coverage)
-    facts_by_week = (
-        facts_by_week if facts_by_week is not None else attending_week_facts(problem)
-    )
+    facts_by_week = facts_by_week if facts_by_week is not None else attending_week_facts(problem)
     # Hand-entered precepting is already the problem's own coverage; locked
     # scheduled work adds to it. Every attending who could still precept adds
     # more, up to the clinic's maximum for that half-day.
@@ -412,7 +422,7 @@ def potential_attending_coverage(
                 continue
             for weekday, session in facts.open_half_days:
                 calendar_day = facts.date_of(weekday)
-                for clinic_id in managed:
+                for clinic_id in managed.intersection(facts.precepting_clinics):
                     available[clinic_id, calendar_day, session] += 1
     coverage = []
     for key in sorted(set(fixed) | set(available)):
@@ -438,9 +448,7 @@ def potential_capacity_view(
     """Return a problem whose attending-managed capacity is its upper bound."""
     if not problem.attending_managed_clinic_ids:
         return problem
-    return problem.with_attending_coverage(
-        potential_attending_coverage(problem, facts_by_week)
-    )
+    return problem.with_attending_coverage(potential_attending_coverage(problem, facts_by_week))
 
 
 def schedule_attending_coverage(
@@ -461,8 +469,7 @@ def schedule_attending_coverage(
         key: [
             item
             for item in items
-            if item.work_type is AttendingWorkType.PRECEPTING_CLINIC
-            and item.clinic_id in managed
+            if item.work_type is AttendingWorkType.PRECEPTING_CLINIC and item.clinic_id in managed
         ]
         for key, items in problem.scheduled_attending_work(schedule).items()
     }
@@ -492,11 +499,7 @@ def schedule_capacity_view(
     Build the view once per render or validation and pass it down; editors
     that check many drop targets must not rebuild it for each one.
     """
-    if (
-        not problem.attending_managed_clinic_ids
-        or schedule is None
-        or not schedule.attending_work
-    ):
+    if not problem.attending_managed_clinic_ids or schedule is None or not schedule.attending_work:
         return problem
     return problem.with_attending_coverage(schedule_attending_coverage(problem, schedule))
 

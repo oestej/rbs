@@ -535,7 +535,7 @@ def test_open_rejects_unsupported_documents_with_a_clear_error(tmp_path) -> None
     target = _store(tmp_path / "target.sqlite")
     controller = DesktopDocumentController(target, Dialogs())
 
-    with pytest.raises(ValidationError, match="Input should be 13"):
+    with pytest.raises(ValidationError, match="Input should be 14"):
         controller.load(document)
 
 

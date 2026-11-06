@@ -17,13 +17,16 @@ from rbs.models.clinic import (
 )
 from rbs.models.enums import WEEKDAYS_MF, Session, Weekday
 from rbs.models.instance import SchedulerInput
+from rbs.models.schedule import Schedule
 from rbs.ui.drafts import Draft
 
 __all__ = [
     "replace_clinic",
     "replace_primary_clinic",
+    "set_clinic_eligible_attendings",
     "add_clinic",
     "remove_clinic",
+    "clinic_removal_attending_names",
     "copy_clinic_closure_days",
     "replace_clinic_allocation_rules",
     "replace_clinic_closure_days",
@@ -56,6 +59,18 @@ def replace_clinic(
         clinic.model_dump(mode="json") if site["id"] == original_id else site
         for site in policy["sites"]
     ]
+    if clinic.staffing_mode.value == "capacity_managed":
+        for attending in raw["attendings"]:
+            attending["eligible_clinic_ids"] = [
+                value for value in attending["eligible_clinic_ids"] if value != clinic.id
+            ]
+            for field in ("preferred_weekly_schedule_half_days", "schedule_template_half_days"):
+                attending[field] = [item for item in attending[field]
+                                    if item.get("clinic_id") != clinic.id]
+        for schedule in raw["attending_schedules"]:
+            for week in schedule["weeks"]:
+                week["half_days"] = [item for item in week["half_days"]
+                                     if item.get("clinic_id") != clinic.id]
     _sync_clinic_allocation_view(policy)
     _sync_clinic_closure_view(policy)
     return SchedulerInput.from_payload(raw)
@@ -99,16 +114,26 @@ def add_clinic(
     return SchedulerInput.from_payload(raw)
 
 
-def remove_clinic(instance: SchedulerInput, clinic_id: str) -> SchedulerInput:
-    """Remove one clinic and repair allocation and rotation references."""
-    if clinic_id not in instance.clinic_policy.site_ids:
-        raise ValueError(f"unknown clinic {clinic_id!r}")
-    if len(instance.clinic_policy.sites) <= 1:
-        raise ValueError("at least one clinic must remain configured")
-    assigned_attendings = [
+def clinic_removal_attending_names(
+    instance: SchedulerInput,
+    clinic_id: str,
+    *,
+    schedule: Schedule | None = None,
+) -> list[str]:
+    """Attendings whose precepting work or preferences still reference a clinic.
+
+    Inspect saved records rather than the effective calendar: vacation, schedule
+    dates, or stale inputs can hide work that still needs to be reassigned.
+    """
+    scheduled_ids = {
+        item.attending_id for item in schedule.attending_work
+        if item.work_type is AttendingWorkType.PRECEPTING_CLINIC
+        and item.clinic_id == clinic_id
+    } if schedule is not None else set()
+    return [
         attending.name
         for attending in instance.attendings
-        if any(
+        if attending.id in scheduled_ids or any(
             assignment.work_type is AttendingWorkType.PRECEPTING_CLINIC
             and assignment.clinic_id == clinic_id
             for assignment in (
@@ -116,12 +141,26 @@ def remove_clinic(instance: SchedulerInput, clinic_id: str) -> SchedulerInput:
                 *attending.schedule_template_half_days,
                 *(
                     half_day
-                    for schedule in instance.attending_schedule_weeks(attending.id)
-                    for half_day in schedule.half_days
+                    for weekly in instance.attending_schedule_weeks(attending.id)
+                    for half_day in weekly.half_days
                 ),
             )
         )
     ]
+
+
+def remove_clinic(
+    instance: SchedulerInput,
+    clinic_id: str,
+    *,
+    schedule: Schedule | None = None,
+) -> SchedulerInput:
+    """Remove an unused clinic and repair allocation and rotation references."""
+    if clinic_id not in instance.clinic_policy.site_ids:
+        raise ValueError(f"unknown clinic {clinic_id!r}")
+    if len(instance.clinic_policy.sites) <= 1:
+        raise ValueError("at least one clinic must remain configured")
+    assigned_attendings = clinic_removal_attending_names(instance, clinic_id, schedule=schedule)
     if assigned_attendings:
         names = ", ".join(assigned_attendings)
         raise ValueError(
@@ -131,6 +170,10 @@ def remove_clinic(instance: SchedulerInput, clinic_id: str) -> SchedulerInput:
     raw = instance.model_dump(mode="json")
     policy = raw["clinic_policy"]
     policy["sites"] = [site for site in policy["sites"] if site["id"] != clinic_id]
+    for attending in raw["attendings"]:
+        attending["eligible_clinic_ids"] = [
+            site_id for site_id in attending["eligible_clinic_ids"] if site_id != clinic_id
+        ]
     rules = [rule for rule in policy["allocation_rules"] if rule["clinic_id"] != clinic_id]
     grouped: dict[tuple[str, str], list[Draft]] = {}
     for rule in rules:
@@ -437,3 +480,22 @@ def _default_clinic_rule() -> Draft:
             for session in Session
         ],
     ).model_dump(mode="json")
+
+
+def set_clinic_eligible_attendings(
+    instance: SchedulerInput, clinic_id: str, attending_ids: list[str],
+) -> SchedulerInput:
+    """Edit the inverse eligibility view without changing other clinic relationships."""
+    if clinic_id not in instance.clinic_policy.site_ids:
+        raise ValueError("unknown clinic")
+    if set(attending_ids) - {person.id for person in instance.attendings}:
+        raise ValueError("unknown attending")
+    selected = set(attending_ids)
+    if selected and clinic_id not in instance.attending_managed_clinic_ids:
+        raise ValueError("Only attending-managed clinics use eligible attendings.")
+    return instance.revised(attendings=[
+        person.revised(eligible_clinic_ids=sorted(
+            (set(person.eligible_clinic_ids) - {clinic_id})
+            | ({clinic_id} if person.id in selected else set())
+        )) for person in instance.attendings
+    ])

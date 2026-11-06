@@ -281,6 +281,22 @@ class Attending(StrictModel):
 
     id: str
     name: str
+    eligible_clinic_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Attending-managed clinics for solver-placed Precepting Clinic work; "
+            "empty allows none."
+        ),
+    )
+
+    @field_validator("eligible_clinic_ids")
+    @classmethod
+    def eligible_clinics_are_distinct(cls, value: list[str]) -> list[str]:
+        normalized = normalize_clinic_site_ids(value)
+        if ALL_CLINIC_SITES in normalized or len(normalized) != len(value):
+            raise ValueError("eligible clinics must be distinct configured clinic IDs")
+        return sorted(normalized)
+
     half_days_per_week: int = Field(
         default=DEFAULT_ATTENDING_HALF_DAYS_PER_WEEK,
         ge=0,

@@ -68,8 +68,16 @@ def _instance(
         if closed else []
     )
     raw["attendings"] = [
-        Attending(id="attending-001", name="Ada Lovelace").model_dump(mode="json"),
-        Attending(id="attending-002", name="Grace Hopper").model_dump(mode="json"),
+        Attending(
+            id="attending-001", name="Ada Lovelace", eligible_clinic_ids=["clinic"],
+        ).model_dump(
+            mode="json",
+        ),
+        Attending(
+            id="attending-002", name="Grace Hopper", eligible_clinic_ids=["clinic"],
+        ).model_dump(
+            mode="json",
+        ),
     ]
     raw["attending_schedules"] = [
         AttendingSchedule(attending_id="attending-001", weeks=[AttendingWeeklyWorkSchedule(
@@ -134,12 +142,8 @@ def test_warning_explains_a_hand_entered_override_and_how_to_allow_it():
         weekday=Weekday.TUESDAY, session=Session.MORNING,
     ) is None
 
-    capacity_managed, _ = _assign_ada_monday(
-        _instance(staffing_mode=ClinicStaffingMode.CAPACITY_MANAGED),
-    )
-    assert "raise Maple Clinic's attending coverage for that date" in _warning(
-        capacity_managed, None,
-    )
+    with pytest.raises(ValueError, match="attending-managed clinic"):
+        _assign_ada_monday(_instance(staffing_mode=ClinicStaffingMode.CAPACITY_MANAGED))
 
 
 def test_warning_asks_to_lock_unlocked_schedule_work_before_the_next_solve():

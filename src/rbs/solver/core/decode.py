@@ -13,6 +13,7 @@ from rbs.models.schedule import (
     ScheduleMeta,
     ScheduleMetrics,
 )
+from rbs.solver.clinic_sites import declared_clinic_sites
 from rbs.solver.core import kinds as rotation_kinds
 from rbs.solver.core.clinic_allocation import (
     assign_clinic_sites,
@@ -21,6 +22,7 @@ from rbs.solver.core.clinic_allocation import (
     clinic_weekly_attendings,
     clinic_weekly_sessions,
 )
+from rbs.solver.core.clinic_seating import solved_seating
 from rbs.solver.core.context import CompiledProblem
 from rbs.solver.diagnostic_summaries import validation_failure_diagnostics
 from rbs.solver.planning import Occurrence, weeks_covered
@@ -40,7 +42,8 @@ def decode_solution(
     context = problem.context
     # Allocation and validation must see the preceptors this solution
     # schedules at attending-managed clinics, not only hand-entered ones.
-    instance = solved_capacity_view(problem, solver, deadline=deadline)
+    polished_seating = {}
+    instance = solved_capacity_view(problem, solver, deadline=deadline, seating=polished_seating)
     chosen: list[tuple[Occurrence, int]] = []
     for occurrence in context.occurrences:
         selected = [
@@ -107,10 +110,15 @@ def decode_solution(
         )
 
     assignments.sort(key=lambda item: (item.resident_id, item.start_week, item.rotation_id))
+    seating = {key: solved_seating(plans, solver)
+               for key, plans in problem.clinic.site_seating.items()}
+    seating.update(polished_seating)
     allocation_result = assign_clinic_sites(
         instance,
         assignments,
         reference_schedule=problem.reference_schedule,
+        deadline=deadline,
+        seating=seating,
     )
     final_status = final_status_for(
         solver_status,
@@ -227,7 +235,7 @@ def decode_solution(
 
 
 def solved_capacity_view(
-    problem: CompiledProblem, solver, *, deadline: float | None = None,
+    problem: CompiledProblem, solver, *, deadline: float | None = None, seating: dict | None = None,
 ) -> SolverProblem:
     """Return the problem staffed with the preceptor counts this solution chose."""
     instance = problem.context.instance
@@ -235,7 +243,7 @@ def solved_capacity_view(
     if envelope is None or not envelope.active:
         return instance
     counts = dict(envelope.fixed)
-    for key, count in envelope.staffed_counts(solver, deadline=deadline).items():
+    for key, count in envelope.staffed_counts(solver, deadline=deadline, seating=seating).items():
         counts[key] = counts.get(key, 0) + count
     first_week_start = instance.calendar.first_week_start
     return instance.with_attending_coverage(
@@ -384,6 +392,7 @@ def _decode_clinic_slots(
                     weekday=weekday,
                     session=session,
                     week=week,
+                    allowed_sites=declared_clinic_sites(resident, rotation, weekday, session),
                 )
             )
     if weekly or solved_clinic is not None:

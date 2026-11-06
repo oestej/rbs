@@ -3,9 +3,10 @@
 Attending rules such as weekly totals, category ranges, and preferred
 placements are reported by :mod:`rbs.attending_schedule` as non-blocking
 schedule checks, because a workspace can be configured incrementally. The
-checks here are different: they reject attending work that could never
-have been scheduled, such as work for an unknown attending, on a vacation
-day, or on top of hand-entered work.
+checks here reject invalid new placements, including work for unknown attendings
+or on unavailable half-days. Protected records may remain as nonparticipating
+input under temporary date and placement conflicts; effective projections hide
+them from active work and clinic coverage.
 """
 
 from __future__ import annotations
@@ -58,10 +59,7 @@ def _validate_attending_work(
                 f"academic weeks 1..{instance.calendar.weeks}"
             )
             continue
-        if (
-            item.work_type is AttendingWorkType.PRECEPTING_CLINIC
-            and item.clinic_id not in site_ids
-        ):
+        if item.work_type is AttendingWorkType.PRECEPTING_CLINIC and item.clinic_id not in site_ids:
             errors.append(
                 f"{attending.name}: Precepting Clinic work references unknown clinic "
                 f"{item.clinic_id!r}"
@@ -78,9 +76,23 @@ def _validate_attending_work(
         )
         half_day = "AM" if item.session is Session.MORNING else "PM"
         where = f"{attending.name} · {calendar_day:%b} {calendar_day.day} {half_day}"
-        if inherited is not None and inherited.holds_attending_work(item) and (
+        blocked = (
             item.weekday not in effective.available_weekdays
             or effective.assignment_on(item.weekday, item.session) is not None
+        )
+        if blocked and item.is_protected_input and (
+            item.clinic_id is None or item.clinic_id in instance.attending_managed_clinic_ids
+        ):
+            # These records preserve accepted inputs, not active staffing. The
+            # same effective projection hides them in capacity and calendars.
+            continue
+        if (
+            inherited is not None
+            and inherited.holds_attending_work(item)
+            and (
+                item.weekday not in effective.available_weekdays
+                or effective.assignment_on(item.weekday, item.session) is not None
+            )
         ):
             continue
         if item.weekday not in effective.available_weekdays:
@@ -95,6 +107,18 @@ def _validate_attending_work(
             )
         elif item.work_type is AttendingWorkType.PRECEPTING_CLINIC:
             assert item.clinic_id is not None
+            if maximums and item.clinic_id not in instance.attending_managed_clinic_ids:
+                errors.append(
+                    f"{where}: Precepting Clinic work requires an attending-managed clinic"
+                )
+            elif (
+                maximums and item.clinic_id not in attending.eligible_clinic_ids
+                and not item.manual_override
+            ):
+                errors.append(
+                    f"{where}: attending is not eligible to precept at "
+                    f"{instance.clinic_policy.site_name(item.clinic_id)}"
+                )
             # Whether work may override the maximum depends on who placed it,
             # never on a lock: through-today locking is not part of a saved
             # document, and any lock can later be removed. A solve records the

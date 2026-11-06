@@ -426,12 +426,19 @@ def _with_attending_work(
             f"attending rules could not all be met in {count} "
             f"{'week' if count == 1 else 'weeks'}; see the attending schedule checks"
         )
+    if result.suppressed_work:
+        count = len(result.suppressed_work)
+        notes.append(
+            f"{count} protected attending "
+            f"{'half-day' if count == 1 else 'half-days'} preserved while unavailable; "
+            "see attending Schedule checks for dates and reasons"
+        )
     if result.released_locks:
         count = len(result.released_locks)
         notes.append(
             f"{count} locked attending {'half-day was' if count == 1 else 'half-days were'} "
-            "released because vacation, schedule dates, or hand-entered work now cover "
-            f"{'it' if count == 1 else 'them'}"
+            "released because vacation, schedule dates, hand-entered work, or changed "
+            "clinic staffing no longer allow that work"
         )
     metrics = schedule.meta.metrics.model_copy(
         update={

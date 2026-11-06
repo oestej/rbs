@@ -660,6 +660,7 @@ def _attending_schedule_calendar(
             assignment=assignment,
             context_label=f"Week {week}",
             attending_name=attending.name,
+            eligible_clinic_ids=attending.eligible_clinic_ids,
             calendar_day=effective.week_start + timedelta(days=tuple(Weekday).index(weekday)),
             on_save=save,
             on_remove=partial(save, None),
@@ -1198,6 +1199,7 @@ def _attending_form(
                         label="Schedule end date",
                     )
                 ),
+                eligible_clinic_ids=list(getattr(controls["eligible_clinics"], "value", []) or []),
                 vacation_ranges=initial_vacations,
                 weekly_shift_targets=configured_weekly_shift_targets(),
                 preferred_weekly_schedule_half_days=initial_preferred_schedule,
@@ -1328,6 +1330,7 @@ def _attending_form(
             "start": str(getattr(controls["start"], "value", "") or ""),
             "default_end": bool(getattr(controls["default_end"], "value", False)),
             "end": str(getattr(controls["end"], "value", "") or ""),
+            "eligible_clinics": sorted(getattr(controls["eligible_clinics"], "value", []) or []),
             "vacations": [
                 vacation.model_dump(mode="json") for vacation in initial_vacations
             ],
@@ -1470,6 +1473,23 @@ def _attending_details_editor(
                 "end": end,
             }
         )
+    with ui.column().classes("w-full gap-3"):
+        controls["eligible_clinics"] = ui.select(
+            {site.id: site.name for site in instance.clinic_policy.sites
+             if site.id in instance.attending_managed_clinic_ids},
+            value=list(attending.eligible_clinic_ids) if attending else [],
+            multiple=True, with_input=True, label="Eligible clinics",
+        ).props("outlined use-chips options-dense").classes("w-full")
+        controls["eligible_clinics"].set_enabled(bool(instance.attending_managed_clinic_ids))
+        if not instance.attending_managed_clinic_ids:
+            ui.label(
+                "Switch a clinic to attending-managed to select it here."
+            ).classes("rbs-type-caption rbs-text-muted")
+        ui.label(
+            "Select attending-managed clinics where this attending may precept. "
+            "An empty list allows none. "
+            "Hand-entered and locked work may override eligibility."
+        ).classes("rbs-type-caption rbs-text-muted")
     return half_days_per_week
 
 
@@ -1826,11 +1846,18 @@ def _work_half_day_dialog(
     on_remove: Callable[[], None],
     allowed_work_types: tuple[AttendingWorkType, ...] = tuple(AttendingWorkType),
     attending_name: str | None = None,
+    eligible_clinic_ids: list[str] | None = None,
     calendar_day: date | None = None,
 ) -> None:
     from nicegui import ui
 
-    clinic_options = {site.id: site.name for site in instance.clinic_policy.sites}
+    clinic_options = {
+        site.id: site.name + (
+            " (eligibility override)" if eligible_clinic_ids is not None
+            and site.id not in eligible_clinic_ids else ""
+        ) for site in instance.clinic_policy.sites
+        if site.id in instance.attending_managed_clinic_ids
+    }
     work_type_options = {
         work_type.value: _WORK_TYPE_OPTIONS[work_type.value]
         for work_type in allowed_work_types
@@ -1839,8 +1866,10 @@ def _work_half_day_dialog(
     initial_clinic = (
         assignment.clinic_id
         if assignment is not None and assignment.clinic_id is not None
-        else instance.clinic_policy.primary_site_id
+        else next(iter(clinic_options), None)
     )
+    if initial_clinic not in clinic_options:
+        initial_clinic = None
     initial_description = assignment.description if assignment is not None else None
     title = "Edit work half-day" if assignment is not None else "Assign work half-day"
     with ui.dialog() as dialog, ui.card().classes(
@@ -1887,6 +1916,15 @@ def _work_half_day_dialog(
             clinic.set_visibility(
                 initial_type == AttendingWorkType.PRECEPTING_CLINIC.value
             )
+            eligibility_hint = None
+            if eligible_clinic_ids is not None:
+                eligibility_hint = ui.label(
+                    "Clinics outside this attending's eligibility may be entered by hand "
+                    "as an override. Locked work is kept when solving again."
+                ).classes("rbs-type-caption rbs-text-muted")
+                eligibility_hint.set_visibility(
+                    initial_type == AttendingWorkType.PRECEPTING_CLINIC.value
+                )
             description = (
                 ui.input(
                     "Description",
@@ -1907,11 +1945,13 @@ def _work_half_day_dialog(
                     event.value == AttendingWorkType.PRECEPTING_CLINIC.value
                 )
                 clinic.set_visibility(is_precepting)
+                if eligibility_hint is not None:
+                    eligibility_hint.set_visibility(is_precepting)
                 description.set_visibility(
                     event.value == AttendingWorkType.SPECIAL_OTHER.value
                 )
                 if is_precepting and clinic.value is None:
-                    clinic.value = instance.clinic_policy.primary_site_id
+                    clinic.value = next(iter(clinic_options), None)
 
             work_type.on_value_change(change_work_type)
 

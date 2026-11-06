@@ -2622,7 +2622,8 @@
 
   .rbs-save-button .q-btn__content > .block,
   .rbs-close-button .q-btn__content > .block,
-  .rbs-solve-button .q-btn__content > .block {
+  .rbs-solve-button .q-btn__content > .block,
+  .rbs-solve-details-button .q-btn__content > .block {
     width: 0 !important;
     height: 0 !important;
     overflow: hidden !important;
@@ -2633,13 +2634,15 @@
 
   .rbs-save-button .q-icon,
   .rbs-close-button .q-icon,
-  .rbs-solve-button .q-icon {
+  .rbs-solve-button .q-icon,
+  .rbs-solve-details-button .q-icon {
     margin: 0 !important;
   }
 
   .rbs-save-button,
   .rbs-close-button,
-  .rbs-solve-button {
+  .rbs-solve-button,
+  .rbs-solve-details-button {
     width: 40px;
     min-width: 40px;
     padding-inline: 0 !important;

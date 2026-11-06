@@ -14,14 +14,16 @@ total that cannot be met (for example because hand-entered work already
 contradicts it) becomes a counted violation instead of an empty schedule.
 The objective is strictly lexicographic:
 
-1. violations of Fixed ranges and weekly totals;
+1. violations of Fixed ranges;
 2. precepting beyond what residents need, so a Flexible range, a preference,
-   or the previous schedule never books a preceptor with no one to precept;
-3. changes to the previous schedule's attending work;
-4. distance outside Flexible ranges;
-5. preferred weekly schedule half-days not matched;
-6. precepting workload relative to available work and configured category ranges;
-7. half-days left unfilled in vacation and boundary weeks.
+   the weekly total, or the previous schedule never books a preceptor with
+   no one to precept unless a Fixed minimum requires it;
+3. shortfalls in weekly totals;
+4. changes to the previous schedule's attending work;
+5. distance outside Flexible ranges;
+6. preferred weekly schedule half-days not matched;
+7. precepting workload relative to available work and configured category ranges;
+8. half-days left unfilled in vacation and boundary weeks.
 """
 
 from __future__ import annotations
@@ -64,20 +66,21 @@ class AttendingPassResult:
     relaxed_weeks: tuple[int, ...] = ()
     uncovered: tuple[tuple[PreceptingKey, int], ...] = ()
     released_locks: tuple[AssignedAttendingWork, ...] = ()
+    suppressed_work: tuple[AssignedAttendingWork, ...] = ()
     scheduled_half_days: int = 0
     precepting_half_days: int = 0
 
 
 @dataclass
 class _WeekTerms:
-    tiers: list[list[tuple[Any, int]]] = field(default_factory=lambda: [[] for _ in range(7)])
+    tiers: list[list[tuple[Any, int]]] = field(default_factory=lambda: [[] for _ in range(8)])
 
     def add(self, tier: int, expression, upper_bound: int) -> None:
         if upper_bound > 0:
             self.tiers[tier].append((expression, upper_bound))
 
 
-_VIOLATIONS, _IDLE, _STABILITY, _FLEXIBLE, _PREFERRED, _BALANCE, _FILL = range(7)
+_FIXED, _IDLE, _TOTAL, _STABILITY, _FLEXIBLE, _PREFERRED, _BALANCE, _FILL = range(8)
 
 
 def precepting_demand(problem: SolverProblem, schedule: Schedule) -> Counter[PreceptingKey]:
@@ -132,6 +135,7 @@ def schedule_attending_work(
     relaxed_weeks: list[int] = []
     uncovered: list[tuple[PreceptingKey, int]] = []
     released: list[AssignedAttendingWork] = []
+    suppressed: list[AssignedAttendingWork] = []
     weeks = sorted(set(facts_by_week) | {key[1] for key in demand})
     needs = {
         week: {
@@ -186,16 +190,21 @@ def schedule_attending_work(
         )
         for facts in weekly:
             work.extend(facts.locked_work)
+            work.extend(facts.suppressed_work)
+            suppressed.extend(facts.suppressed_work)
             released.extend(facts.released_locks)
+    suppressed_keys = {item.key for item in suppressed}
     return AttendingPassResult(
         work=tuple(work),
         relaxed_weeks=tuple(relaxed_weeks),
         uncovered=tuple(uncovered),
         released_locks=tuple(released),
+        suppressed_work=tuple(suppressed),
         scheduled_half_days=placed,
         precepting_half_days=sum(
             item.work_type is AttendingWorkType.PRECEPTING_CLINIC
             and item.clinic_id in managed
+            and item.key not in suppressed_keys
             for item in work
         ),
     )
@@ -471,8 +480,10 @@ def _build_and_solve(
 
 def _add_attending_terms(model, week_model: AttendingWeekModel, terms: _WeekTerms) -> None:
     facts = week_model.facts
-    for expression, bound in week_model.violations:
-        terms.add(_VIOLATIONS, expression, bound)
+    for expression, bound in week_model.fixed_shortfalls:
+        terms.add(_FIXED, expression, bound)
+    for expression, bound in week_model.total_shortfalls:
+        terms.add(_TOTAL, expression, bound)
 
     for half_day, previous in facts.reference.items():
         literal = week_model.choices.get((half_day, previous.work_type, previous.clinic_id))

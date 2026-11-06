@@ -30,7 +30,10 @@ class AssignedAttendingWork(AttendingWorkAssignment):
     Hand-entered work moves here only while it needs a lock field: while it
     is locked, or explicitly unlocked inside the automatic lock window. It
     keeps ``hand_entered`` so it stays a hard input either way, and it
-    returns to the case once neither field applies.
+    returns to the case once neither field applies. Protected work masked by
+    vacation, schedule dates, or another accepted assignment stays here as
+    nonparticipating input; effective projections exclude it until the conflict
+    is removed.
     """
 
     attending_id: str = Field(min_length=1)
@@ -65,6 +68,11 @@ class AssignedAttendingWork(AttendingWorkAssignment):
         if self.hand_entered and not self.manual_override:
             raise ValueError("hand-entered attending work must be marked as placed by hand")
         return self
+
+    @property
+    def is_protected_input(self) -> bool:
+        """Durable work which temporary date or placement conflicts must not erase."""
+        return self.hand_entered or self.locked or self.work_type is AttendingWorkType.SPECIAL_OTHER
 
     @property
     def key(self) -> tuple[str, int, Weekday, Session]:
@@ -316,7 +324,8 @@ class Schedule(StrictModel):
         default_factory=list,
         description=(
             "Attending half-days placed by the solve or edited in the schedule, outside "
-            "hand-entered week-by-week work and the automatic academic Admin Time."
+            "hand-entered week-by-week work and the automatic academic Admin Time. "
+            "May retain protected input temporarily hidden by dates or other accepted work."
         ),
     )
 

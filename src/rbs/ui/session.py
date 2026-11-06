@@ -133,6 +133,7 @@ class WorkspaceSession:
     download_chip: UiElement | None = field(default=None, repr=False)
     workspace_dialog: UiElement | None = field(default=None, repr=False)
     solve_chip: UiElement | None = field(default=None, repr=False)
+    solve_details_button: UiElement | None = field(default=None, repr=False)
     panels: dict[str, UiElement] = field(default_factory=dict, repr=False)
     regions: dict[str, PanelRegion] = field(default_factory=dict, repr=False)
     stale_panels: set[str] = field(default_factory=set, repr=False)
@@ -260,6 +261,20 @@ class WorkspaceSession:
             self._refresh_after_conflict()
             raise
         _warn_about_work_left_out(workspace, instance, saved)
+        if not impact.preserves_current_schedule:
+            from rbs.attending_schedule import preserved_attending_work_issues
+
+            before = set(preserved_attending_work_issues(
+                workspace.instance, workspace.latest_schedule,
+            ))
+            added = [issue for issue in preserved_attending_work_issues(
+                saved.instance, saved.latest_schedule,
+            ) if issue not in before]
+            if added:
+                from nicegui import ui
+
+                ui.notify("\n".join(issue.message for issue in added[:3]),
+                          type="warning", multi_line=True)
         documents = getattr(self.workspace_host, "document_io", None)
         sync_settings = getattr(documents, "sync_application_settings", None)
         if sync_settings is not None:

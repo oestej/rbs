@@ -12,6 +12,7 @@ from rbs.models.attending import (
     AttendingWorkHalfDay,
     AttendingWorkType,
 )
+from rbs.models.clinic import ClinicStaffingMode
 from rbs.models.enums import Session, Weekday
 from rbs.models.instance import AcademicHalfDayOverride
 from rbs.ui.attendings.tab import (
@@ -181,7 +182,12 @@ def test_new_attending_form_is_limited_to_basic_schedule_details() -> None:
     assert checkboxes["Use academic year end"].value is True
     assert not any(element.__class__.__name__ == "Tab" for element in created)
     assert not any(element.__class__.__name__ == "TabPanels" for element in created)
-    assert not any(element.__class__.__name__ == "Select" for element in created)
+    eligibility = next(element for element in created
+                       if element.__class__.__name__ == "Select")
+    assert eligibility._props["label"] == "Eligible clinics"
+    assert eligibility.value == []
+    assert eligibility.options == {}
+    assert eligibility._props.get("disable") is True
 
     inputs["Full name"].value = "Ada Lovelace"
     add = next(
@@ -193,6 +199,7 @@ def test_new_attending_form_is_limited_to_basic_schedule_details() -> None:
     _click(add)
 
     added = saved[0][0].attendings[0]
+    assert added.eligible_clinic_ids == []
     assert added.half_days_per_week == 10
     assert added.schedule_start_date is None
     assert added.schedule_end_date is None
@@ -520,6 +527,10 @@ def test_attending_calendar_assigns_typed_work_to_one_academic_week() -> None:
 
     attending = Attending(id="attending-001", name="Ada Lovelace")
     instance = blank_instance().revised(attendings=[attending])
+    instance = instance.revised(clinic_policy=instance.clinic_policy.revised(sites=[
+        site.revised(staffing_mode=ClinicStaffingMode.ATTENDING_MANAGED)
+        for site in instance.clinic_policy.sites
+    ]))
     saved: list[tuple] = []
     before = set(ui.context.client.elements)
     _attending_schedule_calendar(
